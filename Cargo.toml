@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.80"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = "0.12"
+bytes = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "json", "stream"] }
+url = "2"
+tempfile = "3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+
+# Optimise dependencies even in debug builds; the engine is unusably slow otherwise.
+[profile.dev.package."*"]
+opt-level = 2
+
+# Vendored librqbit with Riptor's patches; see vendor/PATCHES.md.
+[patch.crates-io]
+librqbit = { path = "vendor/librqbit" }

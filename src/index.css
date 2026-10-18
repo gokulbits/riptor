@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Light tokens shown before JS runs; src/lib/themes.ts sets the active theme at runtime. */
+:root {
+  --bg: 246 247 249;
+  --panel: 255 255 255;
+  --raised: 240 242 245;
+  --border: 226 229 234;
+  --fg: 22 27 34;
+  --muted: 101 109 122;
+  --accent: 79 70 229;
+  --accent-fg: 255 255 255;
+  --ok: 22 163 74;
+  --warn: 217 119 6;
+  --danger: 220 38 38;
+  --info: 8 145 178;
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-fg font-sans text-sm antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+input,
+textarea {
+  user-select: text;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-border;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors
+      disabled:pointer-events-none disabled:opacity-40;
+  }
+  .btn-ghost {
+    @apply btn text-muted hover:bg-raised hover:text-fg;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-accent-fg hover:bg-accent/90;
+  }
+  .btn-danger {
+    @apply btn bg-danger text-white hover:bg-danger/90;
+  }
+  .input {
+    @apply w-full rounded-md border border-border bg-panel px-2.5 py-1.5 text-sm outline-none
+      placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-accent/20;
+  }
+  .card {
+    @apply rounded-lg border border-border bg-panel;
+  }
+  .label {
+    @apply text-xs font-medium text-muted;
+  }
+}

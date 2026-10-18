@@ -1,0 +1,504 @@
+//! qBittorrent-compatible search plugins.
+//!
+//! Plugins are third-party Python code, so they are treated with suspicion:
+//! * installed only after the user confirms the source and SHA-256;
+//! * run with `python -I` (no user site-packages, no PYTHON* variables, no
+//!   current-directory imports), a cleared environment, a time limit, an
+//!   output cap, no console window, and killed when the search is cancelled;
+//! * on Linux, inside bubblewrap when available: read-only system, private
+//!   /tmp, and the home folder hidden.
+//!
+//! The runner (`nova2.py`) and helper modules are Riptor's own, API-compatible
+//! with qBittorrent's; they print one JSON object per result.
+
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+use anyhow::{bail, ensure, Context};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
+
+use crate::SearchResult;
+
+const SHIM: [(&str, &str); 3] = [
+    ("nova2.py", include_str!("../assets/nova/nova2.py")),
+    (
+        "novaprinter.py",
+        include_str!("../assets/nova/novaprinter.py"),
+    ),
+    ("helpers.py", include_str!("../assets/nova/helpers.py")),
+];
+/// Names that would collide with the shim or common modules.
+const RESERVED: [&str; 8] = [
+    "nova2",
+    "novaprinter",
+    "helpers",
+    "nova2dl",
+    "socks",
+    "sgmllib3",
+    "engines",
+    "test",
+];
+pub const MAX_PLUGIN_BYTES: usize = 1024 * 1024;
+const SEARCH_TIMEOUT: Duration = Duration::from_secs(45);
+const CAPS_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_OUTPUT: usize = 4 * 1024 * 1024;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Python {
+    pub exe: PathBuf,
+    pub version: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PluginCaps {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Search PATH ourselves so the interpreter is pinned to an absolute path.
+pub fn find_in_path(name: &str) -> Option<PathBuf> {
+    let exts: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".EXE;.BAT;.CMD".into())
+            .split(';')
+            .map(|s| s.to_ascii_lowercase())
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+    std::env::split_paths(&std::env::var_os("PATH")?).find_map(|dir| {
+        if !dir.is_absolute() {
+            return None; // never resolve through "." or relative PATH entries
+        }
+        exts.iter()
+            .map(|e| dir.join(format!("{name}{e}")))
+            .find(|p| p.is_file())
+    })
+}
+
+fn quiet(cmd: &mut Command) {
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd.stdin(Stdio::null()).kill_on_drop(true);
+}
+
+/// Find Python 3.9+. Returns the real interpreter path (not the `py` launcher).
+pub async fn detect() -> Option<Python> {
+    let candidates: &[(&str, &[&str])] = if cfg!(windows) {
+        &[("py", &["-3"]), ("python3", &[]), ("python", &[])]
+    } else {
+        &[("python3", &[]), ("python", &[])]
+    };
+    for (name, pre) in candidates {
+        let Some(exe) = find_in_path(name) else {
+            continue;
+        };
+        let mut cmd = Command::new(&exe);
+        cmd.args(*pre).args([
+            "-I",
+            "-c",
+            "import sys;print(sys.version_info[0],sys.version_info[1]);print(sys.executable)",
+        ]);
+        quiet(&mut cmd);
+        let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(10), cmd.output()).await else {
+            continue;
+        };
+        if !out.status.success() {
+            continue; // e.g. the Microsoft Store "python" stub
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut lines = text.lines();
+        let mut ver = lines
+            .next()
+            .unwrap_or("")
+            .split_whitespace()
+            .map(|n| n.parse::<u32>().unwrap_or(0));
+        let (major, minor) = (ver.next().unwrap_or(0), ver.next().unwrap_or(0));
+        let real = PathBuf::from(lines.next().unwrap_or("").trim());
+        if major == 3 && minor >= 9 && real.is_absolute() && real.is_file() {
+            return Some(Python {
+                exe: real,
+                version: format!("{major}.{minor}"),
+            });
+        }
+    }
+    None
+}
+
+/// (Re)write the runner and helpers; create the engines folder.
+pub fn install_shim(dir: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dir.join("engines"))?;
+    for (name, body) in SHIM {
+        let p = dir.join(name);
+        if std::fs::read_to_string(&p).ok().as_deref() != Some(body) {
+            std::fs::write(&p, body)?;
+        }
+    }
+    Ok(())
+}
+
+fn command(py: &Python, dir: &Path, args: &[&str]) -> Command {
+    let script = dir.join("nova2.py");
+    #[cfg(target_os = "linux")]
+    if let Some(bwrap) = find_in_path("bwrap") {
+        let mut c = Command::new(bwrap);
+        c.args([
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--tmpfs",
+            "/tmp",
+        ]);
+        if let Some(home) = std::env::var_os("HOME") {
+            c.arg("--tmpfs").arg(home);
+        }
+        c.arg("--ro-bind").arg(dir).arg(dir);
+        c.args([
+            "--unshare-all",
+            "--share-net",
+            "--die-with-parent",
+            "--new-session",
+            "--",
+        ]);
+        c.arg(&py.exe)
+            .args(["-I", "-X", "utf8", "-B"])
+            .arg(&script)
+            .args(args);
+        finish(&mut c, dir);
+        return c;
+    }
+    let mut c = Command::new(&py.exe);
+    c.args(["-I", "-X", "utf8", "-B"]).arg(&script).args(args);
+    finish(&mut c, dir);
+    c
+}
+
+fn finish(c: &mut Command, dir: &Path) {
+    c.current_dir(dir).env_clear();
+    // Only what Python and TLS need.
+    for var in [
+        "SYSTEMROOT",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "PATH",
+        "LANG",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+    ] {
+        if let Some(v) = std::env::var_os(var) {
+            c.env(var, v);
+        }
+    }
+    c.env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONDONTWRITEBYTECODE", "1");
+    if !cfg!(windows) {
+        c.env("HOME", "/tmp");
+    }
+    quiet(c);
+    c.stdout(Stdio::piped()).stderr(Stdio::piped());
+}
+
+async fn tail(mut r: impl tokio::io::AsyncRead + Unpin) -> String {
+    let mut buf = Vec::new();
+    let _ = (&mut r).take(64 * 1024).read_to_end(&mut buf).await;
+    let s = String::from_utf8_lossy(&buf);
+    let last = s
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .to_string();
+    last.chars().take(300).collect()
+}
+
+pub async fn capabilities(py: &Python, dir: &Path) -> anyhow::Result<Vec<PluginCaps>> {
+    let out = tokio::time::timeout(CAPS_TIMEOUT, command(py, dir, &["capabilities"]).output())
+        .await
+        .context("reading plugins timed out")??;
+    ensure!(out.stdout.len() <= MAX_OUTPUT, "plugin output too large");
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<PluginCaps>(l).ok())
+        .map(|mut c| {
+            c.name = c
+                .name
+                .chars()
+                .filter(|ch| !ch.is_control())
+                .take(80)
+                .collect();
+            if c.name.is_empty() {
+                c.name = c.id.clone();
+            }
+            c.categories
+                .retain(|x| crate::CATEGORIES.contains(&x.as_str()));
+            c
+        })
+        .collect())
+}
+
+#[derive(Deserialize)]
+struct Line {
+    link: String,
+    name: String,
+    size: Option<u64>,
+    seeds: Option<u32>,
+    leech: Option<u32>,
+    desc_link: Option<String>,
+    pub_date: Option<u64>,
+}
+
+/// Run one plugin; `emit` is called with batches of results as they arrive.
+pub async fn search(
+    py: &Python,
+    dir: &Path,
+    engine: &str,
+    category: &str,
+    query: &str,
+    cancel: CancellationToken,
+    mut emit: impl FnMut(Vec<SearchResult>),
+) -> anyhow::Result<usize> {
+    validate_id(engine)?;
+    let mut args = vec!["search", engine, category];
+    args.extend(query.split_whitespace());
+    let mut child = command(py, dir, &args)
+        .spawn()
+        .context("could not start Python")?;
+    let stdout = child.stdout.take().context("no stdout")?;
+    let stderr = child.stderr.take().context("no stderr")?;
+    let err_task = tokio::spawn(tail(stderr));
+
+    let mut reader = BufReader::new(stdout).lines();
+    let (mut count, mut bytes, mut batch) = (0usize, 0usize, Vec::new());
+    let run = async {
+        while let Some(line) = reader.next_line().await? {
+            bytes += line.len();
+            ensure!(bytes <= MAX_OUTPUT, "plugin produced too much output");
+            if let Ok(l) = serde_json::from_str::<Line>(&line) {
+                let http = !l.link.starts_with("magnet:");
+                batch.push(SearchResult {
+                    name: l.name,
+                    link: l.link,
+                    size: l.size,
+                    seeders: l.seeds,
+                    leechers: l.leech,
+                    desc_link: l.desc_link,
+                    pub_date: l.pub_date,
+                    engine: engine.to_string(),
+                    via_plugin: http,
+                });
+                count += 1;
+                if batch.len() >= 25 {
+                    emit(std::mem::take(&mut batch));
+                }
+            }
+        }
+        anyhow::Ok(())
+    };
+    let outcome = tokio::select! {
+        r = tokio::time::timeout(SEARCH_TIMEOUT, run) => r.map_err(|_| anyhow::anyhow!("timed out")).and_then(|r| r),
+        _ = cancel.cancelled() => Ok(()),
+    };
+    if !batch.is_empty() {
+        emit(batch);
+    }
+    let _ = child.kill().await;
+    let stderr_tail = err_task.await.unwrap_or_default();
+    match outcome {
+        Err(e) => Err(e),
+        Ok(()) if count == 0 && !stderr_tail.is_empty() && !cancel.is_cancelled() => {
+            bail!("{stderr_tail}")
+        }
+        Ok(()) => Ok(count),
+    }
+}
+
+/// Let the plugin download a `.torrent` (for sites needing cookies). Returns the temp file path.
+pub async fn download(py: &Python, dir: &Path, engine: &str, url: &str) -> anyhow::Result<PathBuf> {
+    validate_id(engine)?;
+    let u = url::Url::parse(url)?;
+    ensure!(
+        matches!(u.scheme(), "http" | "https"),
+        "only http(s) links can be downloaded"
+    );
+    let out = tokio::time::timeout(
+        Duration::from_secs(60),
+        command(py, dir, &["download", engine, url]).output(),
+    )
+    .await
+    .context("download timed out")??;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let path = text
+        .lines()
+        .last()
+        .and_then(|l| l.rsplit_once(' '))
+        .map(|(p, _)| PathBuf::from(p.trim()));
+    let path = path.context("the plugin did not return a file")?;
+    ensure!(
+        path.is_absolute() && path.extension().is_some_and(|e| e == "torrent"),
+        "the plugin returned an unexpected file"
+    );
+    Ok(path)
+}
+
+pub fn validate_id(id: &str) -> anyhow::Result<()> {
+    ensure!(
+        !id.is_empty()
+            && id.len() <= 64
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+        "plugin file names must be lowercase letters, digits and underscores"
+    );
+    ensure!(!RESERVED.contains(&id), "\"{id}\" is a reserved name");
+    Ok(())
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PluginPreview {
+    pub id: String,
+    pub sha256: String,
+    pub size: usize,
+    pub source: String,
+    pub declared_name: Option<String>,
+    pub declared_url: Option<String>,
+    pub replaces_existing: bool,
+}
+
+fn declared(text: &str, attr: &str) -> Option<String> {
+    text.lines().find_map(|l| {
+        let l = l.trim();
+        let rest = l.strip_prefix(attr)?.trim_start().strip_prefix('=')?.trim();
+        let q = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+        let inner = &rest[1..];
+        Some(inner[..inner.find(q)?].chars().take(120).collect())
+    })
+}
+
+/// Check a candidate plugin file without running it.
+pub fn inspect(
+    file_name: &str,
+    bytes: &[u8],
+    source: &str,
+    engines_dir: &Path,
+) -> anyhow::Result<PluginPreview> {
+    ensure!(bytes.len() <= MAX_PLUGIN_BYTES, "plugin file is too large");
+    let stem = file_name
+        .strip_suffix(".py")
+        .context("search plugins are .py files")?;
+    validate_id(stem)?;
+    let text = std::str::from_utf8(bytes).context("plugin is not UTF-8 text")?;
+    ensure!(
+        text.contains(&format!("class {stem}(")) || text.contains(&format!("class {stem}:")),
+        "this does not look like a qBittorrent search plugin (no class named {stem})"
+    );
+    Ok(PluginPreview {
+        id: stem.to_string(),
+        sha256: format!("{:x}", Sha256::digest(bytes)),
+        size: bytes.len(),
+        source: source.chars().take(500).collect(),
+        declared_name: declared(text, "name"),
+        declared_url: declared(text, "url"),
+        replaces_existing: engines_dir.join(file_name).exists(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PLUGIN: &str = r#"
+from novaprinter import prettyPrinter
+from helpers import retrieve_url
+
+class demo(object):
+    url = "https://demo.example"
+    name = 'Demo engine'
+    supported_categories = {"all": "0", "movies": "1"}
+
+    def search(self, what, cat="all"):
+        for i in range(3):
+            prettyPrinter({"link": "magnet:?xt=urn:btih:%040d" % i, "name": "Result | %d %s" % (i, what),
+                           "size": "1.5 GB", "seeds": i, "leech": "-1", "engine_url": self.url,
+                           "desc_link": self.url + "/%d" % i, "pub_date": 1700000000})
+"#;
+
+    #[test]
+    fn inspect_checks_names_and_shape() {
+        let d = tempfile::tempdir().unwrap();
+        let p = inspect("demo.py", PLUGIN.as_bytes(), "https://x", d.path()).unwrap();
+        assert_eq!(p.declared_name.as_deref(), Some("Demo engine"));
+        assert_eq!(p.declared_url.as_deref(), Some("https://demo.example"));
+        assert_eq!(p.sha256.len(), 64);
+        assert!(inspect("Demo.py", PLUGIN.as_bytes(), "", d.path()).is_err());
+        assert!(inspect("helpers.py", b"class helpers: pass", "", d.path()).is_err());
+        assert!(inspect("../evil.py", b"", "", d.path()).is_err());
+        assert!(inspect("demo.txt", PLUGIN.as_bytes(), "", d.path()).is_err());
+        assert!(inspect("other.py", PLUGIN.as_bytes(), "", d.path()).is_err());
+    }
+
+    /// Runs the real shim with a real interpreter when one is installed.
+    #[tokio::test]
+    async fn runs_a_plugin_end_to_end_if_python_present() {
+        let Some(py) = detect().await else {
+            eprintln!("python not installed; skipping");
+            return;
+        };
+        let d = tempfile::tempdir().unwrap();
+        install_shim(d.path()).unwrap();
+        std::fs::write(d.path().join("engines/demo.py"), PLUGIN).unwrap();
+        // A plugin trying to shadow the json module must not break others.
+        std::fs::write(
+            d.path().join("engines/json.py"),
+            "class json: pass\nraise SystemExit(3)",
+        )
+        .unwrap();
+        let caps = capabilities(&py, d.path()).await.unwrap();
+        let demo = caps.iter().find(|c| c.id == "demo").unwrap();
+        assert_eq!(demo.name, "Demo engine");
+        assert_eq!(demo.categories, vec!["all", "movies"]);
+        let mut got = Vec::new();
+        let n = search(
+            &py,
+            d.path(),
+            "demo",
+            "all",
+            "big buck",
+            CancellationToken::new(),
+            |b| got.extend(b),
+        )
+        .await
+        .unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(got[1].name, "Result | 1 big+buck");
+        assert_eq!(got[1].size, Some(1_610_612_736));
+        assert_eq!(got[1].leechers, None);
+        assert!(search(
+            &py,
+            d.path(),
+            "../x",
+            "all",
+            "q",
+            CancellationToken::new(),
+            |_| {}
+        )
+        .await
+        .is_err());
+    }
+}
