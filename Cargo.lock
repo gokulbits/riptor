@@ -4755,7 +4755,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chacha20poly1305",
  "flate2",

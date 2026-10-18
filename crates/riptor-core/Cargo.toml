@@ -24,11 +24,11 @@ riptor-seeding = { path = "../riptor-seeding" }
 chacha20poly1305 = "0.10"
 argon2 = "0.5"
 flate2 = "1"
-base64 = "0.22"
+base64 = "0.23"
 thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 rand = "0.8"
 sha2 = "0.10"
-base64 = "0.22"
+base64 = "0.23"
