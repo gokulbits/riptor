@@ -1,0 +1,105 @@
+# Riptor: notes for Claude
+
+Riptor is a Tauri 2 + Rust + React BitTorrent client for Windows and Linux. It was renamed from the working name "Swarm"; any `swarm` left anywhere is a bug. The user-facing overview and the full task list are in README.md. **Keep the "What's left to do" lists in both files in sync when finishing or adding work.**
+
+## Ground rules
+
+- **Security comes first.** Treat every external input as hostile: torrent metadata, peers, trackers, search results, plugins, backups, VPN configs, and anything the webview sends. Validate in Rust (never trust the UI), add a test that proves the attack fails, and state honest limits in docs and UI. Don't overclaim.
+- **No extra firewall prompts.** Tests, benchmarks and helpers that open sockets must bind `127.0.0.1` (settings `listen_address`, or `ListenerOptions` with loopback). Only `riptor.exe` may ever trigger a Windows Firewall prompt.
+- **PowerShell script execution is disabled** on the dev machine. Use inline PowerShell, never `.ps1` files, and never bypass the execution policy.
+- The webview gets no opener, notification or deep-link permissions. New IPC commands must be added in **three** places:
+  1. `src-tauri/src/commands.rs`
+  2. `generate_handler!` in `src-tauri/src/lib.rs`
+  3. the allowlist in `isolation/index.js`
+
+  A command missing from the allowlist is silently blocked.
+- Changes to vendored librqbit are marked `// RIPTOR PATCH:` and listed in `vendor/PATCHES.md`.
+- Every save folder (add, category, settings, restore) goes through `riptor_core::paths::check_save_root`.
+- Every on-disk torrent path goes through `riptor_storage::sanitize`. Never use librqbit's `relative_filename`: on Windows, `PathBuf::push` with a `C:` component escapes the folder.
+- `unsafe` is forbidden except in `riptor-storage/src/os.rs` and `src-tauri/src/associations.rs` (documented OS calls).
+
+## Commands
+
+The Rust toolchain lives in `~/.cargo/bin`. Add it to PATH in each shell.
+
+Run the app in development mode (it rebuilds and restarts on Rust changes):
+```bash
+npx tauri dev
+```
+
+Run the Rust tests (79 at last count) and the UI tests (4):
+```bash
+cargo test --workspace
+```
+```bash
+npm test
+```
+
+Lint, which must be clean:
+```bash
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Format and typecheck:
+```bash
+cargo fmt --all
+```
+```bash
+npx tsc -b --noEmit
+```
+
+Storage benchmark (results are noisy; compare medians):
+```bash
+cargo bench -p riptor-storage
+```
+
+**Inspecting the running UI:** start `tauri dev` with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` and drive the page over CDP (`http://127.0.0.1:9222/json`). React StrictMode mounts effects twice, so don't use "run once" ref guards in effects (that bug once disconnected all engine events).
+
+## Architecture in one breath
+
+- **riptor-core::Engine** owns the librqbit `Session`.
+  - It adds every torrent paused, and the once-a-second `tick()` lets `riptor-seeding::Scheduler` decide start/queue/share-limit actions.
+  - It keeps all-time counters in `torrents.json` and statistics in `statistics.json`, using atomic writes via `state_file`.
+  - librqbit's own JSON persistence and fastresume live in `<data>/session`.
+- **riptor-storage::CachedStorageFactory** is the session's *default* storage factory, so restored torrents use it. librqbit hides the output folder from factories, so the engine registers each torrent's root by info hash before adding or restoring it, and an unregistered torrent is refused.
+- **Pieces:** buffered per piece in memory, then flushed synchronously in `on_piece_completed`, which runs *before* the piece is announced to peers.
+- **Backups** (`riptor-core/src/backup.rs`): `RIPTRBK\0` header, XChaCha20-Poly1305 with the header as AAD, deflate+JSON payload. The built-in key (tamper-evident only) or an Argon2id password.
+- **Search plugins:** run through Riptor's own JSON-line shim in `crates/riptor-search/assets/nova`. Engines are loaded by file path and never put on `sys.path`.
+
+## What's left to do (priority order)
+
+1. **VPN (M4):**
+   - `.ovpn`/WireGuard import with script-directive rejection.
+   - A privileged helper (UAC/pkexec).
+   - The OpenVPN management client and WireGuard control.
+   - Kill switch: bind to the adapter (needs a Windows librqbit patch) plus a 1 s watchdog.
+   - Disable UPnP/LSD while the VPN is required.
+   - Proton NAT-PMP.
+   - The VPN UI page.
+2. **CI and dependencies:** confirm the first GitHub Actions run is green. Triage the 7 Dependabot PRs; several are major bumps, so test them, don't blind-merge.
+3. **Web seeds (BEP 19)** in vendored librqbit. A proposal card exists for a separate session.
+4. **Packaging (M5):**
+   - NSIS, AppImage and .deb, verified file/magnet registration in installed builds.
+   - Polkit policy.
+   - Release SHA-256 sums, optional signing.
+   - About page and log viewer.
+   - An installer under 15 MB.
+5. **Engine:**
+   - Runtime per-torrent speed limits (librqbit patch).
+   - Force recheck.
+   - Profile the storage download path (~35% slower than plain I/O at NVMe speeds).
+   - A real-network download/seed check (e.g. Debian netinst).
+6. **M2 leftovers:**
+   - Alt-speed weekly scheduler.
+   - Watched folder.
+   - Move files on category or save-folder change.
+   - Create-torrent dialog.
+7. **Search:** test plugins with real Python on Windows. Test the bubblewrap sandbox on Linux.
+8. **UI polish:**
+   - Replace `window.prompt` for tags.
+   - Persist detail-panel height and tab.
+9. **Security and quality:**
+   - A security review per milestone.
+   - Fuzz parsers (Torznab, plugin output, backup, VPN configs).
+   - Privately report librqbit's Windows path escape upstream.
+   - Test on real Linux.
