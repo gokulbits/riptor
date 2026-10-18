@@ -1,0 +1,34 @@
+[package]
+name = "riptor-core"
+description = "Riptor's torrent engine: librqbit session, stats, seeding policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+reqwest.workspace = true
+url.workspace = true
+bytes.workspace = true
+librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls"] }
+librqbit-core = { version = "9.0.1", default-features = false }
+librqbit-dht = "9.0.1"
+riptor-storage = { path = "../riptor-storage" }
+riptor-seeding = { path = "../riptor-seeding" }
+chacha20poly1305 = "0.10"
+argon2 = "0.5"
+flate2 = "1"
+base64 = "0.22"
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"

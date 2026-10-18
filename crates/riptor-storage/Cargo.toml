@@ -1,0 +1,35 @@
+[package]
+name = "riptor-storage"
+description = "Cached, hardened torrent storage for librqbit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+serde.workspace = true
+lru = "0.12"
+librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls"] }
+librqbit-core = { version = "9.0.1", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_System_IO",
+  "Win32_System_Ioctl",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest = "1"
+criterion = { version = "0.5", default-features = false }
+rand = "0.8"
+
+[[bench]]
+name = "storage"
+harness = false
