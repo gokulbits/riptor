@@ -22,7 +22,7 @@ librqbit-dht = "9.0.1"
 riptor-storage = { path = "../riptor-storage" }
 riptor-seeding = { path = "../riptor-seeding" }
 chacha20poly1305 = "0.10"
-argon2 = "0.5"
+argon2 = "0.6"
 flate2 = "1"
 base64 = "0.22"
 thiserror.workspace = true
