@@ -412,7 +412,7 @@ impl VpnManager {
                     return;
                 }
                 tick += 1;
-                if let (Some(port), true) = (forwarded, tick % 45 == 0) {
+                if let (Some(port), true) = (forwarded, tick.is_multiple_of(45)) {
                     for proto in [natpmp::Proto::Tcp, natpmp::Proto::Udp] {
                         if let Err(e) = natpmp::map(
                             (natpmp::PROTON_GATEWAY, natpmp::PORT).into(),
