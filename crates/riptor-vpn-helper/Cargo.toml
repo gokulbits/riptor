@@ -1,0 +1,18 @@
+[package]
+name = "riptor-vpn-helper"
+description = "Riptor's privileged VPN helper: starts OpenVPN with a re-validated, app-only config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "riptor-vpn-helper"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+riptor-vpn = { path = "../riptor-vpn" }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

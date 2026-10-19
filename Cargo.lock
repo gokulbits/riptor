@@ -4890,6 +4890,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "riptor-vpn-helper"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "riptor-vpn",
+ "winreg 0.55.0",
+]
+
+[[package]]
 name = "rlimit"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
