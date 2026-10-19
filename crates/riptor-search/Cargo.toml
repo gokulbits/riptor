@@ -4,6 +4,7 @@ description = "Search providers for Riptor: Internet Archive, Torznab, qBittorre
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 anyhow.workspace = true
@@ -16,7 +17,7 @@ tracing.workspace = true
 parking_lot.workspace = true
 reqwest.workspace = true
 url.workspace = true
-quick-xml = "0.37"
+quick-xml = "0.42"
 sha2 = "0.10"
 keyring = { version = "3", features = ["windows-native", "sync-secret-service", "crypto-rust"] }
 

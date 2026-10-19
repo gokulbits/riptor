@@ -5,7 +5,17 @@ all-features = false
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# Unmaintained crates are only an error when we depend on them directly.
+# Current transitive ones (proc-macro-error via gtk-rs, zbus_names/zvariant via
+# D-Bus) have no maintained replacement upstream yet.
+unmaintained = "workspace"
+ignore = [
+  # ringbuf <0.5.2 double free in Consumer::skip/clear, only when an element's
+  # Drop panics. Our sole user (librqbit-utp 0.7) stores `u8`, which has no
+  # Drop, so the bug is unreachable; uTP is also off by default. Remove when
+  # librqbit-utp moves to ringbuf >= 0.5.2.
+  { id = "RUSTSEC-2026-0293", reason = "unreachable: ringbuf element type is u8 (no Drop)" },
+]
 
 [licenses]
 version = 2

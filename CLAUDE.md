@@ -27,7 +27,7 @@ Run the app in development mode (it rebuilds and restarts on Rust changes):
 npx tauri dev
 ```
 
-Run the Rust tests (79 at last count) and the UI tests (4):
+Run the Rust tests (80 at last count) and the UI tests (4):
 ```bash
 cargo test --workspace
 ```
