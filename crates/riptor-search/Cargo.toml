@@ -18,7 +18,7 @@ parking_lot.workspace = true
 reqwest.workspace = true
 url.workspace = true
 quick-xml = "0.42"
-sha2 = "0.10"
+sha2 = "0.11"
 keyring = { version = "3", features = ["windows-native", "sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
