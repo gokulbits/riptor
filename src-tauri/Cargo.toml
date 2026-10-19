@@ -33,7 +33,7 @@ riptor-search = { path = "../crates/riptor-search" }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
-windows-sys = { version = "0.59", features = ["Win32_UI_Shell"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
 
 # tauri-plugin-deep-link 2.6.2 initialises rust-ini's ParseOption with only
 # the fields that existed in 0.21.1; 0.21.2 added more in a minor release and

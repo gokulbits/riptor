@@ -11,7 +11,7 @@ use librqbit::{
     create_torrent, AddTorrent, AddTorrentOptions, CreateTorrentOptions, ListenerOptions, Session,
     SessionOptions,
 };
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use riptor_core::{AddParams, Engine, EngineConfig, Event, Settings, Source, TorrentState};
 use riptor_storage::{CachedStorageFactory, Shared, StorageConfig, TorrentRoot};
 use sha2::{Digest, Sha256};

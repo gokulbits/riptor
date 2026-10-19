@@ -410,7 +410,10 @@ pub fn inspect(
     );
     Ok(PluginPreview {
         id: stem.to_string(),
-        sha256: format!("{:x}", Sha256::digest(bytes)),
+        sha256: Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
         size: bytes.len(),
         source: source.chars().take(500).collect(),
         declared_name: declared(text, "name"),

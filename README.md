@@ -153,7 +153,7 @@ Or use **Actions › CI › Run workflow** on GitHub. The installers are attache
 - [ ] Remember the detail-panel height and the selected tab between runs.
 
 ### Security and quality
-- [ ] Triage the Dependabot PRs opened on the first push. Several are major-version bumps (React, Vite plugin, lucide-react, GitHub Actions) and need testing, not a blind merge.
+- [ ] Check for dependency updates regularly (`cargo update --dry-run`, `npm outdated`; security advisories already fail CI through cargo-deny and npm audit). Upgrade by hand, then build, test and run the app before committing. Dependabot is intentionally not used.
 - [ ] Do a full security review pass at the end of each milestone, and fuzz the parsers (Torznab, plugin output, backup, VPN configs).
 - [ ] Privately report the Windows path-escape issue in upstream librqbit (see `vendor/PATCHES.md`).
 - [ ] Test on Linux (not yet run outside CI).

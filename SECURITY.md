@@ -25,7 +25,7 @@ Please do **not** open a public issue. Use GitHub's private vulnerability report
 * Tauri: strict CSP, minimal capabilities, no shell plugin, and validated command inputs.
 * Secrets (Proton OpenVPN credentials, Torznab API keys) are stored in the OS keyring and redacted from logs.
 * `unsafe` is forbidden outside small, documented OS-call modules.
-* CI runs `cargo deny` (advisories, licenses, sources) and `npm audit`. Actions are pinned to commit SHAs, and Dependabot keeps dependencies current.
+* CI runs `cargo deny` (advisories, licenses, sources) and `npm audit`. Actions are pinned to commit SHAs. Dependencies are updated by hand, and each upgrade is built, tested and audited before it lands, rather than auto-merged.
 
 ## Known limitations
 

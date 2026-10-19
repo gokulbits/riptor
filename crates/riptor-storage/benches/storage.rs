@@ -38,7 +38,7 @@ fn layout(root: &std::path::Path) -> Layout {
 const IN_FLIGHT: u64 = 16;
 
 fn block_order() -> Vec<(u64, u64)> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut out = Vec::new();
     for w in (0..PIECES).step_by(IN_FLIGHT as usize) {
         let mut v: Vec<(u64, u64)> = (w..(w + IN_FLIGHT).min(PIECES))
@@ -126,7 +126,7 @@ fn seeding(c: &mut Criterion) {
     std::fs::write(&l.files[0].path, vec![3u8; (PIECE * PIECES) as usize]).unwrap();
     // Several peers interleave whole-piece requests.
     let mut pieces: Vec<u64> = (0..PIECES).collect();
-    pieces.shuffle(&mut rand::thread_rng());
+    pieces.shuffle(&mut rand::rng());
 
     let mut g = c.benchmark_group("seed_64MiB");
     g.throughput(Throughput::Bytes(PIECE * PIECES));
