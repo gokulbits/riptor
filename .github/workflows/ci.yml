@@ -3,7 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+    # Version tags (e.g. v0.1.0) also build the installers.
+    tags: ["v*"]
   pull_request:
+  # "Run workflow" button: runs the checks and builds the installers.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -64,9 +68,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  # Release builds (full LTO) are slow, so installers are only built for
+  # version tags and manual runs; every push still gets the checks above.
   bundle:
     needs: check
-    if: github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:

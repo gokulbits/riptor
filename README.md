@@ -102,6 +102,14 @@ npx tauri build
 
 Optional: qBittorrent search plugins need Python 3.9+ on the PATH.
 
+**CI** runs the formatter, clippy, tests and security checks (cargo-deny, npm audit) on every push and pull request. Installers are only built for version tags and manual runs, because full-LTO release builds take a long time:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Or use **Actions › CI › Run workflow** on GitHub. The installers are attached to the run as artifacts.
+
 ## What's left to do
 
 ### Next: VPN (milestone 4)
