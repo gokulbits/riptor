@@ -429,3 +429,92 @@ fn forged_backup_cannot_target_protected_folders() {
         e.shutdown().await.unwrap();
     });
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kill_switch_blocks_everything_until_lifted() {
+    use riptor_core::{NetworkMode, TorrentState};
+    let tmp = tempfile::tempdir().unwrap();
+    let downloads = tmp.path().join("downloads");
+    let content = downloads.join("content");
+    make_content(&content);
+    let created = create_torrent(
+        &content,
+        CreateTorrentOptions {
+            name: Some("content"),
+            trackers: vec![],
+            piece_length: Some(256 * 1024),
+        },
+        &BlockingSpawner::new(4),
+    )
+    .await
+    .unwrap();
+    let torrent_file = tmp.path().join("content.torrent");
+    std::fs::write(&torrent_file, created.as_bytes().unwrap()).unwrap();
+
+    let data_dir = tmp.path().join("appdata");
+    let mut settings = quiet_settings(&downloads);
+    settings.vpn_required = true;
+    riptor_core::state_file::save(&data_dir.join("settings.json"), &settings).unwrap();
+    let engine = Engine::start(EngineConfig { data_dir }).await.unwrap();
+    assert_eq!(
+        engine.network(),
+        NetworkMode::Blocked,
+        "must start blocked when the VPN is required"
+    );
+    let mut events = engine.subscribe();
+    let id = engine
+        .add_direct(Source::File(torrent_file), AddParams::default())
+        .await
+        .unwrap();
+
+    // Several ticks: the torrent wants to run but must never start, and nothing listens.
+    let mut ticks = 0;
+    while ticks < 4 {
+        if let Ok(Event::Tick { torrents, global }) = events.recv().await {
+            ticks += 1;
+            assert_eq!(global.network, "blocked");
+            assert_eq!(global.listen_port, None, "nothing may listen while blocked");
+            if let Some(t) = torrents.iter().find(|t| t.id == id) {
+                assert!(
+                    !matches!(
+                        t.state,
+                        TorrentState::Seeding
+                            | TorrentState::StalledUp
+                            | TorrentState::Downloading
+                            | TorrentState::StalledDl
+                    ),
+                    "torrent ran while blocked: {:?}",
+                    t.state
+                );
+            }
+        }
+    }
+
+    // Lifting the block lets it seed.
+    engine.set_network(NetworkMode::Normal).await.unwrap();
+    let ran = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Ok(Event::Tick { torrents, .. }) = events.recv().await {
+                if torrents.iter().any(|t| {
+                    t.id == id && matches!(t.state, TorrentState::Seeding | TorrentState::StalledUp)
+                }) {
+                    return;
+                }
+            }
+        }
+    })
+    .await;
+    assert!(
+        ran.is_ok(),
+        "torrent did not start after the block was lifted"
+    );
+
+    // Binding to an adapter that doesn't exist must fail, never fall back to the normal network.
+    let bad = NetworkMode::Vpn(riptor_core::VpnBinding {
+        adapter: "#999999".into(),
+        local_ip: Ipv4Addr::new(10, 255, 255, 1),
+        forwarded_port: None,
+    });
+    assert!(engine.set_network(bad).await.is_err());
+    engine.shutdown().await.unwrap();
+}

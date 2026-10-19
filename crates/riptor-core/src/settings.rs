@@ -42,6 +42,8 @@ pub struct Settings {
     pub anonymous_mode: bool,
     /// Windows: tag finished files with a Mark-of-the-Web.
     pub mark_of_the_web: bool,
+    /// Kill switch: torrents may only use the network through the app-only VPN.
+    pub vpn_required: bool,
     pub storage: StorageConfig,
     pub seeding: SeedingPrefs,
 }
@@ -67,6 +69,7 @@ impl Default for Settings {
             blocklist_url: None,
             anonymous_mode: false,
             mark_of_the_web: true,
+            vpn_required: false,
             storage: StorageConfig::default(),
             seeding: SeedingPrefs::default(),
         }

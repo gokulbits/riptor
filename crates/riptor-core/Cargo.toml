@@ -27,11 +27,11 @@ argon2 = "0.6"
 flate2 = "1"
 base64 = "0.23"
 thiserror.workspace = true
+network-interface = "2"
 
 [dev-dependencies]
 tempfile.workspace = true
 rand = "0.10"
 sha2 = "0.11"
 librqbit-dualstack-sockets = "0.7"
-network-interface = "2"
 base64 = "0.23"

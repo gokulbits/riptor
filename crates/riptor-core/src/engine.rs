@@ -31,6 +31,7 @@ use tracing::{info, warn};
 
 use crate::input::{self, Resolved, Source};
 use crate::model::*;
+use crate::network::NetworkMode;
 use crate::settings::{Settings, Transport};
 use crate::stats::{self, Statistics, StatsReport};
 use crate::{backup, motw, paths, state_file};
@@ -70,6 +71,8 @@ struct Runtime {
 pub struct Engine {
     data_dir: PathBuf,
     session: RwLock<Arc<Session>>,
+    /// Normal / app-only VPN / blocked (kill switch); see `network.rs`.
+    network: RwLock<NetworkMode>,
     factory: CachedStorageFactory,
     storage: Arc<riptor_storage::Shared>,
     settings: RwLock<Settings>,
@@ -168,11 +171,19 @@ impl Engine {
             }
         }
 
-        let session = build_session(&data_dir, &settings, &factory).await?;
+        // If torrents may only use the VPN, start blocked: nothing touches the
+        // network until the VPN is up.
+        let network = if settings.vpn_required {
+            NetworkMode::Blocked
+        } else {
+            NetworkMode::Normal
+        };
+        let session = build_session(&data_dir, &settings, &factory, &network).await?;
         let (events, _) = broadcast::channel(64);
         let engine = Arc::new(Self {
             data_dir,
             session: RwLock::new(session),
+            network: RwLock::new(network),
             factory,
             storage,
             settings: RwLock::new(settings),
@@ -765,6 +776,15 @@ impl Engine {
         *self.settings.write() = new.clone();
         self.storage.reconfigure(new.storage.clone());
         self.apply_limits();
+        // Turning the kill switch on without a VPN blocks immediately; turning
+        // it off lifts the block.
+        let current = self.network();
+        if new.vpn_required && current == NetworkMode::Normal {
+            return self.set_network(NetworkMode::Blocked).await;
+        }
+        if !new.vpn_required && current == NetworkMode::Blocked {
+            return self.set_network(NetworkMode::Normal).await;
+        }
         if new.needs_restart(&old) {
             self.restart_session().await?;
         }
@@ -787,12 +807,28 @@ impl Engine {
         s.ratelimits.set_upload_bps(kib(ul));
     }
 
+    pub fn network(&self) -> NetworkMode {
+        self.network.read().clone()
+    }
+
+    /// Switch between normal, app-only VPN and blocked (kill switch). The
+    /// session is rebuilt so every socket picks up the new binding.
+    pub async fn set_network(&self, mode: NetworkMode) -> anyhow::Result<()> {
+        if *self.network.read() == mode {
+            return Ok(());
+        }
+        info!("network mode -> {}", mode.label());
+        *self.network.write() = mode;
+        self.restart_session().await
+    }
+
     async fn restart_session(&self) -> anyhow::Result<()> {
         let _g = self.admin.lock().await;
         let old = self.session();
         old.stop().await;
         let settings = self.settings();
-        let new = build_session(&self.data_dir, &settings, &self.factory).await?;
+        let net = self.network.read().clone();
+        let new = build_session(&self.data_dir, &settings, &self.factory, &net).await?;
         *self.session.write() = new;
         self.runtime.lock().clear();
         self.apply_limits();
@@ -1286,11 +1322,24 @@ impl Engine {
         }
 
         let actions = self.scheduler.lock().tick(&views, &prefs, now);
+        // Kill switch: while blocked, nothing may start and anything running is paused.
+        let blocked = matches!(*self.network.read(), NetworkMode::Blocked);
         for a in actions {
+            if blocked && matches!(a, Action::Start { .. }) {
+                continue;
+            }
             if let Err(e) = self.apply(a, &by_id).await {
                 warn!("scheduler action failed: {e:#}");
             }
         }
+        if blocked {
+            for (_, h) in by_id.values() {
+                if !h.is_paused() {
+                    let _ = session.pause(h).await;
+                }
+            }
+        }
+        global.network = self.network.read().label().to_string();
 
         *self.last_tick_data.lock() = (summaries.clone(), global.clone());
         let _ = self.events.send(Event::Tick {
@@ -1469,9 +1518,19 @@ async fn build_session(
     data_dir: &Path,
     s: &Settings,
     factory: &CachedStorageFactory,
+    net: &NetworkMode,
 ) -> anyhow::Result<Arc<Session>> {
     let anon = s.anonymous_mode;
-    let dht = (s.dht && !anon).then(|| DhtSessionConfig {
+    let blocked = matches!(net, NetworkMode::Blocked);
+    let vpn = match net {
+        NetworkMode::Vpn(v) => Some(v),
+        _ => None,
+    };
+    // On the VPN everything binds to the tunnel address; otherwise the user's choice.
+    let listen_ip = vpn
+        .map(|v| std::net::IpAddr::V4(v.local_ip))
+        .or(s.listen_address);
+    let dht = (s.dht && !anon && !blocked).then(|| DhtSessionConfig {
         persistence: Some(DhtPersistenceConfig {
             config_filename: Some(data_dir.join("dht.json")),
             ..Default::default()
@@ -1484,12 +1543,14 @@ async fn build_session(
             Transport::TcpAndUtp => ListenerMode::TcpAndUtp,
         },
         listen_addr: (
-            s.listen_address.unwrap_or(Ipv6Addr::UNSPECIFIED.into()),
+            listen_ip.unwrap_or(Ipv6Addr::UNSPECIFIED.into()),
             s.listen_port,
         )
             .into(),
-        ipv4_only: s.listen_address.is_some_and(|a| a.is_ipv4()),
-        enable_upnp_port_forwarding: s.upnp && !anon,
+        ipv4_only: listen_ip.is_some_and(|a| a.is_ipv4()),
+        // UPnP would open a port on the *home router*, outside the VPN.
+        enable_upnp_port_forwarding: s.upnp && !anon && vpn.is_none(),
+        announce_port: vpn.and_then(|v| v.forwarded_port),
         ..Default::default()
     };
     let (dl, ul) = s.effective_limits();
@@ -1499,12 +1560,22 @@ async fn build_session(
             folder: Some(data_dir.join("session")),
         }),
         fastresume: true,
-        listen: Some(listen),
+        listen: (!blocked).then_some(listen),
         connect: Some(ConnectionOptions {
             proxy_url: s.proxy_url.clone(),
             enable_tcp: true,
             peer_opts: None,
         }),
+        disable_trackers: blocked,
+        // Blocked: pin every socket to the loopback adapter, so anything that
+        // tries to reach the internet fails at the OS level, whatever runs.
+        bind_device_name: match net {
+            NetworkMode::Vpn(v) => Some(v.adapter.clone()),
+            NetworkMode::Blocked => crate::network::loopback_adapter(),
+            NetworkMode::Normal => None,
+        },
+        bind_local_ip: vpn.map(|v| v.local_ip.into()),
+        ipv4_only: vpn.is_some(),
         default_storage_factory: Some(factory.clone().into_boxed()),
         ratelimits: LimitsConfig {
             download_bps: kib(dl),
@@ -1512,7 +1583,8 @@ async fn build_session(
         },
         blocklist_url: s.blocklist_url.clone(),
         peer_limit: s.peer_limit,
-        disable_local_service_discovery: !s.lsd || anon,
+        // Local discovery multicasts on the LAN, outside the VPN.
+        disable_local_service_discovery: !s.lsd || anon || vpn.is_some() || blocked,
         client_name_and_version: anon.then(|| "BitTorrent".to_string()),
         ..Default::default()
     };

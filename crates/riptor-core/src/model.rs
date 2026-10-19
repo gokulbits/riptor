@@ -103,6 +103,8 @@ pub struct TorrentSummary {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct GlobalStats {
+    /// "normal", "vpn" or "blocked" (kill switch engaged).
+    pub network: String,
     pub dl_rate: u64,
     pub ul_rate: u64,
     pub dht_nodes: Option<usize>,
