@@ -153,7 +153,6 @@ Or use **Actions › CI › Run workflow** on GitHub. The installers are attache
 - [ ] Remember the detail-panel height and the selected tab between runs.
 
 ### Security and quality
-- [ ] Confirm that the first CI run (Windows and Linux: fmt, clippy, tests, cargo-deny, npm audit) is green.
 - [ ] Triage the Dependabot PRs opened on the first push. Several are major-version bumps (React, Vite plugin, lucide-react, GitHub Actions) and need testing, not a blind merge.
 - [ ] Do a full security review pass at the end of each milestone, and fuzz the parsers (Torznab, plugin output, backup, VPN configs).
 - [ ] Privately report the Windows path-escape issue in upstream librqbit (see `vendor/PATCHES.md`).

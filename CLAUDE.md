@@ -77,7 +77,7 @@ cargo bench -p riptor-storage
    - Disable UPnP/LSD while the VPN is required.
    - Proton NAT-PMP.
    - The VPN UI page.
-2. **CI and dependencies:** confirm the first GitHub Actions run is green. Triage the 7 Dependabot PRs; several are major bumps, so test them, don't blind-merge.
+2. **Dependencies:** triage the 7 Dependabot PRs; several are major bumps, so test them, don't blind-merge. (CI is green on Windows and Linux; installers build only for `v*` tags and manual runs.)
 3. **Web seeds (BEP 19)** in vendored librqbit. A proposal card exists for a separate session.
 4. **Packaging (M5):**
    - NSIS, AppImage and .deb, verified file/magnet registration in installed builds.
