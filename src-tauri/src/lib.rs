@@ -199,6 +199,11 @@ pub fn run() {
             commands::search_install_plugin,
             commands::search_uninstall_plugin,
             commands::search_plugin_download,
+            commands::search_catalog,
+            commands::search_install_python,
+            commands::search_remove_python,
+            commands::search_options,
+            commands::search_set_scrape,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Riptor");

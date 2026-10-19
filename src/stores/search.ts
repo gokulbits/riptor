@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ProviderInfo, SearchEvent, SearchResult } from "../lib/types";
+import type { ProviderInfo, ResultCounts, SearchEvent, SearchResult } from "../lib/types";
 
 export type ResultSort = "name" | "size" | "seeders" | "leechers" | "engine" | "pub_date";
 
@@ -16,6 +16,8 @@ interface SearchState {
   selected: string[] | null;
   searchId: number | null;
   running: boolean;
+  /** Tracker lookups for results without seed/peer counts are still running. */
+  lookups: boolean;
   results: SearchResult[];
   progress: Record<string, ProviderProgress>;
   providers: ProviderInfo[];
@@ -41,6 +43,7 @@ export const useSearch = create<SearchState>()((set) => ({
   selected: null,
   searchId: null,
   running: false,
+  lookups: false,
   results: [],
   progress: {},
   providers: [],
@@ -55,10 +58,11 @@ export const useSearch = create<SearchState>()((set) => ({
     set({
       searchId,
       running: true,
+      lookups: true,
       results: [],
       progress: Object.fromEntries(ids.map((id) => [id, { done: false, count: 0, error: null }])),
     }),
-  stop: () => set({ running: false }),
+  stop: () => set({ running: false, lookups: false }),
   onEvent: (e) =>
     set((s) => {
       // Ignore stragglers from a search the user has replaced.
@@ -69,11 +73,23 @@ export const useSearch = create<SearchState>()((set) => ({
       if (e.type === "provider_done") {
         return { progress: { ...s.progress, [e.provider]: { done: true, count: e.count, error: e.error } } };
       }
+      if (e.type === "counts") return { results: applyCounts(s.results, e.counts) };
+      if (e.type === "lookups_done") return { lookups: false };
       return { running: false };
     }),
   setSort: (key) => set((s) => ({ sort: { key, desc: s.sort.key === key ? !s.sort.desc : key !== "name" && key !== "engine" } })),
   setFilter: (f) => set((s) => ({ filter: { ...s.filter, ...f } })),
 }));
+
+/** Fill in scraped counts; a provider's own counts are never overwritten. */
+export function applyCounts(results: SearchResult[], counts: ResultCounts[]): SearchResult[] {
+  const byLink = new Map(counts.map((c) => [c.link, c]));
+  return results.map((r) => {
+    const c = byLink.get(r.link);
+    if (!c || (!r.scraped && (r.seeders != null || r.leechers != null))) return r;
+    return { ...r, seeders: c.seeders, leechers: c.leechers, scraped: true };
+  });
+}
 
 export function visibleResults(s: SearchState): SearchResult[] {
   const t = s.filter.text.trim().toLowerCase();

@@ -10,7 +10,9 @@ import type {
   ProviderInfo,
   PythonStatus,
   PluginPreview,
+  PluginCatalog,
   SearchEvent,
+  SearchOptions,
   EngineEvent,
   FileEntry,
   Preview,
@@ -68,6 +70,11 @@ export const api = {
   installPlugin: (sha256: string) => invoke<void>("search_install_plugin", { sha256 }),
   uninstallPlugin: (id: string) => invoke<void>("search_uninstall_plugin", { id }),
   pluginDownload: (provider: string, url: string) => invoke<string>("search_plugin_download", { provider, url }),
+  pluginCatalog: (refresh: boolean) => invoke<PluginCatalog>("search_catalog", { refresh }),
+  installPython: () => invoke<PythonStatus>("search_install_python"),
+  removePython: () => invoke<PythonStatus>("search_remove_python"),
+  searchOptions: () => invoke<SearchOptions>("search_options"),
+  searchSetScrape: (enabled: boolean) => invoke<void>("search_set_scrape", { enabled }),
 };
 
 export const events = {

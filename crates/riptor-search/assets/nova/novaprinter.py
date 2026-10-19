@@ -8,6 +8,10 @@ output. Written for Riptor; API-compatible with qBittorrent's novaprinter.
 import json
 import re
 import sys
+from typing import Any, Dict
+
+# Newer plugins import this type (qBittorrent 5.1+); any dict works.
+SearchResults = Dict[str, Any]
 
 _UNITS = {"B": 0, "KB": 1, "KIB": 1, "MB": 2, "MIB": 2, "GB": 3, "GIB": 3, "TB": 4, "TIB": 4, "PB": 5, "PIB": 5}
 _SIZE_RE = re.compile(r"^\s*([0-9]+(?:[.,][0-9]+)?)\s*([a-zA-Z]*)\s*$")
@@ -28,10 +32,12 @@ def anySizeToBytes(size_string):
 
 
 def _num(v):
+    """Counts and dates: 12, "12", " 1,234 ", 12.0; -1 or junk means unknown."""
     try:
-        n = int(str(v).strip())
+        s = str(v).strip().replace(",", "").replace("_", "")
+        n = int(float(s)) if "." in s else int(s)
         return n if n >= 0 else None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 

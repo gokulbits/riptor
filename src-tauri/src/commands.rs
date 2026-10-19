@@ -367,6 +367,40 @@ pub async fn search_uninstall_plugin(state: State<'_, AppState>, id: String) -> 
     search(&state)?.uninstall_plugin(&id).await.map_err(err)
 }
 
+/// qBittorrent plugins available from GitHub (official and community lists).
+#[tauri::command]
+pub async fn search_catalog(
+    state: State<'_, AppState>,
+    refresh: bool,
+) -> Res<riptor_search::catalog::Catalog> {
+    Ok(search(&state)?.catalog(refresh).await)
+}
+
+/// Download python.org's embeddable Python (hash-pinned) for plugins.
+#[tauri::command]
+pub async fn search_install_python(
+    state: State<'_, AppState>,
+) -> Res<riptor_search::manager::PythonStatus> {
+    search(&state)?.install_python().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn search_remove_python(
+    state: State<'_, AppState>,
+) -> Res<riptor_search::manager::PythonStatus> {
+    search(&state)?.remove_python().await.map_err(err)
+}
+
+#[tauri::command]
+pub fn search_options(state: State<'_, AppState>) -> Res<riptor_search::manager::SearchOptions> {
+    Ok(search(&state)?.options())
+}
+
+#[tauri::command]
+pub fn search_set_scrape(state: State<'_, AppState>, enabled: bool) -> Res<()> {
+    search(&state)?.set_scrape(enabled).map_err(err)
+}
+
 /// Fetch a plugin result's .torrent through the plugin; returns a temp file
 /// path for the add dialog.
 #[tauri::command]

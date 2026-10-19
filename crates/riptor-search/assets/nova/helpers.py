@@ -18,6 +18,13 @@ import zlib
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 headers = {"User-Agent": USER_AGENT}
+
+
+def getBrowserUserAgent():
+    """qBittorrent 5.x helper some plugins call."""
+    return USER_AGENT
+
+
 TIMEOUT = 15
 MAX_PAGE = 8 * 1024 * 1024
 MAX_TORRENT = 16 * 1024 * 1024

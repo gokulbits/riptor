@@ -3,15 +3,22 @@
 //!
 //! * [`archive`]: Internet Archive (built in, needs no setup).
 //! * [`torznab`]: Jackett / Prowlarr indexers.
-//! * [`nova`]: qBittorrent-compatible Python plugins.
+//! * [`nova`]: qBittorrent-compatible Python plugins, offered from a
+//!   [`catalog`] fetched from GitHub, run by a system Python or one
+//!   [`pyembed`] sets up.
+//!
+//! Results without seed/peer counts get them from tracker [`scrape`]s.
 //!
 //! Every result is untrusted input from the network; [`clean`] normalises it
 //! before it reaches the UI.
 #![forbid(unsafe_code)]
 
 pub mod archive;
+pub mod catalog;
 pub mod manager;
 pub mod nova;
+pub mod pyembed;
+pub mod scrape;
 pub mod secrets;
 pub mod time;
 pub mod torznab;
@@ -75,9 +82,15 @@ pub enum SearchEvent {
         count: usize,
         error: Option<String>,
     },
-    Finished {
+    /// Every provider has answered (tracker lookups may still be running).
+    Finished { search_id: u64 },
+    /// Seed/peer counts from tracker scrapes, for results that had none.
+    Counts {
         search_id: u64,
+        counts: Vec<scrape::ResultCounts>,
     },
+    /// Tracker lookups for this search are over.
+    LookupsDone { search_id: u64 },
 }
 
 pub fn validate_query(q: &str) -> anyhow::Result<String> {

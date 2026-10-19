@@ -19,6 +19,10 @@ reqwest.workspace = true
 url.workspace = true
 quick-xml = "0.42"
 sha2 = "0.11"
+librqbit-core = { version = "9.0.1", default-features = false, features = ["sha1-ring"] }
+librqbit-bencode = "9.0.1"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+bytes.workspace = true
 keyring = { version = "3", features = ["windows-native", "sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
