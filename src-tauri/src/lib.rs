@@ -1,6 +1,11 @@
 mod associations;
 mod commands;
+// VPN manager: wired to IPC commands and the VPN page in the next step.
+#[allow(dead_code)]
+mod elevate;
 mod tray;
+#[allow(dead_code)]
+mod vpn;
 
 use std::sync::Arc;
 
