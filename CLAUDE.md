@@ -17,7 +17,9 @@ Riptor is a Tauri 2 + Rust + React BitTorrent client for Windows and Linux. It w
 - Changes to vendored librqbit are marked `// RIPTOR PATCH:` and listed in `vendor/PATCHES.md`.
 - Every save folder (add, category, settings, restore) goes through `riptor_core::paths::check_save_root`.
 - Every on-disk torrent path goes through `riptor_storage::sanitize`. Never use librqbit's `relative_filename`: on Windows, `PathBuf::push` with a `C:` component escapes the folder.
-- `unsafe` is forbidden except in `riptor-storage/src/os.rs` and `src-tauri/src/associations.rs` (documented OS calls).
+- `unsafe` is forbidden except in `riptor-storage/src/os.rs`, `src-tauri/src/associations.rs`, `src-tauri/src/elevate.rs` and the vendored dualstack sockets `bind_device` patch (documented OS calls).
+- **VPN is app-only.** Only Riptor's sockets may use the tunnel (pinned to its adapter). Never let the tunnel take over the system's routing (profiles get `route-nopull` and only a metric-9999 default route on the tunnel itself), and never connect a profile that can't be limited to Riptor (WireGuard on Windows).
+- Build `riptor-vpn-helper` once (`cargo build -p riptor-vpn-helper`) so it sits next to `riptor.exe` in dev. Release bundles add it through `src-tauri/tauri.bundle.conf.json` (externalBin).
 
 ## Commands
 
@@ -69,14 +71,13 @@ cargo bench -p riptor-storage
 
 ## What's left to do (priority order)
 
-1. **VPN (M4):**
-   - `.ovpn`/WireGuard import with script-directive rejection.
-   - A privileged helper (UAC/pkexec).
-   - The OpenVPN management client and WireGuard control.
-   - Kill switch: bind to the adapter (needs a Windows librqbit patch) plus a 1 s watchdog.
-   - Disable UPnP/LSD while the VPN is required.
-   - Proton NAT-PMP.
-   - The VPN UI page.
+1. **Finish the VPN (M4).** Import, helper, management client, Windows binding, kill switch, watchdog, NAT-PMP and the VPN page are done.
+   - End-to-end test with OpenVPN Community and a Proton profile (needs the user's account). Check the tracker-seen IP, other apps' IP, and leaks when the tunnel dies.
+   - Resolve tracker host names through the tunnel (they currently use the system DNS).
+   - Public-IP check on the VPN page.
+   - WireGuard on Linux (helper `wg-quick` path; `connect` refuses WireGuard until then). It stays refused on Windows.
+   - Linux: management over a 0600 Unix socket instead of 127.0.0.1 TCP.
+   - Security review of the VPN milestone.
 2. **Dependencies:** there is no Dependabot; upgrades are done by hand. Check periodically (`cargo update --dry-run`, `npm outdated`), upgrade, then run the full gate and the app. cargo-deny and npm audit in CI catch advisories. (CI is green on Windows and Linux; installers build only for `v*` tags and manual runs.)
 3. **Web seeds (BEP 19)** in vendored librqbit. A proposal card exists for a separate session.
 4. **Packaging (M5):**

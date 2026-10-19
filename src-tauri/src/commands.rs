@@ -381,3 +381,145 @@ pub async fn search_plugin_download(
         .map_err(err)?;
     Ok(p.to_string_lossy().into_owned())
 }
+
+// ---------------------------------------------------------------- VPN
+
+fn vpn(state: &State<'_, AppState>) -> Res<Arc<crate::vpn::VpnManager>> {
+    state
+        .vpn
+        .get()
+        .cloned()
+        .ok_or_else(|| "the VPN is still starting".to_string())
+}
+
+/// A profile as the UI sees it: no config text, no secrets.
+#[derive(serde::Serialize)]
+pub struct VpnProfileView {
+    id: String,
+    name: String,
+    kind: riptor_vpn::profiles::Kind,
+    servers: Vec<String>,
+    removed: Vec<String>,
+    needs_credentials: bool,
+    has_credentials: bool,
+    app_only_supported: bool,
+    created: u64,
+}
+
+fn profile_view(
+    store: &riptor_vpn::profiles::ProfileStore,
+    p: riptor_vpn::profiles::Profile,
+) -> VpnProfileView {
+    VpnProfileView {
+        has_credentials: p.needs_credentials && store.has_credentials(&p.id),
+        app_only_supported: p.app_only_supported(),
+        id: p.id,
+        name: p.name,
+        kind: p.kind,
+        servers: p.servers,
+        removed: p.removed,
+        needs_credentials: p.needs_credentials,
+        created: p.created,
+    }
+}
+
+#[tauri::command]
+pub fn vpn_profiles(state: State<'_, AppState>) -> Res<Vec<VpnProfileView>> {
+    let v = vpn(&state)?;
+    let store = v.store();
+    Ok(store
+        .list()
+        .into_iter()
+        .map(|p| profile_view(store, p))
+        .collect())
+}
+
+/// Import a profile. The file is picked in a native dialog opened here, so
+/// the webview never gets to name a path.
+#[tauri::command]
+pub async fn vpn_import(app: AppHandle, state: State<'_, AppState>) -> Res<Option<VpnProfileView>> {
+    use std::io::Read;
+    use tauri_plugin_dialog::DialogExt;
+    let v = vpn(&state)?;
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("Import a VPN profile")
+            .add_filter("OpenVPN or WireGuard profile", &["ovpn", "conf"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "VPN".into());
+    let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err("not a file".into());
+    }
+    // Read one byte past the largest allowed profile so the parser can refuse it.
+    let mut bytes = Vec::new();
+    file.take(riptor_vpn::ovpn::MAX_PROFILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let store = v.store();
+    let p = store.import(&name, &bytes).map_err(err)?;
+    Ok(Some(profile_view(store, p)))
+}
+
+#[tauri::command]
+pub async fn vpn_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    let v = vpn(&state)?;
+    if v.status().profile_id.as_deref() == Some(id.as_str()) {
+        v.disconnect().await;
+    }
+    v.store().delete(&id).map_err(err)
+}
+
+#[tauri::command]
+pub fn vpn_set_credentials(
+    state: State<'_, AppState>,
+    id: String,
+    username: String,
+    password: String,
+) -> Res<()> {
+    vpn(&state)?
+        .store()
+        .set_credentials(&id, &username, &password)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn vpn_connect(state: State<'_, AppState>, id: String) -> Res<()> {
+    vpn(&state)?.connect(&id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn vpn_disconnect(state: State<'_, AppState>) -> Res<()> {
+    vpn(&state)?.disconnect().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn vpn_status(state: State<'_, AppState>) -> Res<crate::vpn::VpnStatus> {
+    Ok(vpn(&state)?.status())
+}
+
+#[tauri::command]
+pub fn vpn_get_prefs(state: State<'_, AppState>) -> Res<crate::vpn::VpnPrefs> {
+    Ok(vpn(&state)?.prefs())
+}
+
+#[tauri::command]
+pub fn vpn_set_prefs(state: State<'_, AppState>, prefs: crate::vpn::VpnPrefs) -> Res<()> {
+    vpn(&state)?.set_prefs(prefs).map_err(err)
+}
+
+#[tauri::command]
+pub fn vpn_openvpn_installed() -> bool {
+    crate::vpn::openvpn_installed()
+}

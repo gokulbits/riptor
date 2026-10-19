@@ -2,7 +2,7 @@
 
 A lightweight, security-focused BitTorrent client for **Windows and Linux**, built with Tauri 2 (Rust) and React.
 
-> **Status: early development.** The core client, search, statistics and backups work. VPN support and installers are not done yet. See [What's left to do](#whats-left-to-do).
+> **Status: early development.** The core client, search, statistics and backups work. The app-only VPN is built but not yet tested against a real VPN server, and installers are not done yet. See [What's left to do](#whats-left-to-do).
 
 ## Features
 
@@ -26,6 +26,13 @@ A lightweight, security-focused BitTorrent client for **Windows and Linux**, bui
 - Internet Archive (built in), Jackett/Prowlarr via Torznab, and qBittorrent-compatible `.py` search plugins.
 - Engines are queried in parallel and results stream in as they arrive, with filters for seeds and size.
 
+**App-only VPN** (`crates/riptor-vpn`, `crates/riptor-vpn-helper`)
+- Import OpenVPN `.ovpn` profiles (Proton's included) and connect from the VPN tab. It needs [OpenVPN Community](https://openvpn.net/community-downloads/) installed.
+- **Only Riptor uses the tunnel.** Riptor's sockets are pinned to the tunnel adapter. The tunnel never becomes the computer's default route, so your browser and other apps keep your normal connection.
+- **Kill switch:** while it's on and the VPN is down, there's no DHT, listener, trackers or peers, and torrents are held. This includes startup. A 1-second watchdog holds torrents if the tunnel adapter disappears.
+- UPnP and LSD are off while the VPN is in use. There's optional Proton port forwarding over NAT-PMP, renewed every 45 s.
+- WireGuard `.conf` profiles can be imported, but they only run app-only on Linux. Windows has no supported way to limit a WireGuard tunnel to one app, so Riptor refuses rather than tunnel the whole computer.
+
 **Everything else**
 - A statistics page with all-time and session transfer, ratio, 30-day chart, peaks, waste, disk-cache and I/O figures.
 - Encrypted, tamper-evident backup and restore of torrents, settings, categories and statistics (`.riptorbackup`), with an optional password.
@@ -40,7 +47,12 @@ Security is a core requirement. Highlights:
 - **Protected locations:** save folders can never be system folders, Startup/autostart folders, `~/.ssh`, or Riptor's own data.
 - **Downloaded files:** never opened automatically. On Windows, finished downloads get a Mark-of-the-Web.
 - **Search plugins:** they are code, so install requires confirming the source and SHA-256. They run isolated (`python -I`, cleared environment, time and output limits; bubblewrap on Linux).
-- **Secrets:** Torznab API keys live in the OS credential store.
+- **Secrets:** Torznab API keys, OpenVPN usernames and passwords, and WireGuard keys live in the OS credential store.
+- **VPN profiles are untrusted:**
+  - Script, plugin, management and logging directives are removed on import (`up`, `down`, `plugin`, `script-security`, `PostUp`, …).
+  - Imported files are picked in a native dialog opened by Rust; the UI never names a path.
+  - The elevated helper accepts one fixed request. It re-sanitizes the config itself, copies it to an admin-only folder, and runs OpenVPN from its installed location with the management interface on 127.0.0.1 behind a random password.
+  - Known limit: tracker host names are resolved with the system DNS server, outside the tunnel.
 - **Backups:**
   - Authenticated encryption (XChaCha20-Poly1305): any modification is detected.
   - Without a password, the key is built into the app. That stops editing and detects corruption, but someone who extracts the key could forge a backup. Restores therefore re-validate everything, and bring torrents back stopped by default.
@@ -59,7 +71,9 @@ crates/
   riptor-storage/   cached, hardened storage layer + benchmarks
   riptor-seeding/   share limits and queueing (pure logic)
   riptor-search/    search providers, Torznab, plugin runner + Python shim (assets/nova)
-src-tauri/          Tauri app: IPC commands, tray, file associations
+  riptor-vpn/       VPN profiles, config sanitizers, OpenVPN management parser, NAT-PMP
+  riptor-vpn-helper/ the small elevated program that starts OpenVPN
+src-tauri/          Tauri app: IPC commands, tray, file associations, VPN manager
 src/                React UI (features/torrents, search, settings, stats)
 isolation/          Tauri isolation hook (IPC allowlist)
 vendor/librqbit/    vendored librqbit 9.0.1 with Riptor patches (vendor/PATCHES.md)
@@ -102,6 +116,11 @@ npx tauri build
 
 Optional: qBittorrent search plugins need Python 3.9+ on the PATH.
 
+To use the VPN in a development build, build the helper once. It has to sit next to `riptor.exe`; installers bundle it automatically.
+```bash
+cargo build -p riptor-vpn-helper
+```
+
 **CI** runs the formatter, clippy, tests and security checks (cargo-deny, npm audit) on every push and pull request. Installers are only built for version tags and manual runs, because full-LTO release builds take a long time:
 
 ```bash
@@ -112,17 +131,14 @@ Or use **Actions › CI › Run workflow** on GitHub. The installers are attache
 
 ## What's left to do
 
-### Next: VPN (milestone 4)
-- [ ] Import OpenVPN `.ovpn` and WireGuard `.conf` profiles, including Proton's. Reject script and plugin directives (`up`, `down`, `plugin`, `script-security`, `PostUp`, …).
-- [ ] Privileged helper (`riptor-vpn-helper`): UAC on Windows, pkexec and polkit on Linux. It takes a fixed set of requests and re-validates and copies configs before use.
-- [ ] OpenVPN management-interface client (credentials from the OS keyring, never written to disk). WireGuard tunnel control and status.
-- [ ] Kill switch:
-  - bind torrent traffic to the VPN adapter;
-  - on Windows this needs a librqbit patch, because `bind_device_name` is Linux/macOS only;
-  - a watchdog that pauses everything within 1 s if the tunnel drops.
-- [ ] While the VPN is required, disable UPnP and LSD.
-- [ ] Proton NAT-PMP port forwarding (gateway `10.2.0.1`, renewed every 45 s).
-- [ ] VPN page in the UI: profiles, connect and disconnect, status, public-IP check, "only run torrents on VPN".
+### Next: finish the VPN (milestone 4)
+Done: profile import and sanitizing, the elevated helper, the OpenVPN management client, Windows adapter binding (a librqbit-dualstack-sockets patch), the kill switch and watchdog, NAT-PMP, and the VPN page.
+- [ ] **End-to-end test with a real server:** OpenVPN Community plus a Proton OpenVPN profile. Check that the peer IP seen by a tracker is the VPN's, that other apps keep their normal IP, and that killing the tunnel holds torrents within 1 s with nothing leaking on the physical adapter.
+- [ ] Resolve tracker host names through the tunnel (they currently use the system DNS server).
+- [ ] Public-IP check on the VPN page.
+- [ ] WireGuard on Linux: the helper's `wg-quick` path, plus a test on real Linux. WireGuard stays refused on Windows (it can't be limited to one app).
+- [ ] Linux: management interface over a 0600 Unix socket instead of 127.0.0.1 TCP.
+- [ ] Security review of the VPN milestone.
 
 ### Packaging and release (milestone 5)
 - [ ] Build and test the NSIS installer, AppImage and `.deb`. Check that installed builds register `.torrent` and `magnet:` correctly.

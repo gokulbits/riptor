@@ -92,7 +92,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx tauri build
+      # The VPN helper ships next to riptor.exe (Tauri externalBin wants a
+      # target-triple suffix). Kept out of tauri.conf.json so dev builds and
+      # cargo test don't need the file.
+      - name: Build VPN helper
+        shell: bash
+        run: |
+          cargo build --release -p riptor-vpn-helper
+          triple=$(rustc -vV | sed -n 's/^host: //p')
+          ext=$([ "$RUNNER_OS" = Windows ] && echo .exe || true)
+          mkdir -p src-tauri/binaries
+          cp "target/release/riptor-vpn-helper$ext" "src-tauri/binaries/riptor-vpn-helper-$triple$ext"
+      - run: npx tauri build --config src-tauri/tauri.bundle.conf.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: riptor-${{ runner.os }}

@@ -19,6 +19,9 @@ import type {
   ShareLimitAction,
   ShareLimits,
   Source,
+  VpnPrefs,
+  VpnProfile,
+  VpnStatus,
 } from "./types";
 
 export const api = {
@@ -68,6 +71,18 @@ export const api = {
   installPlugin: (sha256: string) => invoke<void>("search_install_plugin", { sha256 }),
   uninstallPlugin: (id: string) => invoke<void>("search_uninstall_plugin", { id }),
   pluginDownload: (provider: string, url: string) => invoke<string>("search_plugin_download", { provider, url }),
+  vpnProfiles: () => invoke<VpnProfile[]>("vpn_profiles"),
+  /** Opens the native file picker in Rust; null when cancelled. */
+  vpnImport: () => invoke<VpnProfile | null>("vpn_import"),
+  vpnDelete: (id: string) => invoke<void>("vpn_delete", { id }),
+  vpnSetCredentials: (id: string, username: string, password: string) =>
+    invoke<void>("vpn_set_credentials", { id, username, password }),
+  vpnConnect: (id: string) => invoke<void>("vpn_connect", { id }),
+  vpnDisconnect: () => invoke<void>("vpn_disconnect"),
+  vpnStatus: () => invoke<VpnStatus>("vpn_status"),
+  vpnPrefs: () => invoke<VpnPrefs>("vpn_get_prefs"),
+  vpnSetPrefs: (prefs: VpnPrefs) => invoke<void>("vpn_set_prefs", { prefs }),
+  openVpnInstalled: () => invoke<boolean>("vpn_openvpn_installed"),
 };
 
 export const events = {
@@ -76,6 +91,7 @@ export const events = {
   externalAdd: (cb: (items: Source[]) => void) => listen<Source[]>("riptor://external-add", (e) => cb(e.payload)),
   trayAction: (cb: (action: string) => void) => listen<string>("riptor://tray-action", (e) => cb(e.payload)),
   search: (cb: (e: SearchEvent) => void) => listen<SearchEvent>("riptor://search", (e) => cb(e.payload)),
+  vpn: (cb: (s: VpnStatus) => void) => listen<VpnStatus>("riptor://vpn", (e) => cb(e.payload)),
 };
 
 export function errorText(e: unknown): string {

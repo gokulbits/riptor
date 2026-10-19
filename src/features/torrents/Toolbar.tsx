@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowDownUp, BarChart3, ChevronDown, ChevronUp, FilePlus2, Link2, Pause, Play, Search, Settings, Trash2, Zap } from "lucide-react";
+import { ArrowDownUp, BarChart3, ShieldCheck, ChevronDown, ChevronUp, FilePlus2, Link2, Pause, Play, Search, Settings, Trash2, Zap } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { ThemePicker } from "../../components/ThemePicker";
 import { useApp } from "../../stores/app";
@@ -19,7 +19,7 @@ export function Toolbar(props: {
     useShallow((s) => ({ selection: s.selection, search: s.search, setSearch: s.setSearch, view: s.view, setView: s.setView })),
   );
   const none = selection.size === 0;
-  const tab = (id: "transfers" | "search", label: string, icon: React.ReactNode) => (
+  const tab = (id: "transfers" | "search" | "vpn", label: string, icon: React.ReactNode) => (
     <button
       role="tab"
       aria-selected={view === id}
@@ -38,6 +38,7 @@ export function Toolbar(props: {
       <div role="tablist" className="mr-2 flex gap-0.5 rounded-lg bg-raised p-0.5">
         {tab("transfers", "Transfers", <ArrowDownUp size={15} />)}
         {tab("search", "Search", <Search size={15} />)}
+        {tab("vpn", "VPN", <ShieldCheck size={15} />)}
       </div>
       {view === "transfers" && (
         <>

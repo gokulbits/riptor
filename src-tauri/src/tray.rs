@@ -37,6 +37,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         false,
         None::<&str>,
     )?;
+    let vpn = item("vpn", "VPN…")?;
     let stats = item("stats", "Statistics…")?;
     let settings = item("settings", "Settings…")?;
     let open_dir = item("open_dir", "Open download folder")?;
@@ -54,6 +55,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &pause_all,
             &alt_speed,
             &sep()?,
+            &vpn,
             &stats,
             &settings,
             &open_dir,
@@ -103,7 +105,7 @@ fn ui_action(app: &AppHandle, action: &str) {
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
         "toggle" => toggle_main(app),
-        "add_file" | "add_magnet" | "stats" | "settings" => ui_action(app, id),
+        "add_file" | "add_magnet" | "vpn" | "stats" | "settings" => ui_action(app, id),
         "alt_speed" => {
             if let Some(e) = engine(app) {
                 let on = !e.settings().alt_speed_enabled;
@@ -205,8 +207,13 @@ fn rate(bps: u64) -> String {
 /// Called every engine tick: live speeds in the tooltip, alt-speed check mark.
 pub fn update(app: &AppHandle, g: &GlobalStats) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let vpn = match g.network.as_str() {
+            "vpn" => "\nVPN: connected",
+            "blocked" => "\nVPN: kill switch engaged",
+            _ => "",
+        };
         let _ = tray.set_tooltip(Some(format!(
-            "Riptor\n↓ {}  ↑ {}",
+            "Riptor\n↓ {}  ↑ {}{vpn}",
             rate(g.dl_rate),
             rate(g.ul_rate)
         )));

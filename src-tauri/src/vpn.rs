@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use riptor_core::{Engine, NetworkMode, VpnBinding};
 use riptor_vpn::mgmt::{self, Line};
 use riptor_vpn::natpmp;
-use riptor_vpn::profiles::{Profile, ProfileStore};
+use riptor_vpn::profiles::{Kind, Profile, ProfileStore};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -174,6 +174,9 @@ impl VpnManager {
         if !profile.app_only_supported() {
             bail!("This WireGuard profile can't run app-only on Windows yet. Use Proton's OpenVPN config instead.");
         }
+        if profile.kind != Kind::OpenVpn {
+            bail!("Connecting with WireGuard isn't available yet. Use Proton's OpenVPN config instead.");
+        }
         if profile.needs_credentials && !self.store.has_credentials(profile_id) {
             bail!("Enter the profile's OpenVPN username and password first.");
         }
@@ -238,14 +241,21 @@ impl VpnManager {
             .await
             .context("connecting to OpenVPN")?;
         let (read, write) = stream.into_split();
+        // Store the writer before the reader starts: OpenVPN asks for the
+        // management password immediately, and `send` needs the writer.
+        let mut conn = self.conn.lock().await;
+        *conn = Some(Conn {
+            writer: tokio::sync::Mutex::new(write),
+            tasks: Vec::new(),
+        });
         let me = self.clone();
         let profile_id = profile.id.clone();
         let reader =
             tokio::spawn(async move { me.drive(BufReader::new(read), password, profile_id).await });
-        *self.conn.lock().await = Some(Conn {
-            writer: tokio::sync::Mutex::new(write),
-            tasks: vec![reader],
-        });
+        if let Some(c) = conn.as_mut() {
+            c.tasks.push(reader);
+        }
+        drop(conn);
         self.set_status(|s| s.message = Some("Connecting…".into()));
         Ok(())
     }
@@ -429,6 +439,16 @@ impl VpnManager {
                 }
             }
         }))
+    }
+
+    /// On quit: stop OpenVPN without restarting the engine's session.
+    pub async fn shutdown(&self) {
+        if let Some(c) = self.conn.lock().await.take() {
+            let _ = c.writer.lock().await.write_all(b"signal SIGTERM\n").await;
+            for t in c.tasks {
+                t.abort();
+            }
+        }
     }
 
     pub async fn disconnect(&self) {

@@ -34,6 +34,7 @@ import { TorrentTable } from "../features/torrents/TorrentTable";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { StatsDialog } from "../features/stats/StatsDialog";
 import { SearchView, useSearchEvents } from "../features/search/SearchView";
+import { VpnView } from "../features/vpn/VpnView";
 
 type Modal =
   | { kind: "magnet" }
@@ -166,6 +167,7 @@ export default function App() {
       else if (action === "add_magnet") setModal({ kind: "magnet" });
       else if (action === "stats") setModal({ kind: "stats" });
       else if (action === "settings") setModal({ kind: "settings" });
+      else if (action === "vpn") useApp.getState().setView("vpn");
     });
     return () => {
       un.then((f) => f());
@@ -301,6 +303,10 @@ export default function App() {
       {view === "search" ? (
         <div className="min-h-0 flex-1">
           <SearchView />
+        </div>
+      ) : view === "vpn" ? (
+        <div className="min-h-0 flex-1">
+          <VpnView />
         </div>
       ) : (
       <div className="flex min-h-0 flex-1">

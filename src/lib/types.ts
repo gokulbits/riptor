@@ -59,6 +59,8 @@ export interface CacheStats {
 }
 
 export interface GlobalStats {
+  /** "vpn" when pinned to the tunnel, "blocked" when the kill switch holds everything. */
+  network: "normal" | "vpn" | "blocked";
   dl_rate: number;
   ul_rate: number;
   dht_nodes: number | null;
@@ -156,6 +158,8 @@ export interface Settings {
   blocklist_url: string | null;
   anonymous_mode: boolean;
   mark_of_the_web: boolean;
+  /** Kill switch: torrents only run through Riptor's VPN. */
+  vpn_required: boolean;
   storage: StorageConfig;
   seeding: SeedingPrefs;
 }
@@ -299,4 +303,31 @@ export interface PluginPreview {
   declared_name: string | null;
   declared_url: string | null;
   replaces_existing: boolean;
+}
+
+export type VpnPhase = "disconnected" | "connecting" | "connected" | "reconnecting" | "error";
+
+export interface VpnStatus {
+  phase: VpnPhase;
+  profile_id: string | null;
+  profile_name: string | null;
+  local_ip: string | null;
+  forwarded_port: number | null;
+  message: string | null;
+}
+
+export interface VpnProfile {
+  id: string;
+  name: string;
+  kind: "open_vpn" | "wire_guard";
+  servers: string[];
+  removed: string[];
+  needs_credentials: boolean;
+  has_credentials: boolean;
+  app_only_supported: boolean;
+  created: number;
+}
+
+export interface VpnPrefs {
+  port_forwarding: boolean;
 }

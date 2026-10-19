@@ -1,11 +1,12 @@
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, Database, Gauge, Network } from "lucide-react";
+import { ArrowDown, ArrowUp, Database, Gauge, Network, ShieldAlert, ShieldCheck } from "lucide-react";
 import { formatBytes, formatRate } from "../../lib/format";
 import { useApp } from "../../stores/app";
 
 export function StatusBar({ onToggleAlt }: { onToggleAlt: () => void }) {
   const g = useApp((s) => s.global);
   const count = useApp((s) => s.torrents.size);
+  const setView = useApp((s) => s.setView);
   const hitRate =
     g && g.read_cache.hits + g.read_cache.misses > 0
       ? Math.round((100 * g.read_cache.hits) / (g.read_cache.hits + g.read_cache.misses))
@@ -23,6 +24,16 @@ export function StatusBar({ onToggleAlt }: { onToggleAlt: () => void }) {
         >
           <Database size={12} /> {hitRate == null ? "–" : `${hitRate}% hits`}
         </span>
+      )}
+      {g?.network === "vpn" && (
+        <button className="flex items-center gap-1 rounded px-1.5 py-0.5 text-ok hover:bg-raised" onClick={() => setView("vpn")} title="Torrent traffic goes through the VPN">
+          <ShieldCheck size={12} /> VPN
+        </button>
+      )}
+      {g?.network === "blocked" && (
+        <button className="flex items-center gap-1 rounded px-1.5 py-0.5 text-danger hover:bg-raised" onClick={() => setView("vpn")} title="Kill switch: torrents are held until the VPN connects">
+          <ShieldAlert size={12} /> Kill switch
+        </button>
       )}
       <span className="flex-1" />
       <button

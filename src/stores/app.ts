@@ -95,7 +95,7 @@ interface AppState {
   search: string;
   sort: { key: SortKey; desc: boolean };
 
-  view: "transfers" | "search";
+  view: "transfers" | "search" | "vpn";
   theme: Theme;
   accent: string;
   pendingAdds: Source[];
@@ -112,7 +112,7 @@ interface AppState {
   setTag: (t: string | null) => void;
   setSearch: (s: string) => void;
   setSort: (key: SortKey) => void;
-  setView: (v: "transfers" | "search") => void;
+  setView: (v: "transfers" | "search" | "vpn") => void;
   setTheme: (t: Theme) => void;
   setAccent: (a: string) => void;
   queueAdds: (items: Source[]) => void;

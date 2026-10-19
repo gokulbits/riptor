@@ -1,10 +1,7 @@
 mod associations;
 mod commands;
-// VPN manager: wired to IPC commands and the VPN page in the next step.
-#[allow(dead_code)]
 mod elevate;
 mod tray;
-#[allow(dead_code)]
 mod vpn;
 
 use std::sync::Arc;
@@ -24,6 +21,7 @@ pub struct AppState {
     pub startup_error: Mutex<Option<String>>,
     pub startup_items: Mutex<Vec<Source>>,
     pub search: OnceCell<Arc<riptor_search::SearchManager>>,
+    pub vpn: OnceCell<Arc<vpn::VpnManager>>,
 }
 
 /// Turn command-line arguments / deep links into add requests. Anything that
@@ -132,6 +130,7 @@ pub fn run() {
 
             let data_dir = app.path().app_data_dir()?;
             let data_dir_search = data_dir.clone();
+            let data_dir_vpn = data_dir.clone();
             tauri::async_runtime::spawn(async move {
                 match Engine::start(EngineConfig { data_dir }).await {
                     Ok(engine) => {
@@ -146,6 +145,12 @@ pub fn run() {
                                 );
                             }
                             Err(e) => error!("search failed to start: {e:#}"),
+                        }
+                        match vpn::VpnManager::new(handle.clone(), engine.clone(), &data_dir_vpn) {
+                            Ok(v) => {
+                                let _ = handle.state::<AppState>().vpn.set(v);
+                            }
+                            Err(e) => error!("VPN failed to start: {e:#}"),
                         }
                         pump_events(handle.clone(), engine.clone());
                         let _ = handle.state::<AppState>().engine.set(engine);
@@ -204,6 +209,16 @@ pub fn run() {
             commands::search_install_plugin,
             commands::search_uninstall_plugin,
             commands::search_plugin_download,
+            commands::vpn_profiles,
+            commands::vpn_import,
+            commands::vpn_delete,
+            commands::vpn_set_credentials,
+            commands::vpn_connect,
+            commands::vpn_disconnect,
+            commands::vpn_status,
+            commands::vpn_get_prefs,
+            commands::vpn_set_prefs,
+            commands::vpn_openvpn_installed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Riptor");
@@ -251,6 +266,15 @@ pub fn quit(handle: &AppHandle) {
     });
     let handle = handle.clone();
     tauri::async_runtime::spawn(async move {
+        // Stop OpenVPN first: the tunnel is ours and must not outlive Riptor.
+        if let Some(v) = handle.state::<AppState>().vpn.get().cloned() {
+            if tokio::time::timeout(std::time::Duration::from_secs(3), v.shutdown())
+                .await
+                .is_err()
+            {
+                error!("VPN disconnect timed out");
+            }
+        }
         if let Some(engine) = handle.state::<AppState>().engine.get().cloned() {
             match tokio::time::timeout(LIMIT, engine.shutdown()).await {
                 Ok(Ok(())) => info!("shutdown complete"),
