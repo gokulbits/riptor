@@ -188,9 +188,9 @@ mod imp {
 
     /// AppImages are launched through $APPIMAGE, not the extracted binary.
     fn launcher() -> anyhow::Result<std::path::PathBuf> {
-        Ok(std::env::var_os("APPIMAGE")
+        std::env::var_os("APPIMAGE")
             .map(std::path::PathBuf::from)
-            .map_or_else(exe, Ok)?)
+            .map_or_else(exe, Ok)
     }
 
     pub fn register() -> anyhow::Result<()> {
