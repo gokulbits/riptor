@@ -548,7 +548,7 @@ mod tests {
             OvpnError::NotClient
         );
         assert_eq!(
-            sanitize(format!("client\nremote x 1\n<ca>\nabc\n").as_bytes()).unwrap_err(),
+            sanitize(b"client\nremote x 1\n<ca>\nabc\n").unwrap_err(),
             OvpnError::UnclosedBlock("ca".into())
         );
         assert_eq!(

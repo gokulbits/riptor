@@ -15,4 +15,5 @@
 pub mod mgmt;
 pub mod natpmp;
 pub mod ovpn;
+pub mod profiles;
 pub mod wg;
