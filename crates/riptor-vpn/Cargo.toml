@@ -1,0 +1,18 @@
+[package]
+name = "riptor-vpn"
+description = "App-only VPN for Riptor: profile sanitizing, OpenVPN management, NAT-PMP"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
