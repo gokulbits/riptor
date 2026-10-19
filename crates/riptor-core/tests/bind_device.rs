@@ -21,7 +21,7 @@ fn loopback() -> NetworkInterface {
 }
 
 #[tokio::test]
-async fn binds_sockets_to_an_adapter_by_name_and_index() {
+async fn binds_sockets_to_an_adapter() {
     let lo = loopback();
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
@@ -29,7 +29,13 @@ async fn binds_sockets_to_an_adapter_by_name_and_index() {
     let addr: SocketAddr = listener.local_addr().unwrap();
     let accept = tokio::spawn(async move { listener.accept().await.map(|_| ()) });
 
-    for name in [lo.name.clone(), format!("#{}", lo.index)] {
+    // "#<index>" is the Windows-only form (Riptor's socket patch); Linux
+    // binds by name only.
+    let mut names = vec![lo.name.clone()];
+    if cfg!(windows) {
+        names.push(format!("#{}", lo.index));
+    }
+    for name in names {
         let bd =
             BindDevice::new_from_name(&name).unwrap_or_else(|e| panic!("binding to {name:?}: {e}"));
         assert_eq!(bd.index().get(), lo.index);
