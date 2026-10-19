@@ -4,13 +4,14 @@ description = "Cached, hardened torrent storage for librqbit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 anyhow.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true
 serde.workspace = true
-lru = "0.12"
+lru = "0.19"
 librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls"] }
 librqbit-core = { version = "9.0.1", default-features = false }
 

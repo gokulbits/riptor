@@ -5,7 +5,7 @@ use std::net::IpAddr;
 
 use anyhow::{bail, ensure};
 use quick_xml::events::Event;
-use quick_xml::Reader;
+use quick_xml::{Reader, XmlVersion};
 
 use crate::{time, SearchResult};
 
@@ -75,52 +75,80 @@ struct Item {
     enclosure: Option<String>,
 }
 
+/// Text for the five predefined XML entities and numeric character
+/// references. Anything else (DTD-declared entities) is dropped, never expanded.
+fn resolve_entity(name: &str) -> Option<char> {
+    match name {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        _ => {
+            let n = name.strip_prefix('#')?;
+            let code = match n.strip_prefix('x').or_else(|| n.strip_prefix('X')) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                None => n.parse().ok()?,
+            };
+            char::from_u32(code).filter(|c| !c.is_control() || c.is_whitespace())
+        }
+    }
+}
+
+fn attr_value(a: &quick_xml::events::attributes::Attribute) -> String {
+    a.normalized_value(XmlVersion::Implicit1_0)
+        .map(|v| v.into_owned())
+        .unwrap_or_default()
+}
+
 pub fn parse(xml: &str, engine: &str) -> anyhow::Result<Vec<SearchResult>> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
+    // No per-event trimming: text is split around entity references, so trimming
+    // fragments would eat the spaces in "a &amp; b". Fields are trimmed once in set_field.
+    reader.config_mut().trim_text(false);
     let mut out = Vec::new();
     let mut item: Option<Item> = None;
-    let mut field: Vec<u8> = Vec::new();
+    // The element whose text we are collecting, and the text so far (text
+    // arrives in several events around entity references).
+    let mut field = String::new();
+    let mut text = String::new();
 
     loop {
         match reader.read_event()? {
             Event::Eof => break,
             Event::Start(e) | Event::Empty(e) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
-                    b"error" if item.is_none() => {
+                let name = e.local_name().as_ref().to_string();
+                match name.as_str() {
+                    "error" if item.is_none() => {
                         let desc = e
                             .attributes()
                             .flatten()
-                            .find(|a| a.key.local_name().as_ref() == b"description")
-                            .and_then(|a| a.unescape_value().ok().map(|v| v.into_owned()))
+                            .find(|a| a.key.local_name().as_ref() == "description")
+                            .map(|a| attr_value(&a))
                             .unwrap_or_else(|| "indexer error".into());
                         bail!(
                             "indexer error: {}",
                             desc.chars().take(200).collect::<String>()
                         );
                     }
-                    b"item" => item = Some(Item::default()),
-                    b"enclosure" | b"attr" => {
+                    "item" => item = Some(Item::default()),
+                    "enclosure" | "attr" => {
                         if let Some(it) = item.as_mut() {
                             let mut n = None;
                             let mut v = None;
                             let mut url = None;
                             let mut len = None;
                             for a in e.attributes().flatten() {
-                                let val = a
-                                    .unescape_value()
-                                    .map(|x| x.into_owned())
-                                    .unwrap_or_default();
+                                let val = attr_value(&a);
                                 match a.key.local_name().as_ref() {
-                                    b"name" => n = Some(val),
-                                    b"value" => v = Some(val),
-                                    b"url" => url = Some(val),
-                                    b"length" => len = val.parse().ok(),
+                                    "name" => n = Some(val),
+                                    "value" => v = Some(val),
+                                    "url" => url = Some(val),
+                                    "length" => len = val.parse().ok(),
                                     _ => {}
                                 }
                             }
-                            if name.as_slice() == b"enclosure" {
+                            if name == "enclosure" {
                                 it.enclosure = url;
                                 it.size = it.size.or(len);
                             } else if let (Some(n), Some(v)) = (n, v) {
@@ -134,26 +162,36 @@ pub fn parse(xml: &str, engine: &str) -> anyhow::Result<Vec<SearchResult>> {
                             }
                         }
                     }
-                    _ => field = name,
+                    _ => {
+                        field = name;
+                        text.clear();
+                    }
                 }
             }
             Event::Text(t) => {
-                if let Some(it) = item.as_mut() {
-                    let text = t.unescape().map(|x| x.into_owned()).unwrap_or_default();
-                    set_field(it, &field, text);
+                if item.is_some() && text.len() < 64 * 1024 {
+                    text.push_str(&t.xml_content(XmlVersion::Implicit1_0));
+                }
+            }
+            Event::GeneralRef(r) => {
+                if item.is_some() {
+                    if let Some(c) = resolve_entity(&r.into_inner()) {
+                        text.push(c);
+                    }
                 }
             }
             Event::CData(c) => {
-                if let Some(it) = item.as_mut() {
-                    set_field(
-                        it,
-                        &field,
-                        String::from_utf8_lossy(&c.into_inner()).into_owned(),
-                    );
+                if item.is_some() && text.len() < 64 * 1024 {
+                    text.push_str(&c.into_inner());
                 }
             }
             Event::End(e) => {
-                if e.local_name().as_ref() == b"item" {
+                if let Some(it) = item.as_mut() {
+                    if e.local_name().as_ref() == field {
+                        set_field(it, &field, std::mem::take(&mut text));
+                    }
+                }
+                if e.local_name().as_ref() == "item" {
                     if let Some(it) = item.take() {
                         // Jackett leechers = peers - seeders.
                         let leechers = match (it.peers, it.seeders) {
@@ -184,14 +222,15 @@ pub fn parse(xml: &str, engine: &str) -> anyhow::Result<Vec<SearchResult>> {
     Ok(out)
 }
 
-fn set_field(it: &mut Item, field: &[u8], text: String) {
+fn set_field(it: &mut Item, field: &str, text: String) {
+    let text = text.trim().to_string();
     match field {
-        b"title" => it.title = text,
-        b"link" => it.link = Some(text),
-        b"comments" => it.comments = Some(text),
-        b"guid" => it.guid = Some(text),
-        b"size" => it.size = text.trim().parse().ok().or(it.size),
-        b"pubDate" => it.pub_date = time::parse_rfc2822(&text),
+        "title" => it.title = text,
+        "link" => it.link = Some(text),
+        "comments" => it.comments = Some(text),
+        "guid" => it.guid = Some(text),
+        "size" => it.size = text.trim().parse().ok().or(it.size),
+        "pubDate" => it.pub_date = time::parse_rfc2822(&text),
         _ => {}
     }
 }
@@ -265,6 +304,20 @@ mod tests {
         assert_eq!(r[1].link, "https://indexer.example/dl/2.torrent");
         // The external entity is never expanded into file contents.
         assert!(r.iter().all(|x| !x.name.contains("root:")));
+    }
+
+    #[test]
+    fn entities_and_whitespace() {
+        let xml = "<rss><channel><item>
+  <title>
+    A &amp; B &lt;C&gt; &#x26; &#38; &custom;
+  </title>
+  <link> https://x.example/1.torrent </link>
+</item></channel></rss>";
+        let r = parse(xml, "j").unwrap();
+        // Predefined and numeric entities resolve; undeclared ones are dropped, never expanded.
+        assert_eq!(r[0].name, "A & B <C> & &");
+        assert_eq!(r[0].link, "https://x.example/1.torrent");
     }
 
     #[test]

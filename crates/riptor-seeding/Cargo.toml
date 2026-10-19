@@ -4,6 +4,7 @@ description = "qBittorrent-style share limits and queueing, as pure logic"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 serde.workspace = true
