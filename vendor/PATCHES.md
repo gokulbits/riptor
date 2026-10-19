@@ -9,6 +9,7 @@ when upgrading, and try to upstream each one.
 | File | Change | Why | Upstream |
 | --- | --- | --- | --- |
 | `src/session_persistence/json.rs` | Lift the "only FilesystemStorageFactory can be persisted" check. | Riptor installs `CachedStorageFactory` as the session's *default* factory, so restored torrents use it correctly. Without persistence there is no fast-resume, and every restart would re-hash every torrent. | Not yet: propose "allow when the factory is the session default". |
+| `src/session.rs` | New `SessionOptions::bind_local_ip`, applied as reqwest's `local_address` for HTTP(S) trackers. | reqwest can't bind to an interface on Windows. Pinning the source address to the VPN adapter's IP keeps tracker requests inside the tunnel, and makes them fail rather than leak if it drops. | Not yet. |
 
 ### Security findings to report upstream
 
@@ -17,10 +18,10 @@ when upgrading, and try to upstream each one.
 
 ## librqbit-dualstack-sockets 0.7.0
 
-Copied unmodified from crates.io, in preparation for the VPN kill switch. It
-is **not wired into the build yet**: there is no `[patch.crates-io]` entry, so
-the crates.io version is still used.
+Copied from crates.io and wired in via `[patch.crates-io]`, with the patch below. It is the
+basis of Riptor's app-only VPN: only Riptor's sockets are pinned to the tunnel adapter, so
+the rest of the system keeps its normal connection.
 
 | File | Change | Why | Upstream |
 | --- | --- | --- | --- |
-| `src/bind_device.rs` | *(planned)* Windows `BindDevice`: resolve the adapter by name/index, and pin sockets with `IP_UNICAST_IF` / `IPV6_UNICAST_IF`. | `bind_device_name` is Linux/macOS only. On Windows it errors, so torrent traffic can't be tied to the VPN adapter. | Not yet. |
+| `src/bind_device.rs`, `Cargo.toml` | Windows `BindDevice`: resolve the adapter by friendly name or `#index` (via `network-interface`), and pin sockets with `IP_UNICAST_IF` / `IPV6_UNICAST_IF` (`windows-sys`). | `bind_device_name` was Linux/macOS only. On Windows it errored, so torrent traffic couldn't be tied to the VPN adapter. Pinned sockets fail instead of leaking if the adapter disappears. Tested in `crates/riptor-core/tests/bind_device.rs`. | Not yet; a good upstream candidate. |

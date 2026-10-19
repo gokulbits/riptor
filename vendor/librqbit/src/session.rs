@@ -424,6 +424,12 @@ pub struct SessionOptions {
     /// On OSX will use IP(V6)_BOUND_IF, on Linux will use SO_BINDTODEVICE.
     pub bind_device_name: Option<String>,
 
+    /// RIPTOR PATCH: local address for HTTP(S) tracker requests. reqwest can't
+    /// bind to an interface on Windows, so callers that bind to a VPN adapter
+    /// also pass its address here; if the adapter disappears, requests fail
+    /// instead of leaving through another interface.
+    pub bind_local_ip: Option<std::net::IpAddr>,
+
     /// Disable tracker communication
     pub disable_trackers: bool,
 
@@ -486,6 +492,7 @@ impl Default for SessionOptions {
         Self {
             dht: Some(DhtSessionConfig::default()),
             bind_device_name: None,
+            bind_local_ip: None,
             disable_trackers: false,
             fastresume: false,
             persistence: None,
@@ -714,6 +721,10 @@ impl Session {
                     #[cfg(not(windows))]
                     if let Some(bd) = opts.bind_device_name.as_ref() {
                         b = b.interface(bd);
+                    }
+                    // RIPTOR PATCH: see SessionOptions::bind_local_ip.
+                    if let Some(ip) = opts.bind_local_ip {
+                        b = b.local_address(ip);
                     }
                     b
                 };

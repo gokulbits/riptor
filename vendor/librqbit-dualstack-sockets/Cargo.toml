@@ -85,3 +85,8 @@ version = "0.1.41"
 [dev-dependencies.tracing-subscriber]
 version = "0.3.19"
 features = ["env-filter"]
+
+# RIPTOR PATCH: setsockopt(IP_UNICAST_IF) for Windows BindDevice.
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = ["Win32_Networking_WinSock"]

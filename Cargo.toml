@@ -38,3 +38,4 @@ opt-level = 2
 # Vendored librqbit with Riptor's patches; see vendor/PATCHES.md.
 [patch.crates-io]
 librqbit = { path = "vendor/librqbit" }
+librqbit-dualstack-sockets = { path = "vendor/librqbit-dualstack-sockets" }
