@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Action, Intent, Prefs, TorrentView, MAX_RATIO};
 
-/// A per-torrent override. qBittorrent stores these as -2 / -1 / value.
+/// A per-torrent override, stored as -2 (use global) / -1 (no limit) / value.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", content = "value", rename_all = "snake_case")]
 pub enum Limit<T> {
@@ -50,7 +50,7 @@ pub enum LimitKind {
 }
 
 /// Which limit (if any) a torrent has reached. Mirrors the order and
-/// conditions of qBittorrent's `SessionImpl::processShareLimits()`: only
+/// usual share-limit conditions: only
 /// finished, non-forced torrents are checked, ratio first, then seeding
 /// time, then inactive seeding time. Stopped torrents are skipped so a
 /// Remove action never deletes something the user paused.

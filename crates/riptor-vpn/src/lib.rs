@@ -9,7 +9,7 @@
 //! * [`wg`]: the same for WireGuard `.conf` files (app-only on Linux only;
 //!   the Windows WireGuard client can't skip installing routes).
 //! * [`mgmt`]: OpenVPN management-interface protocol (credentials, state).
-//! * [`natpmp`]: NAT-PMP port mapping (Proton's port forwarding).
+//! * [`natpmp`]: NAT-PMP port mapping (VPN port forwarding).
 #![forbid(unsafe_code)]
 
 pub mod mgmt;

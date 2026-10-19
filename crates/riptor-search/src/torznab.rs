@@ -1,4 +1,4 @@
-//! Torznab (Jackett, Prowlarr). Parsed with quick-xml, which never resolves
+//! Torznab indexers. Parsed with quick-xml, which never resolves
 //! DTDs or external entities, so a hostile indexer cannot read local files.
 
 use std::net::IpAddr;
@@ -193,7 +193,7 @@ pub fn parse(xml: &str, engine: &str) -> anyhow::Result<Vec<SearchResult>> {
                 }
                 if e.local_name().as_ref() == "item" {
                     if let Some(it) = item.take() {
-                        // Jackett leechers = peers - seeders.
+                        // Torznab: leechers = peers - seeders.
                         let leechers = match (it.peers, it.seeders) {
                             (Some(p), Some(s)) => Some(p.saturating_sub(s)),
                             _ => None,
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn parses_items() {
-        let r = parse(SAMPLE, "jackett").unwrap();
+        let r = parse(SAMPLE, "indexer").unwrap();
         assert_eq!(r[0].name, "Debian 12 & friends");
         assert!(r[0].link.starts_with("magnet:?"));
         assert_eq!(
@@ -329,12 +329,12 @@ mod tests {
     #[test]
     fn endpoint_policy() {
         assert!(validate_endpoint(
-            "https://jackett.example.com/api/v2.0/indexers/all/results/torznab/"
+            "https://indexer.example.com/api/v2.0/indexers/all/results/torznab/"
         )
         .is_ok());
         assert!(validate_endpoint("http://127.0.0.1:9117/api").is_ok());
         assert!(validate_endpoint("http://192.168.1.5:9696/1/api").is_ok());
-        assert!(validate_endpoint("http://jackett.example.com/api").is_err());
+        assert!(validate_endpoint("http://indexer.example.com/api").is_err());
         assert!(validate_endpoint("https://user:pass@x.example/api").is_err());
         assert!(validate_endpoint("file:///etc/passwd").is_err());
     }

@@ -1,4 +1,4 @@
-//! qBittorrent-compatible search plugins.
+//! nova3-compatible search plugins.
 //!
 //! Plugins are third-party Python code, so they are treated with suspicion:
 //! * installed only after the user confirms the source and SHA-256;
@@ -9,7 +9,7 @@
 //!   /tmp, and the home folder hidden.
 //!
 //! The runner (`nova2.py`) and helper modules are Riptor's own, API-compatible
-//! with qBittorrent's; they print one JSON object per result.
+//! with the nova3 API; they print one JSON object per result.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -112,34 +112,42 @@ pub async fn detect(extra: &[PathBuf]) -> Option<Python> {
                 .map(|p| (p.clone(), &[][..])),
         );
     for (exe, pre) in candidates {
-        let mut cmd = Command::new(&exe);
-        cmd.args(pre).args([
-            "-I",
-            "-c",
-            "import sys;print(sys.version_info[0],sys.version_info[1]);print(sys.executable)",
-        ]);
-        quiet(&mut cmd);
-        let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(10), cmd.output()).await else {
-            continue;
-        };
-        if !out.status.success() {
-            continue; // e.g. the Microsoft Store "python" stub
+        if let Some(py) = probe(&exe, pre).await {
+            return Some(py);
         }
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut lines = text.lines();
-        let mut ver = lines
-            .next()
-            .unwrap_or("")
-            .split_whitespace()
-            .map(|n| n.parse::<u32>().unwrap_or(0));
-        let (major, minor) = (ver.next().unwrap_or(0), ver.next().unwrap_or(0));
-        let real = PathBuf::from(lines.next().unwrap_or("").trim());
-        if major == 3 && minor >= 9 && real.is_absolute() && real.is_file() {
-            return Some(Python {
-                exe: real,
-                version: format!("{major}.{minor}"),
-            });
-        }
+    }
+    None
+}
+
+/// Check one interpreter: Python 3.9+ that runs with `-I`.
+pub async fn probe(exe: &Path, pre: &[&str]) -> Option<Python> {
+    let mut cmd = Command::new(exe);
+    cmd.args(pre).args([
+        "-I",
+        "-c",
+        "import sys;print(sys.version_info[0],sys.version_info[1]);print(sys.executable)",
+    ]);
+    quiet(&mut cmd);
+    let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(10), cmd.output()).await else {
+        return None;
+    };
+    if !out.status.success() {
+        return None; // e.g. the Microsoft Store "python" stub
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines();
+    let mut ver = lines
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .map(|n| n.parse::<u32>().unwrap_or(0));
+    let (major, minor) = (ver.next().unwrap_or(0), ver.next().unwrap_or(0));
+    let real = PathBuf::from(lines.next().unwrap_or("").trim());
+    if major == 3 && minor >= 9 && real.is_absolute() && real.is_file() {
+        return Some(Python {
+            exe: real,
+            version: format!("{major}.{minor}"),
+        });
     }
     None
 }
@@ -413,7 +421,7 @@ pub fn inspect(
     let text = std::str::from_utf8(bytes).context("plugin is not UTF-8 text")?;
     ensure!(
         text.contains(&format!("class {stem}(")) || text.contains(&format!("class {stem}:")),
-        "this does not look like a qBittorrent search plugin (no class named {stem})"
+        "this does not look like a nova3 search plugin (no class named {stem})"
     );
     Ok(PluginPreview {
         id: stem.to_string(),

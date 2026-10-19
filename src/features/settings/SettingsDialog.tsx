@@ -340,7 +340,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   checked={s.anonymous_mode}
                   onChange={(v) => set({ anonymous_mode: v })}
                   label="Anonymous mode"
-                  hint="Turns off DHT, local discovery and UPnP, and hides the client name. Like qBittorrent's anonymous mode."
+                  hint="Turns off DHT, local discovery and UPnP, and hides the client name."
                 />
               </Group>
               <Group title="IP blocklist">

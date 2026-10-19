@@ -293,11 +293,11 @@ export function SearchView() {
               <p className="text-sm">No results match the filters.</p>
             ) : (
               <>
-                <p className="text-sm">Search the Internet Archive, your Jackett/Prowlarr indexers and installed plugins.</p>
+                <p className="text-sm">Search the Internet Archive, your Torznab indexers and installed plugins.</p>
                 <p className="text-xs">Double-click a result to download it.</p>
                 {st.providers.length > 0 && !st.providers.some((p) => p.kind !== "builtin") && (
                   <button className="btn-ghost mt-2 border border-border text-xs" onClick={() => setEngines(true)}>
-                    Add qBittorrent search plugins…
+                    Add search plugins…
                   </button>
                 )}
               </>

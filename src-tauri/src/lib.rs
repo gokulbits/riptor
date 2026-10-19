@@ -139,6 +139,10 @@ pub fn run() {
                             riptor_search::SearchManager::new(&data_dir_search, http)
                         }) {
                             Ok(s) => {
+                                // Installed builds ship Python next to Riptor.
+                                if let Ok(res) = handle.path().resource_dir() {
+                                    s.set_shipped_python(res.join("python"));
+                                }
                                 let _ = handle.state::<AppState>().search.set(s.clone());
                                 tauri::async_runtime::spawn(
                                     async move { s.refresh_plugins().await },

@@ -41,7 +41,7 @@ pub struct Shared {
 pub struct Metrics {
     pub pieces_flushed: AtomicU64,
     /// Unfinished pieces written early because the write buffer was full
-    /// (qBittorrent calls this "write cache overload").
+    /// (also known as "write cache overload").
     pub spills: AtomicU64,
     pub bytes_written: AtomicU64,
     pub bytes_read: AtomicU64,

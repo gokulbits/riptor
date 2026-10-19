@@ -2,8 +2,8 @@
 //! streamed back as they arrive.
 //!
 //! * [`archive`]: Internet Archive (built in, needs no setup).
-//! * [`torznab`]: Jackett / Prowlarr indexers.
-//! * [`nova`]: qBittorrent-compatible Python plugins, offered from a
+//! * [`torznab`]: Torznab indexers.
+//! * [`nova`]: nova3-compatible Python plugins, offered from a
 //!   [`catalog`] fetched from GitHub, run by a system Python or one
 //!   [`pyembed`] sets up.
 //!

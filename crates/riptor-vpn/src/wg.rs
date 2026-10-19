@@ -217,15 +217,15 @@ mod tests {
 
     const KEY: &str = "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=";
 
-    fn proton() -> String {
+    fn provider() -> String {
         format!(
             "[Interface]\n# Key for riptor\nPrivateKey = {KEY}\nAddress = 10.2.0.2/32\nDNS = 10.2.0.1\n\n[Peer]\n# NL#1\nPublicKey = {KEY}\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 185.159.157.1:51820\nPersistentKeepalive = 25\n"
         )
     }
 
     #[test]
-    fn proton_profile_is_app_only() {
-        let s = sanitize(proton().as_bytes()).unwrap();
+    fn provider_profile_is_app_only() {
+        let s = sanitize(provider().as_bytes()).unwrap();
         assert!(s.config.contains("Table = off"));
         assert!(!s.config.contains("DNS"), "system DNS must not be set");
         assert_eq!(s.dns, vec!["10.2.0.1".parse::<IpAddr>().unwrap()]);
@@ -242,30 +242,34 @@ mod tests {
             "PreDown = rm -rf ~",
             "SaveConfig = true",
         ] {
-            let p = proton().replace("DNS = 10.2.0.1", hook);
+            let p = provider().replace("DNS = 10.2.0.1", hook);
             assert!(
                 matches!(sanitize(p.as_bytes()), Err(WgError::Hook { .. })),
                 "{hook}"
             );
         }
         assert!(matches!(
-            sanitize(proton().replace(KEY, "short").as_bytes()),
+            sanitize(provider().replace(KEY, "short").as_bytes()),
             Err(WgError::BadValue { .. })
         ));
         assert!(matches!(
             sanitize(
-                proton()
+                provider()
                     .replace("185.159.157.1:51820", "evil.example")
                     .as_bytes()
             ),
             Err(WgError::BadValue { .. })
         ));
         assert!(matches!(
-            sanitize(proton().replace("10.2.0.2/32", "10.2.0.2/99").as_bytes()),
+            sanitize(provider().replace("10.2.0.2/32", "10.2.0.2/99").as_bytes()),
             Err(WgError::BadValue { .. })
         ));
         assert!(matches!(
-            sanitize(proton().replace("PersistentKeepalive", "FwMark").as_bytes()),
+            sanitize(
+                provider()
+                    .replace("PersistentKeepalive", "FwMark")
+                    .as_bytes()
+            ),
             Err(WgError::Unsupported { .. })
         ));
         assert!(matches!(

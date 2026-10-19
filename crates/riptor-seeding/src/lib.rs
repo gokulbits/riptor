@@ -1,10 +1,10 @@
-//! Seeding policy for Riptor, modelled on qBittorrent.
+//! Seeding policy for Riptor: share ratios, share limits and queueing.
 //!
 //! Everything here is pure: callers pass a snapshot of every torrent plus the
 //! preferences, and get back a list of [`Action`]s to apply to the engine.
 //! The only state kept between ticks is the slow-torrent timer in [`Scheduler`].
 //!
-//! * [`ratio::real_ratio`] — qBittorrent's `TorrentImpl::realRatio()`.
+//! * [`ratio::real_ratio`] — the conventional "real ratio".
 //! * [`limits`] — max ratio / seeding time / inactive seeding time with
 //!   per-torrent overrides (`UseGlobal`, `Unlimited`, custom value).
 //! * [`queue`] — active download/upload/torrent limits with "don't count slow
@@ -48,7 +48,7 @@ pub struct TorrentView {
     /// Errored or still initialising/checking: left alone by the queue.
     pub busy_or_error: bool,
     /// Queue position for downloading torrents (0 = first). Finished torrents
-    /// have none, as in qBittorrent.
+    /// have none.
     pub queue_pos: Option<u32>,
 
     pub total_done: u64,

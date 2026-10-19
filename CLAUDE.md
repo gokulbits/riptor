@@ -19,6 +19,8 @@ Riptor is a Tauri 2 + Rust + React BitTorrent client for Windows and Linux. It w
 - Every on-disk torrent path goes through `riptor_storage::sanitize`. Never use librqbit's `relative_filename`: on Windows, `PathBuf::push` with a `C:` component escapes the folder.
 - `unsafe` is forbidden except in `riptor-storage/src/os.rs`, `src-tauri/src/associations.rs`, `src-tauri/src/elevate.rs` and the vendored dualstack sockets `bind_device` patch (documented OS calls).
 - **VPN is app-only.** Only Riptor's sockets may use the tunnel (pinned to its adapter). Never let the tunnel take over the system's routing (profiles get `route-nopull` and only a metric-9999 default route on the tunnel itself), and never connect a profile that can't be limited to Riptor (WireGuard on Windows).
+- **No third-party brand names** in the app, code, comments or docs: no VPN providers (e.g. Proton) and no other torrent clients or indexer apps. Say "your VPN provider", "Torznab indexer", "nova3 plugin". Protocol and tool names Riptor depends on (OpenVPN, WireGuard, Torznab, Python) are fine, as are URLs that must point somewhere specific (the plugin catalog). [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) names OpenVPN for licensing.
+- **Installers:** Windows is a per-machine NSIS setup (the elevated helper must live in Program Files) that silently installs the pinned OpenVPN MSI (`scripts/fetch-openvpn.mjs`, `src-tauri/windows/hooks.nsh`) and ships the pinned embeddable Python in `<install>/python` (`scripts/fetch-python.mjs` reads the pin from `pyembed.rs`; search prefers that Python). Both are wired in by `src-tauri/tauri.bundle.windows.conf.json`. Linux ships `.deb`/`.rpm` that depend on `openvpn`, pkexec, `python3` and `bubblewrap` and install the polkit policy in `src-tauri/linux/`. Users must never need to install anything for a Riptor feature. No AppImage. When upgrading OpenVPN, verify the new MSI's Authenticode signer ("OpenVPN Inc.") before pinning its hash, and update THIRD-PARTY-NOTICES.md.
 - Build `riptor-vpn-helper` once (`cargo build -p riptor-vpn-helper`) so it sits next to `riptor.exe` in dev. Release bundles add it through `src-tauri/tauri.bundle.conf.json` (externalBin).
 
 ## Commands
@@ -73,7 +75,7 @@ cargo bench -p riptor-storage
 ## What's left to do (priority order)
 
 1. **Finish the VPN (M4).** Import, helper, management client, Windows binding, kill switch, watchdog, NAT-PMP and the VPN page are done.
-   - End-to-end test with OpenVPN Community and a Proton profile (needs the user's account). Check the tracker-seen IP, other apps' IP, and leaks when the tunnel dies.
+   - End-to-end test with an OpenVPN profile from a VPN provider (needs the user's account). Check the tracker-seen IP, other apps' IP, and leaks when the tunnel dies.
    - Resolve tracker host names through the tunnel (they currently use the system DNS).
    - Public-IP check on the VPN page.
    - WireGuard on Linux (helper `wg-quick` path; `connect` refuses WireGuard until then). It stays refused on Windows.
@@ -82,11 +84,11 @@ cargo bench -p riptor-storage
 2. **Dependencies:** there is no Dependabot; upgrades are done by hand. Check periodically (`cargo update --dry-run`, `npm outdated`), upgrade, then run the full gate and the app. cargo-deny and npm audit in CI catch advisories. (CI is green on Windows and Linux; installers build only for `v*` tags and manual runs.)
 3. **Web seeds (BEP 19)** in vendored librqbit. A proposal card exists for a separate session.
 4. **Packaging (M5):**
-   - NSIS, AppImage and .deb, verified file/magnet registration in installed builds.
-   - Polkit policy.
-   - Release SHA-256 sums, optional signing.
+   - Done: per-machine NSIS setup bundling the OpenVPN MSI and embeddable Python, .deb/.rpm with `openvpn`/`python3`/`bubblewrap` + polkit policy, SHA-256 sums in CI.
+   - Test the installers on clean machines (OpenVPN install, helper prompt, file/magnet registration).
+   - Optional signing.
    - About page and log viewer.
-   - An installer under 15 MB.
+   - Keep the setup under 20 MB (18.9 MB with OpenVPN and Python bundled).
 5. **Engine:**
    - Runtime per-torrent speed limits (librqbit patch).
    - Force recheck.

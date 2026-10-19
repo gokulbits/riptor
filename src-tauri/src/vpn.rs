@@ -47,7 +47,7 @@ pub struct VpnStatus {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VpnPrefs {
-    /// Ask Proton's gateway to forward a port (needs a P2P server, paid plan).
+    /// Ask the VPN gateway to forward a port over NAT-PMP (if the provider offers it).
     pub port_forwarding: bool,
 }
 
@@ -94,12 +94,26 @@ fn helper_path() -> anyhow::Result<PathBuf> {
 
 /// Is OpenVPN installed where the helper looks for it?
 pub fn openvpn_installed() -> bool {
-    if cfg!(windows) {
-        let pf = std::env::var_os("ProgramFiles")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| r"C:\Program Files".into());
-        pf.join("OpenVPN").join("bin").join("openvpn.exe").is_file()
-    } else {
+    #[cfg(windows)]
+    {
+        // Same places the helper looks (it never uses PATH).
+        let hklm = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE);
+        let from_registry = hklm.open_subkey(r"SOFTWARE\OpenVPN").ok().and_then(|k| {
+            k.get_value::<String, _>("exe_path").ok().or_else(|| {
+                k.get_value::<String, _>("")
+                    .ok()
+                    .map(|d| format!(r"{d}\bin\openvpn.exe"))
+            })
+        });
+        from_registry
+            .into_iter()
+            .chain(Some(
+                r"C:\Program Files\OpenVPN\bin\openvpn.exe".to_string(),
+            ))
+            .any(|p| std::path::Path::new(&p).is_file())
+    }
+    #[cfg(not(windows))]
+    {
         ["/usr/sbin/openvpn", "/usr/bin/openvpn"]
             .iter()
             .any(|p| std::path::Path::new(p).is_file())
@@ -172,10 +186,10 @@ impl VpnManager {
         self.disconnect().await;
         let profile: Profile = self.store.get(profile_id)?;
         if !profile.app_only_supported() {
-            bail!("This WireGuard profile can't run app-only on Windows yet. Use Proton's OpenVPN config instead.");
+            bail!("This WireGuard profile can't run app-only on Windows yet. Use the provider's OpenVPN config instead.");
         }
         if profile.kind != Kind::OpenVpn {
-            bail!("Connecting with WireGuard isn't available yet. Use Proton's OpenVPN config instead.");
+            bail!("Connecting with WireGuard isn't available yet. Use the provider's OpenVPN config instead.");
         }
         if profile.needs_credentials && !self.store.has_credentials(profile_id) {
             bail!("Enter the profile's OpenVPN username and password first.");
@@ -310,7 +324,7 @@ impl VpnManager {
                 Line::AuthFailed => {
                     self.set_status(|s| {
                         s.phase = Phase::Error;
-                        s.message = Some("The VPN rejected the username or password (Proton: use the OpenVPN credentials from your account page, not your login)".into());
+                        s.message = Some("The VPN rejected the username or password (many providers use separate OpenVPN credentials, not your account login)".into());
                     });
                     self.send("signal SIGTERM\n").await;
                 }
@@ -379,7 +393,7 @@ impl VpnManager {
         let mut forwarded = None;
         if self.prefs().port_forwarding {
             match natpmp::map(
-                (natpmp::PROTON_GATEWAY, natpmp::PORT).into(),
+                (natpmp::DEFAULT_GATEWAY, natpmp::PORT).into(),
                 ip,
                 natpmp::Proto::Tcp,
                 0,
@@ -425,7 +439,7 @@ impl VpnManager {
                 if let (Some(port), true) = (forwarded, tick.is_multiple_of(45)) {
                     for proto in [natpmp::Proto::Tcp, natpmp::Proto::Udp] {
                         if let Err(e) = natpmp::map(
-                            (natpmp::PROTON_GATEWAY, natpmp::PORT).into(),
+                            (natpmp::DEFAULT_GATEWAY, natpmp::PORT).into(),
                             ip,
                             proto,
                             port,

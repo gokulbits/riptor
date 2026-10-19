@@ -17,7 +17,7 @@ pub enum Transport {
 #[serde(default)]
 pub struct Settings {
     pub download_dir: PathBuf,
-    /// Put multi-file torrents in their own folder (qBittorrent "Create subfolder").
+    /// Put multi-file torrents in their own folder ("Create subfolder").
     pub create_subfolder: bool,
     /// 0 = random.
     pub listen_port: u16,
@@ -38,7 +38,7 @@ pub struct Settings {
     /// `socks5://[user:pass@]host:port` for peer connections.
     pub proxy_url: Option<String>,
     pub blocklist_url: Option<String>,
-    /// qBittorrent-style anonymous mode: no DHT/LSD/UPnP, generic client name.
+    /// Anonymous mode: no DHT/LSD/UPnP, generic client name.
     pub anonymous_mode: bool,
     /// Windows: tag finished files with a Mark-of-the-Web.
     pub mark_of_the_web: bool,

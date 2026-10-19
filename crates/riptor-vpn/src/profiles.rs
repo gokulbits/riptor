@@ -275,8 +275,8 @@ mod tests {
     fn import_list_materialize_delete() {
         let d = tempfile::tempdir().unwrap();
         let s = ProfileStore::new(d.path()).unwrap();
-        let p = s.import("  Proton NL\u{7}  ", OVPN.as_bytes()).unwrap();
-        assert_eq!(p.name, "Proton NL");
+        let p = s.import("  Provider NL\u{7}  ", OVPN.as_bytes()).unwrap();
+        assert_eq!(p.name, "Provider NL");
         assert_eq!(p.kind, Kind::OpenVpn);
         assert!(p.needs_credentials && p.app_only_supported());
         assert_eq!(p.removed, vec!["up"]);

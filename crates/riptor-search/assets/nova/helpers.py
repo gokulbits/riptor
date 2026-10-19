@@ -1,8 +1,8 @@
-"""Riptor's implementation of the qBittorrent search-plugin helper API.
+"""Riptor's implementation of the nova3 search-plugin helper API.
 
 retrieve_url / download_file / htmlentitydecode with the same signatures
 plugins expect, plus safety limits: http(s) only, timeouts and size caps.
-Written for Riptor; API-compatible with qBittorrent's helpers.
+Written for Riptor; API-compatible with the nova3 helpers.
 """
 
 import gzip
@@ -21,7 +21,7 @@ headers = {"User-Agent": USER_AGENT}
 
 
 def getBrowserUserAgent():
-    """qBittorrent 5.x helper some plugins call."""
+    """Newer helper some plugins call."""
     return USER_AGENT
 
 
@@ -68,7 +68,7 @@ def htmlentitydecode(s):
 
 
 def retrieve_url(url, custom_headers={}, request_data=None, ssl_context=None, unescape_html_entities=True):
-    """Fetch a URL and return its body as text ('' on failure, like qBittorrent)."""
+    """Fetch a URL and return its body as text ('' on failure)."""
     try:
         _check_url(url)
         req = urllib.request.Request(url, data=request_data, headers={**headers, **dict(custom_headers)})
@@ -98,7 +98,7 @@ def download_file(url, referer=None, ssl_context=None):
 
 
 def enable_socks_proxy(enable):
-    """Riptor does not route plugin traffic through qBittorrent's proxy settings."""
+    """Riptor does not route plugin traffic through a proxy."""
     return None
 
 

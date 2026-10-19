@@ -20,7 +20,6 @@ import type { VpnPrefs, VpnProfile, VpnStatus } from "../../lib/types";
 import { useApp } from "../../stores/app";
 
 const OPENVPN_URL = "https://openvpn.net/community-downloads/";
-const PROTON_OVPN_URL = "https://account.protonvpn.com/downloads";
 
 const PHASE_LABEL: Record<VpnStatus["phase"], string> = {
   disconnected: "Not connected",
@@ -104,7 +103,7 @@ function CredentialsForm({ profile, onSaved }: { profile: VpnProfile; onSaved: (
         </Field>
       </div>
       <p className="text-xs text-muted">
-        Proton: use the OpenVPN / IKEv2 credentials from your account page, not your Proton login. Stored in the system credential store,
+        Many providers use separate OpenVPN credentials, not your account login. Stored in the system credential store,
         never in Riptor's files or backups.
       </p>
       <button className="btn-primary" disabled={busy || !user || !pass} onClick={save}>
@@ -180,7 +179,7 @@ function ProfileRow({
       {!profile.app_only_supported && (
         <p className="mt-2 flex items-start gap-1.5 text-xs text-warn">
           <AlertTriangle size={13} className="mt-px shrink-0" />
-          WireGuard can't be limited to Riptor on Windows yet, and Riptor won't tunnel your whole computer. Import Proton's OpenVPN config for
+          WireGuard can't be limited to Riptor on Windows yet, and Riptor won't tunnel your whole computer. Import the provider's OpenVPN config for
           this server instead.
         </p>
       )}
@@ -288,7 +287,8 @@ export function VpnView() {
           <div className="card flex items-start gap-3 border-warn/50 p-3 text-sm">
             <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warn" />
             <div className="flex-1">
-              OpenVPN isn't installed. Riptor uses the official OpenVPN Community client to create the tunnel.
+              OpenVPN isn't installed. Riptor's setup normally installs it on Windows, and the Linux packages depend on it; run the setup
+              again, install your distribution's <span className="font-mono">openvpn</span> package, or get it directly.
               <button className="ml-1 inline-flex items-center gap-1 text-accent hover:underline" onClick={() => api.openWebUrl(OPENVPN_URL)}>
                 Download OpenVPN <ExternalLink size={12} />
               </button>
@@ -311,8 +311,8 @@ export function VpnView() {
             <Toggle
               checked={prefs.port_forwarding}
               onChange={setForwarding}
-              label="Ask the VPN to forward a port (Proton NAT-PMP)"
-              hint="Lets other peers connect to you. Needs a paid Proton plan and a P2P server. Applies on the next connect."
+              label="Ask the VPN to forward a port (NAT-PMP)"
+              hint="Lets other peers connect to you. Only works if your VPN provider and server support NAT-PMP port forwarding. Applies on the next connect."
             />
           </div>
         </section>
@@ -326,11 +326,8 @@ export function VpnView() {
           </div>
           {profiles.length === 0 ? (
             <div className="card p-4 text-sm text-muted">
-              No profiles yet. For Proton, download an OpenVPN config (choose a P2P server) from{" "}
-              <button className="inline-flex items-center gap-1 text-accent hover:underline" onClick={() => api.openWebUrl(PROTON_OVPN_URL)}>
-                your account <ExternalLink size={12} />
-              </button>{" "}
-              and import it here.
+              No profiles yet. Download an OpenVPN config (.ovpn) from your VPN provider's account page (pick a server that allows P2P),
+              then import it here.
             </div>
           ) : (
             <ul className="space-y-2">

@@ -1,7 +1,7 @@
-/// Ratios are capped here; qBittorrent shows this as "∞".
+/// Ratios are capped here; the UI may show this as "∞".
 pub const MAX_RATIO: f64 = 9999.0;
 
-/// Share ratio, computed exactly like qBittorrent's `TorrentImpl::realRatio()`.
+/// Share ratio (the conventional "real ratio").
 ///
 /// If the recorded download is under 1% of the data we have (for example a
 /// torrent that was added already complete, or whose stats were lost), the

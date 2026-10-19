@@ -1,6 +1,6 @@
-//! A list of qBittorrent search plugins the user can install, fetched from
+//! A list of nova3 search plugins the user can install, fetched from
 //! GitHub when the Search engines dialog asks for it:
-//! * official: `nova3/engines` in github.com/qbittorrent/search-plugins;
+//! * official: `nova3/engines` in the upstream search-plugins repository;
 //! * community: the "Unofficial search plugins" wiki page of that repository.
 //!
 //! No plugin code ships with Riptor. The catalog only offers download links;
@@ -28,8 +28,8 @@ pub const COMMUNITY_PAGE: &str =
 const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ENTRIES: usize = 400;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
-/// The official Jackett plugin needs a config file beside it. Riptor talks
-/// to Jackett directly (Torznab), so it is left out.
+/// One official plugin is a Torznab bridge that needs a config file beside
+/// it. Riptor speaks Torznab itself, so it is left out.
 const SKIP_OFFICIAL: [&str; 1] = ["jackett"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -166,7 +166,7 @@ async fn official(http: &reqwest::Client) -> anyhow::Result<Vec<CatalogEntry>> {
                 origin: Origin::Official,
                 private: false,
                 version: Some(version).filter(|v| !v.is_empty()),
-                author: Some("qBittorrent project".into()),
+                author: Some("Official plugin".into()),
                 health: Health::Working,
                 note: None,
                 problem: None,

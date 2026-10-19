@@ -1,5 +1,5 @@
-//! Mark-of-the-Web for finished downloads (Windows), as browsers and
-//! qBittorrent 4.6+ do. SmartScreen and Office then treat the files as coming
+//! Mark-of-the-Web for finished downloads (Windows), as browsers
+//! do. SmartScreen and Office then treat the files as coming
 //! from the internet. A no-op elsewhere.
 
 use std::path::Path;

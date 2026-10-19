@@ -1,4 +1,4 @@
-"""Riptor's search-plugin runner (qBittorrent plugin compatible).
+"""Riptor's search-plugin runner (nova3 plugin compatible).
 
   nova2.py capabilities              one JSON line per installed engine
   nova2.py search ENGINE CAT WORDS   one JSON line per result

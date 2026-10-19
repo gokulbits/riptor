@@ -1,8 +1,8 @@
-"""Riptor's implementation of the qBittorrent search-plugin printer API.
+"""Riptor's implementation of the nova3 search-plugin printer API.
 
 Plugins call prettyPrinter(dict) once per result. Riptor reads one JSON object
 per line from stdout, so names containing '|' or newlines cannot corrupt the
-output. Written for Riptor; API-compatible with qBittorrent's novaprinter.
+output. Written for Riptor; API-compatible with the nova3 novaprinter.
 """
 
 import json
@@ -10,7 +10,7 @@ import re
 import sys
 from typing import Any, Dict
 
-# Newer plugins import this type (qBittorrent 5.1+); any dict works.
+# Newer plugins import this type; any dict works.
 SearchResults = Dict[str, Any]
 
 _UNITS = {"B": 0, "KB": 1, "KIB": 1, "MB": 2, "MIB": 2, "GB": 3, "GIB": 3, "TB": 4, "TIB": 4, "PB": 5, "PIB": 5}

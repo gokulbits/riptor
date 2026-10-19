@@ -1,5 +1,5 @@
 //! Riptor's torrent engine. Wraps a librqbit session with hardened storage,
-//! persistent statistics and qBittorrent-style seeding/queueing.
+//! persistent statistics and seeding/queueing rules.
 #![forbid(unsafe_code)]
 
 pub mod backup;

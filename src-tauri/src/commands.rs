@@ -372,7 +372,7 @@ pub async fn search_uninstall_plugin(state: State<'_, AppState>, id: String) -> 
     search(&state)?.uninstall_plugin(&id).await.map_err(err)
 }
 
-/// qBittorrent plugins available from GitHub (official and community lists).
+/// Search plugins available from GitHub (official and community lists).
 #[tauri::command]
 pub async fn search_catalog(
     state: State<'_, AppState>,

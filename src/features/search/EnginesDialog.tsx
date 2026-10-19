@@ -62,9 +62,9 @@ function TorznabForm({ onAdded }: { onAdded: () => void }) {
     <div className="space-y-2">
       <div className="grid grid-cols-[1fr_2fr] gap-2">
         <Field label="Name">
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Jackett" maxLength={64} />
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="My indexer" maxLength={64} />
         </Field>
-        <Field label="Torznab feed URL" hint="From Jackett/Prowlarr: “Copy Torznab Feed”. https, or http on this computer/your network.">
+        <Field label="Torznab feed URL" hint="The indexer's Torznab feed URL. https, or http on this computer/your network.">
           <input
             className="input font-mono text-xs"
             value={url}
@@ -131,10 +131,10 @@ function PythonPanel({ python, onChange }: { python: PythonStatus | null; onChan
     <div className="space-y-2 rounded-md border border-warn/40 bg-warn/10 p-3 text-[13px]">
       <p className="flex items-start gap-2 font-medium text-warn">
         <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-        qBittorrent search plugins need Python 3.9 or newer, and none was found on this computer.
+        Search plugins need Python 3.9 or newer, and none was found on this computer.
       </p>
       <p className="text-xs text-muted">
-        The Internet Archive and Jackett/Prowlarr indexers work without it. Plugins can be installed now and start working once Python is
+        The Internet Archive and Torznab indexers work without it. Plugins can be installed now and start working once Python is
         available.
       </p>
       {python.can_bundle && (
@@ -303,7 +303,7 @@ function CatalogRow({ e, selected, onToggle }: { e: CatalogEntry; selected: bool
   );
 }
 
-/** Plugins from qBittorrent's official repository and community list. */
+/** Plugins from the official search-plugins repository and community list. */
 function PluginCatalogView({ onInstalled }: { onInstalled: () => void }) {
   const toast = useApp((s) => s.toast);
   const [catalog, setCatalog] = useState<PluginCatalog | null>(null);
@@ -404,9 +404,9 @@ function PluginCatalogView({ onInstalled }: { onInstalled: () => void }) {
         <p className="text-xs text-muted">
           Community plugins are written by volunteers and listed on{" "}
           <button className="underline" onClick={() => openUrl(COMMUNITY_PAGE)}>
-            qBittorrent's wiki
+            the plugins wiki
           </button>
-          . Neither qBittorrent nor Riptor checks them; read the source before installing.
+          . Riptor doesn't check them; read the source before installing.
         </p>
       )}
       <div className="card max-h-80 overflow-auto">
@@ -610,7 +610,7 @@ export function EnginesDialog({ onClose }: { onClose: () => void }) {
 
         <section className="space-y-2">
           <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
-            <Plus size={12} /> qBittorrent search plugins
+            <Plus size={12} /> Search plugins
           </h3>
           <PythonPanel python={python} onChange={pythonChanged} />
           <PluginCatalogView onInstalled={reload} />
@@ -625,7 +625,7 @@ export function EnginesDialog({ onClose }: { onClose: () => void }) {
 
         <section>
           <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted">
-            <Plus size={12} /> Jackett / Prowlarr indexer
+            <Plus size={12} /> Torznab indexer
           </h3>
           <TorznabForm onAdded={reload} />
         </section>

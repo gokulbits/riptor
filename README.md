@@ -2,14 +2,14 @@
 
 A lightweight, security-focused BitTorrent client for **Windows and Linux**, built with Tauri 2 (Rust) and React.
 
-> **Status: early development.** The core client, search, statistics and backups work. The app-only VPN is built but not yet tested against a real VPN server, and installers are not done yet. See [What's left to do](#whats-left-to-do).
+> **Status: early development.** The core client, search, statistics and backups work. The app-only VPN is built but not yet tested against a real VPN server, and the installers have not been tested on clean machines yet. See [What's left to do](#whats-left-to-do).
 
 ## Features
 
 **Downloading and seeding**
 - `.torrent` files, magnet links and http(s) torrent URLs. Drag and drop, paste a magnet link (Ctrl+V), or use Add.
 - An add dialog with file selection, save folder, category, tags and a warning about executables. Links opened from a browser or file manager always show this dialog; nothing is added silently.
-- Seeding and ratio rules modelled on qBittorrent:
+- Seeding and ratio rules:
   - global and per-torrent max ratio, max seeding time and max inactive time;
   - when a limit is reached: Stop, Remove, or Remove with files;
   - queueing: limits on active downloads, uploads and total torrents, "don't count slow torrents", force start, queue order.
@@ -23,17 +23,17 @@ A lightweight, security-focused BitTorrent client for **Windows and Linux**, bui
 - **Path hardening:** every on-disk path is rebuilt from the raw torrent metadata and proven to stay under the save folder.
 
 **Search** (`crates/riptor-search`)
-- Internet Archive (built in), Jackett/Prowlarr via Torznab, and qBittorrent-compatible `.py` search plugins.
-- A plugin catalog, fetched from GitHub on demand: qBittorrent's official plugins and (opt-in) the community list. Pick several, review them together, install.
+- Internet Archive (built in), Torznab indexers, and nova3-compatible `.py` search plugins.
+- A plugin catalog, fetched from GitHub on demand: the official search-plugins repository and (opt-in) the community list. Pick several, review them together, install.
 - No Python? On Windows, Riptor can set up python.org's embeddable Python itself (downloaded on demand, SHA-256 pinned, kept in Riptor's data folder).
 - Engines are queried in parallel and results stream in as they arrive, with filters for seeds and size.
 - Results without seed/peer counts (the Internet Archive sends none) get them from their trackers: HTTP and UDP scrapes, bounded and optional.
 
 **App-only VPN** (`crates/riptor-vpn`, `crates/riptor-vpn-helper`)
-- Import OpenVPN `.ovpn` profiles (Proton's included) and connect from the VPN tab. It needs [OpenVPN Community](https://openvpn.net/community-downloads/) installed.
+- Import OpenVPN `.ovpn` profiles from your VPN provider and connect from the VPN tab. The Windows setup installs OpenVPN Community for you; the Linux packages depend on the distribution's `openvpn` package.
 - **Only Riptor uses the tunnel.** Riptor's sockets are pinned to the tunnel adapter. The tunnel never becomes the computer's default route, so your browser and other apps keep your normal connection.
 - **Kill switch:** while it's on and the VPN is down, there's no DHT, listener, trackers or peers, and torrents are held. This includes startup. A 1-second watchdog holds torrents if the tunnel adapter disappears.
-- UPnP and LSD are off while the VPN is in use. There's optional Proton port forwarding over NAT-PMP, renewed every 45 s.
+- UPnP and LSD are off while the VPN is in use. There's optional port forwarding over NAT-PMP (if the provider supports it), renewed every 45 s.
 - WireGuard `.conf` profiles can be imported, but they only run app-only on Linux. Windows has no supported way to limit a WireGuard tunnel to one app, so Riptor refuses rather than tunnel the whole computer.
 
 **Everything else**
@@ -113,12 +113,27 @@ Lint:
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Build installers (NSIS on Windows, AppImage and .deb on Linux):
+Build the installers: a setup `.exe` on Windows, and `.deb` and `.rpm` packages on Linux. This needs the VPN helper next to the bundle and, on Windows, the verified OpenVPN installer and embeddable Python:
 ```bash
-npx tauri build
+node scripts/fetch-openvpn.mjs
 ```
+```bash
+node scripts/fetch-python.mjs
+```
+```bash
+cargo build --release -p riptor-vpn-helper
+```
+Copy `target/release/riptor-vpn-helper(.exe)` to `src-tauri/binaries/riptor-vpn-helper-<target-triple>(.exe)` (CI does this), then on Windows:
+```bash
+npx tauri build --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.bundle.windows.conf.json
+```
+On Linux, leave out the second `--config`.
 
-Optional: qBittorrent search plugins need Python 3.9+ on the PATH. On Windows, the Search engines dialog can set up its own copy instead.
+What the installers do:
+- **Windows:** a normal setup wizard that installs Riptor for all users in Program Files. Per-machine is required, because the elevated VPN helper must not live in a folder the user can write. It also installs OpenVPN Community silently (only the client and its network drivers) unless OpenVPN is already there, and carries its own Python for search plugins inside Riptor's folder. Nothing else needs installing. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- **Linux:** `.deb` (Debian, Ubuntu) and `.rpm` (Fedora, openSUSE) packages. They pull in `openvpn`, pkexec, `python3` and `bubblewrap` through the package manager and install a polkit policy for the VPN helper. There is no AppImage: it can't declare dependencies, and an elevated helper must not run from a user-mounted image.
+
+Installed builds need no extra software for search plugins: the Windows setup includes Python and the Linux packages depend on `python3`. Development builds use a Python 3.9+ on the PATH, or the copy the Search engines dialog can set up on Windows.
 
 If a build fails with "NASM command not found" (aws-lc-sys), set `AWS_LC_SYS_PREBUILT_NASM=1` or install NASM.
 
@@ -133,13 +148,13 @@ cargo build -p riptor-vpn-helper
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-Or use **Actions › CI › Run workflow** on GitHub. The installers are attached to the run as artifacts.
+Or use **Actions › CI › Run workflow** on GitHub. The installers and their SHA-256 sums are attached to the run as artifacts.
 
 ## What's left to do
 
 ### Next: finish the VPN (milestone 4)
 Done: profile import and sanitizing, the elevated helper, the OpenVPN management client, Windows adapter binding (a librqbit-dualstack-sockets patch), the kill switch and watchdog, NAT-PMP, and the VPN page.
-- [ ] **End-to-end test with a real server:** OpenVPN Community plus a Proton OpenVPN profile. Check that the peer IP seen by a tracker is the VPN's, that other apps keep their normal IP, and that killing the tunnel holds torrents within 1 s with nothing leaking on the physical adapter.
+- [ ] **End-to-end test with a real server:** an OpenVPN profile from a VPN provider. Check that the peer IP seen by a tracker is the VPN's, that other apps keep their normal IP, and that killing the tunnel holds torrents within 1 s with nothing leaking on the physical adapter.
 - [ ] Resolve tracker host names through the tunnel (they currently use the system DNS server).
 - [ ] Public-IP check on the VPN page.
 - [ ] WireGuard on Linux: the helper's `wg-quick` path, plus a test on real Linux. WireGuard stays refused on Windows (it can't be limited to one app).
@@ -147,11 +162,11 @@ Done: profile import and sanitizing, the elevated helper, the OpenVPN management
 - [ ] Security review of the VPN milestone.
 
 ### Packaging and release (milestone 5)
-- [ ] Build and test the NSIS installer, AppImage and `.deb`. Check that installed builds register `.torrent` and `magnet:` correctly.
-- [ ] Linux polkit policy and MIME/desktop integration in the packages.
-- [ ] Release artifacts with SHA-256 sums. Optional Authenticode signing.
+Done: the Windows setup (per-machine, with OpenVPN bundled), `.deb`/`.rpm` packages with the `openvpn` dependency and a polkit policy, and SHA-256 sums in CI.
+- [ ] Test the installers on clean Windows and Linux machines: OpenVPN setup, the VPN helper prompt, and `.torrent`/`magnet:` registration.
+- [ ] Optional Authenticode signing.
 - [ ] About page and log viewer.
-- [ ] Check the installer size against the target of under 15 MB.
+- [ ] Keep the Windows setup small. Bundling OpenVPN (about 6 MB) and Python (about 10 MB compressed) puts the setup at 18.9 MB (from a 15 MB target); keep it under 20 MB.
 
 ### Engine and storage
 - [ ] **Web seeds (BEP 19)** in vendored librqbit. Most Internet Archive torrents depend on them.

@@ -87,6 +87,8 @@ pub struct SearchManager {
     /// Set while Riptor's VPN or kill switch is in charge: tracker lookups
     /// would go out on the normal connection, so they are skipped.
     lookups_held: std::sync::atomic::AtomicBool,
+    /// The Python that ships inside Riptor's install folder (Windows setup).
+    shipped_python: RwLock<Option<PathBuf>>,
 }
 
 fn slug(name: &str) -> String {
@@ -127,6 +129,7 @@ impl SearchManager {
             active: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             lookups_held: std::sync::atomic::AtomicBool::new(false),
+            shipped_python: RwLock::new(None),
         }))
     }
 
@@ -158,10 +161,34 @@ impl SearchManager {
         Ok(())
     }
 
+    /// Use the Python in Riptor's install folder (`<dir>/python.exe`). It is
+    /// preferred over any other: it's the pinned, verified copy the setup
+    /// installed where only administrators can change it.
+    pub fn set_shipped_python(&self, dir: PathBuf) {
+        *self.shipped_python.write() = Some(dir);
+    }
+
+    fn shipped_exe(&self) -> Option<PathBuf> {
+        let dir = self.shipped_python.read().clone()?;
+        let exe = dir.join(if cfg!(windows) {
+            "python.exe"
+        } else {
+            "bin/python3"
+        });
+        (exe.is_absolute() && exe.is_file()).then_some(exe)
+    }
+
     async fn python(&self) -> Option<Python> {
         let mut g = self.python.lock().await;
         if g.is_none() {
-            *g = Some(nova::detect(&[pyembed::exe(&self.dir)]).await);
+            let shipped = match self.shipped_exe() {
+                Some(exe) => nova::probe(&exe, &[]).await,
+                None => None,
+            };
+            *g = Some(match shipped {
+                Some(py) => Some(py),
+                None => nova::detect(&[pyembed::exe(&self.dir)]).await,
+            });
         }
         g.clone().flatten()
     }
@@ -174,7 +201,14 @@ impl SearchManager {
         let bundled_dir = pyembed::dir(&self.dir);
         PythonStatus {
             available: py.is_some(),
-            bundled: py.as_ref().is_some_and(|p| p.exe.starts_with(&bundled_dir)),
+            bundled: py.as_ref().is_some_and(|p| {
+                p.exe.starts_with(&bundled_dir)
+                    || self
+                        .shipped_python
+                        .read()
+                        .as_ref()
+                        .is_some_and(|d| p.exe.starts_with(d))
+            }),
             version: py.map(|p| p.version),
             sandboxed: cfg!(target_os = "linux") && nova::find_in_path("bwrap").is_some(),
             bundled_installed: pyembed::installed(&self.dir),
@@ -622,9 +656,9 @@ mod tests {
         assert!(!m2.providers()[0].enabled);
         // Plain-http remote indexers are refused before any key is stored.
         assert!(m
-            .add_torznab("x", "http://jackett.example.com/api", "k")
+            .add_torznab("x", "http://indexer.example.com/api", "k")
             .is_err());
-        assert_eq!(slug("My Jackett!"), "my-jackett");
+        assert_eq!(slug("My Indexer!"), "my-indexer");
     }
 
     #[tokio::test]

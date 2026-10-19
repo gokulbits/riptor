@@ -1,6 +1,6 @@
 [package]
 name = "riptor-search"
-description = "Search providers for Riptor: Internet Archive, Torznab, qBittorrent plugins"
+description = "Search providers for Riptor: Internet Archive, Torznab, nova3 plugins"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,5 +1,5 @@
-//! NAT-PMP (RFC 6886) port mapping, used for Proton VPN's port forwarding:
-//! the VPN gateway (`10.2.0.1`) maps a public port to Riptor so peers can
+//! NAT-PMP (RFC 6886) port mapping, used for VPN port forwarding:
+//! the VPN gateway (commonly `10.2.0.1`) maps a public port to Riptor so peers can
 //! connect in. Mappings expire after `lifetime` seconds and must be renewed.
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use anyhow::{bail, ensure, Context};
 
-/// Proton's NAT-PMP gateway inside the tunnel.
-pub const PROTON_GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 2, 0, 1);
+/// The usual NAT-PMP gateway address inside the tunnel.
+pub const DEFAULT_GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 2, 0, 1);
 pub const PORT: u16 = 5351;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,7 +55,7 @@ pub fn decode_response(b: &[u8], proto: Proto, internal_port: u16) -> anyhow::Re
     if code != 0 {
         bail!(match code {
             1 => "the gateway does not support NAT-PMP version 0".to_string(),
-            2 => "port forwarding is not allowed on this server (Proton: use a P2P server on a paid plan)".to_string(),
+            2 => "port forwarding is not allowed on this server (pick a server that supports port forwarding)".to_string(),
             3 => "the gateway has no network connection".to_string(),
             4 => "the gateway is out of ports".to_string(),
             c => format!("NAT-PMP error {c}"),
@@ -133,7 +133,7 @@ mod tests {
         assert!(decode_response(&response(Proto::Tcp, 0, 6881, 0, 60), Proto::Tcp, 6881).is_err());
         let e =
             decode_response(&response(Proto::Tcp, 2, 6881, 0, 0), Proto::Tcp, 6881).unwrap_err();
-        assert!(e.to_string().contains("P2P server"));
+        assert!(e.to_string().contains("not allowed on this server"));
         assert!(decode_response(&[0u8; 15], Proto::Tcp, 6881).is_err());
     }
 

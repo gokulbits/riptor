@@ -1,5 +1,5 @@
 //! The engine: one librqbit session plus everything Riptor adds on top —
-//! hardened storage, persistent all-time counters, and qBittorrent-style
+//! hardened storage, persistent all-time counters, and share-limit
 //! seeding/queueing applied once a second.
 
 use std::collections::{BTreeMap, HashMap, HashSet};

@@ -1,5 +1,4 @@
-//! Torrent queueing, following libtorrent's auto-manage rules as used by
-//! qBittorrent:
+//! Torrent queueing, following libtorrent's auto-manage rules:
 //!
 //! * Downloading torrents are ordered by queue position; seeds by least
 //!   seeding time first, so seeding is shared fairly.
@@ -30,7 +29,7 @@ pub struct QueuePrefs {
 }
 
 impl Default for QueuePrefs {
-    // Same defaults as qBittorrent.
+    // Conventional defaults.
     fn default() -> Self {
         Self {
             enabled: true,

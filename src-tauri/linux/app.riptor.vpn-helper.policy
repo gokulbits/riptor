@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Lets Riptor start its VPN helper through pkexec. The helper accepts one
+  fixed request (start OpenVPN with a re-checked config) and nothing else.
+  An administrator password is asked every time; it is never remembered.
+-->
+<policyconfig>
+  <vendor>Riptor</vendor>
+  <action id="app.riptor.vpn-helper">
+    <description>Connect Riptor's VPN</description>
+    <message>Riptor needs administrator rights to create its VPN tunnel</message>
+    <icon_name>riptor</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/riptor-vpn-helper</annotate>
+  </action>
+</policyconfig>

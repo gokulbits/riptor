@@ -6,7 +6,7 @@
 //!   checks read from memory, and verified pieces are flushed as large writes.
 //! * **Seeding read cache**: extent-sized LRU shared by all torrents.
 //! * **Handle pool**: lazily opened files with an LRU cap.
-//! * **Preallocation**: sparse (default) or full, as in qBittorrent.
+//! * **Preallocation**: sparse (default) or full.
 #![deny(unsafe_code)]
 
 pub mod cache;

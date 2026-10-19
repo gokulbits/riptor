@@ -5,8 +5,8 @@
 //! VPN is an administrator. Imported profiles are therefore treated as
 //! hostile. Only an allowlist of options survives:
 //!
-//! * options that run code or touch files are **removed** and reported (Proton's
-//!   own Linux profiles contain `script-security 2` + `up`/`down` scripts, so
+//! * options that run code or touch files are **removed** and reported (some
+//!   providers' own Linux profiles contain `script-security 2` + `up`/`down` scripts, so
 //!   rejecting them outright would refuse real profiles);
 //! * options that reference files (`ca file.crt`, `auth-user-pass creds.txt`)
 //!   are **refused**: certificates must be inline, and credentials come from
@@ -439,16 +439,16 @@ mod tests {
 
     const CA: &str = "<ca>\n-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----\n</ca>\n";
 
-    /// Shaped like a Proton OpenVPN profile for Linux.
-    fn proton() -> String {
+    /// Shaped like a typical provider OpenVPN profile for Linux.
+    fn provider() -> String {
         format!(
-            "# ProtonVPN config\nclient\ndev tun\nproto udp\nremote 185.159.157.1 51820\nremote 185.159.157.1 1194\nremote-random\nresolv-retry infinite\nnobind\ncipher AES-256-GCM\nsetenv CLIENT_CERT 0\ntun-mtu 1500\nmssfix 0\npersist-key\npersist-tun\nreneg-sec 0\nremote-cert-tls server\nauth-user-pass\npull\nfast-io\nscript-security 2\nup /etc/openvpn/update-resolv-conf\ndown /etc/openvpn/update-resolv-conf\n{CA}key-direction 1\n<tls-crypt>\n-----BEGIN OpenVPN Static key V1-----\nabcdef\n-----END OpenVPN Static key V1-----\n</tls-crypt>\n"
+            "# Provider config\nclient\ndev tun\nproto udp\nremote 185.159.157.1 51820\nremote 185.159.157.1 1194\nremote-random\nresolv-retry infinite\nnobind\ncipher AES-256-GCM\nsetenv CLIENT_CERT 0\ntun-mtu 1500\nmssfix 0\npersist-key\npersist-tun\nreneg-sec 0\nremote-cert-tls server\nauth-user-pass\npull\nfast-io\nscript-security 2\nup /etc/openvpn/update-resolv-conf\ndown /etc/openvpn/update-resolv-conf\n{CA}key-direction 1\n<tls-crypt>\n-----BEGIN OpenVPN Static key V1-----\nabcdef\n-----END OpenVPN Static key V1-----\n</tls-crypt>\n"
         )
     }
 
     #[test]
-    fn proton_profile_becomes_app_only_and_script_free() {
-        let s = sanitize(proton().as_bytes()).unwrap();
+    fn provider_profile_becomes_app_only_and_script_free() {
+        let s = sanitize(provider().as_bytes()).unwrap();
         assert!(s.needs_credentials);
         assert_eq!(s.remotes.len(), 2);
         assert_eq!(s.removed, vec!["down", "script-security", "setenv", "up"]);

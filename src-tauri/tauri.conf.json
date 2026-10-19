@@ -22,20 +22,31 @@
       }
     ],
     "security": {
-      "pattern": { "use": "isolation", "options": { "dir": "../isolation" } },
+      "pattern": {
+        "use": "isolation",
+        "options": {
+          "dir": "../isolation"
+        }
+      },
       "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
     }
   },
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["magnet"]
+        "schemes": [
+          "magnet"
+        ]
       }
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "deb", "appimage"],
+    "targets": [
+      "nsis",
+      "deb",
+      "rpm"
+    ],
     "category": "Utility",
     "shortDescription": "Lightweight BitTorrent client",
     "icon": [
@@ -47,12 +58,38 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["torrent"],
+        "ext": [
+          "torrent"
+        ],
         "name": "BitTorrent file",
         "description": "BitTorrent metainfo file",
         "mimeType": "application/x-bittorrent",
         "role": "Viewer"
       }
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "openvpn",
+          "pkexec | policykit-1",
+          "python3",
+          "bubblewrap"
+        ],
+        "files": {
+          "/usr/share/polkit-1/actions/app.riptor.vpn-helper.policy": "linux/app.riptor.vpn-helper.policy"
+        }
+      },
+      "rpm": {
+        "depends": [
+          "openvpn",
+          "polkit",
+          "python3",
+          "bubblewrap"
+        ],
+        "files": {
+          "/usr/share/polkit-1/actions/app.riptor.vpn-helper.policy": "linux/app.riptor.vpn-helper.policy"
+        }
+      }
+    }
   }
 }
