@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context};
 use futures::StreamExt;
@@ -13,10 +13,11 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::catalog::{self, Catalog};
 use crate::nova::{self, PluginCaps, PluginPreview, Python};
 use crate::{
-    archive, clean, dedupe_key, secrets, torznab, ProviderInfo, ProviderKind, SearchEvent,
-    SearchResult,
+    archive, clean, dedupe_key, pyembed, scrape, secrets, torznab, ProviderInfo, ProviderKind,
+    SearchEvent, SearchResult,
 };
 
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(45);
@@ -29,11 +30,28 @@ pub struct TorznabEndpoint {
 }
 
 /// Persisted in `search/config.json`. API keys are *not* stored here.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SearchConfig {
     pub torznab: Vec<TorznabEndpoint>,
     pub disabled: BTreeSet<String>,
+    /// Ask trackers for seed/peer counts that providers didn't send.
+    pub scrape: bool,
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            torznab: Vec::new(),
+            disabled: BTreeSet::new(),
+            scrape: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SearchOptions {
+    pub scrape: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -41,17 +59,34 @@ pub struct PythonStatus {
     pub available: bool,
     pub version: Option<String>,
     pub sandboxed: bool,
+    /// The interpreter in use is the one Riptor set up.
+    pub bundled: bool,
+    /// Riptor's own Python is present (whether or not it is the one in use).
+    pub bundled_installed: bool,
+    /// Riptor can set up Python by itself on this platform.
+    pub can_bundle: bool,
+    pub bundle_version: &'static str,
+    pub bundle_size: Option<u64>,
 }
+
+/// How long a fetched plugin catalog is reused.
+const CATALOG_TTL: Duration = Duration::from_secs(60 * 60);
 
 pub struct SearchManager {
     dir: PathBuf,
     http: reqwest::Client,
+    scrape_net: scrape::Net,
     config: RwLock<SearchConfig>,
     python: tokio::sync::Mutex<Option<Option<Python>>>,
+    python_setup: tokio::sync::Mutex<()>,
     plugins: RwLock<Vec<PluginCaps>>,
     pending: Mutex<HashMap<String, (PluginPreview, Vec<u8>)>>,
+    catalog: tokio::sync::Mutex<Option<(Instant, Catalog)>>,
     active: Mutex<HashMap<u64, CancellationToken>>,
     next_id: AtomicU64,
+    /// Set while Riptor's VPN or kill switch is in charge: tracker lookups
+    /// would go out on the normal connection, so they are skipped.
+    lookups_held: std::sync::atomic::AtomicBool,
 }
 
 fn slug(name: &str) -> String {
@@ -82,13 +117,33 @@ impl SearchManager {
         Ok(Arc::new(Self {
             dir,
             http,
+            scrape_net: scrape::Net::new(false)?,
             config: RwLock::new(config),
             python: tokio::sync::Mutex::new(None),
+            python_setup: tokio::sync::Mutex::new(()),
             plugins: RwLock::new(Vec::new()),
             pending: Mutex::new(HashMap::new()),
+            catalog: tokio::sync::Mutex::new(None),
             active: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
+            lookups_held: std::sync::atomic::AtomicBool::new(false),
         }))
+    }
+
+    pub fn options(&self) -> SearchOptions {
+        SearchOptions {
+            scrape: self.config.read().scrape,
+        }
+    }
+
+    /// Hold tracker lookups (seed/peer counts) regardless of the user setting.
+    pub fn hold_lookups(&self, held: bool) {
+        self.lookups_held.store(held, Ordering::SeqCst);
+    }
+
+    pub fn set_scrape(&self, on: bool) -> anyhow::Result<()> {
+        self.config.write().scrape = on;
+        self.save_config()
     }
 
     fn engines_dir(&self) -> PathBuf {
@@ -106,7 +161,7 @@ impl SearchManager {
     async fn python(&self) -> Option<Python> {
         let mut g = self.python.lock().await;
         if g.is_none() {
-            *g = Some(nova::detect().await);
+            *g = Some(nova::detect(&[pyembed::exe(&self.dir)]).await);
         }
         g.clone().flatten()
     }
@@ -116,11 +171,58 @@ impl SearchManager {
             *self.python.lock().await = None;
         }
         let py = self.python().await;
+        let bundled_dir = pyembed::dir(&self.dir);
         PythonStatus {
             available: py.is_some(),
+            bundled: py.as_ref().is_some_and(|p| p.exe.starts_with(&bundled_dir)),
             version: py.map(|p| p.version),
             sandboxed: cfg!(target_os = "linux") && nova::find_in_path("bwrap").is_some(),
+            bundled_installed: pyembed::installed(&self.dir),
+            can_bundle: pyembed::RELEASE.is_some(),
+            bundle_version: pyembed::VERSION,
+            bundle_size: pyembed::RELEASE.as_ref().map(|r| r.size),
         }
+    }
+
+    /// Download and set up Riptor's own Python (Windows), then use it if no
+    /// system Python is found.
+    pub async fn install_python(&self) -> anyhow::Result<PythonStatus> {
+        let _one_at_a_time = self
+            .python_setup
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("Python is already being set up"))?;
+        pyembed::install(&self.dir).await?;
+        let status = self.python_status(true).await;
+        self.refresh_plugins().await;
+        Ok(status)
+    }
+
+    pub async fn remove_python(&self) -> anyhow::Result<PythonStatus> {
+        let _one_at_a_time = self
+            .python_setup
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("Python is being set up"))?;
+        pyembed::remove(&self.dir)?;
+        let status = self.python_status(true).await;
+        self.refresh_plugins().await;
+        Ok(status)
+    }
+
+    /// Plugins available from GitHub, marked with which are installed.
+    pub async fn catalog(&self, refresh: bool) -> Catalog {
+        let mut cache = self.catalog.lock().await;
+        let fresh = cache
+            .as_ref()
+            .is_some_and(|(at, c)| at.elapsed() < CATALOG_TTL && c.errors.is_empty());
+        if refresh || !fresh {
+            *cache = Some((Instant::now(), catalog::fetch(&self.http).await));
+        }
+        let mut c = cache.as_ref().map(|(_, c)| c.clone()).unwrap_or_default();
+        let engines = self.engines_dir();
+        for e in &mut c.entries {
+            e.installed = e.problem.is_none() && engines.join(format!("{}.py", e.id)).is_file();
+        }
+        c
     }
 
     /// Re-read installed plugins' names and categories.
@@ -273,6 +375,10 @@ impl SearchManager {
                 .unwrap_or_default()
                 .to_string();
             let resp = self.http.get(u).send().await?.error_for_status()?;
+            ensure!(
+                resp.url().scheme() == "https",
+                "the plugin download was redirected off https"
+            );
             if let Some(len) = resp.content_length() {
                 ensure!(
                     len as usize <= nova::MAX_PLUGIN_BYTES,
@@ -311,7 +417,8 @@ impl SearchManager {
         };
         let preview = nova::inspect(&file_name, &bytes, source, &self.engines_dir())?;
         let mut pending = self.pending.lock();
-        if pending.len() > 16 {
+        // Room for a reviewed batch from the catalog (the UI allows 20).
+        if pending.len() >= 64 {
             pending.clear();
         }
         pending.insert(preview.sha256.clone(), (preview.clone(), bytes));
@@ -367,7 +474,7 @@ impl SearchManager {
     }
 
     /// Start a search over the given providers (or every enabled one).
-    /// Events are delivered through `sink` until `Finished`.
+    /// Events are delivered through `sink` until `LookupsDone`.
     pub async fn start(
         self: &Arc<Self>,
         query: &str,
@@ -398,17 +505,42 @@ impl SearchManager {
         let seen: Arc<Mutex<HashSet<String>>> = Arc::default();
         let category = category.to_string();
 
+        // Results without counts are queued for tracker lookups, which run
+        // alongside the providers and may finish after them.
+        let (lookup_tx, lookup_rx) = tokio::sync::mpsc::unbounded_channel::<scrape::Job>();
+        let lookups_on = self.config.read().scrape && !self.lookups_held.load(Ordering::SeqCst);
+
         let me = self.clone();
         tokio::spawn(async move {
+            let lookups = {
+                let (net, sink, token) = (me.scrape_net.clone(), sink.clone(), token.clone());
+                tokio::spawn(async move {
+                    let emit = |counts| {
+                        sink(SearchEvent::Counts {
+                            search_id: id,
+                            counts,
+                        })
+                    };
+                    tokio::select! {
+                        _ = net.run(lookup_rx, emit) => {}
+                        _ = token.cancelled() => {}
+                    }
+                })
+            };
             let tasks = chosen.into_iter().map(|p| {
-                let (me, sink, seen, token, query, category) =
-                    (me.clone(), sink.clone(), seen.clone(), token.clone(), query.clone(), category.clone());
+                let (me, sink, seen, token, query, category, lookup_tx) =
+                    (me.clone(), sink.clone(), seen.clone(), token.clone(), query.clone(), category.clone(), lookup_tx.clone());
                 async move {
                     let emit = |batch: Vec<SearchResult>| {
                         let mut s = seen.lock();
                         let fresh: Vec<SearchResult> =
                             batch.into_iter().filter_map(clean).filter(|r| s.insert(dedupe_key(r))).collect();
                         drop(s);
+                        if lookups_on {
+                            for job in fresh.iter().filter_map(scrape::job_for) {
+                                let _ = lookup_tx.send(job);
+                            }
+                        }
                         if !fresh.is_empty() {
                             sink(SearchEvent::Results { search_id: id, provider: p.id.clone(), results: fresh });
                         }
@@ -426,8 +558,11 @@ impl SearchManager {
                 }
             });
             futures::future::join_all(tasks).await;
-            me.active.lock().remove(&id);
+            drop(lookup_tx);
             sink(SearchEvent::Finished { search_id: id });
+            let _ = lookups.await;
+            me.active.lock().remove(&id);
+            sink(SearchEvent::LookupsDone { search_id: id });
         });
         Ok(id)
     }

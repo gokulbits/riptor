@@ -24,7 +24,10 @@ A lightweight, security-focused BitTorrent client for **Windows and Linux**, bui
 
 **Search** (`crates/riptor-search`)
 - Internet Archive (built in), Jackett/Prowlarr via Torznab, and qBittorrent-compatible `.py` search plugins.
+- A plugin catalog, fetched from GitHub on demand: qBittorrent's official plugins and (opt-in) the community list. Pick several, review them together, install.
+- No Python? On Windows, Riptor can set up python.org's embeddable Python itself (downloaded on demand, SHA-256 pinned, kept in Riptor's data folder).
 - Engines are queried in parallel and results stream in as they arrive, with filters for seeds and size.
+- Results without seed/peer counts (the Internet Archive sends none) get them from their trackers: HTTP and UDP scrapes, bounded and optional.
 
 **App-only VPN** (`crates/riptor-vpn`, `crates/riptor-vpn-helper`)
 - Import OpenVPN `.ovpn` profiles (Proton's included) and connect from the VPN tab. It needs [OpenVPN Community](https://openvpn.net/community-downloads/) installed.
@@ -46,7 +49,8 @@ Security is a core requirement. Highlights:
 - **Hostile torrent metadata:** blocked from writing outside the save folder. This includes Windows drive-prefix tricks, reserved names, alternate data streams and `..`.
 - **Protected locations:** save folders can never be system folders, Startup/autostart folders, `~/.ssh`, or Riptor's own data.
 - **Downloaded files:** never opened automatically. On Windows, finished downloads get a Mark-of-the-Web.
-- **Search plugins:** they are code, so install requires confirming the source and SHA-256. They run isolated (`python -I`, cleared environment, time and output limits; bubblewrap on Linux).
+- **Search plugins:** they are code, so install requires confirming the source and SHA-256, also when picked from the catalog. They run isolated (`python -I`, cleared environment, time and output limits; bubblewrap on Linux). No plugin code ships with Riptor.
+- **Tracker lookups:** search results choose which trackers are asked for seed/peer counts, so only public addresses are contacted (checked after DNS and on redirects), replies are size-capped and strictly parsed, and lookups can be turned off. They are skipped while the VPN or kill switch is active, because they don't go through the tunnel. Search requests themselves (Internet Archive, Torznab, plugins) always use the normal connection.
 - **Secrets:** Torznab API keys, OpenVPN usernames and passwords, and WireGuard keys live in the OS credential store.
 - **VPN profiles are untrusted:**
   - Script, plugin, management and logging directives are removed on import (`up`, `down`, `plugin`, `script-security`, `PostUp`, …).
@@ -114,7 +118,9 @@ Build installers (NSIS on Windows, AppImage and .deb on Linux):
 npx tauri build
 ```
 
-Optional: qBittorrent search plugins need Python 3.9+ on the PATH.
+Optional: qBittorrent search plugins need Python 3.9+ on the PATH. On Windows, the Search engines dialog can set up its own copy instead.
+
+If a build fails with "NASM command not found" (aws-lc-sys), set `AWS_LC_SYS_PREBUILT_NASM=1` or install NASM.
 
 To use the VPN in a development build, build the helper once. It has to sit next to `riptor.exe`; installers bundle it automatically.
 ```bash
@@ -161,8 +167,10 @@ Done: profile import and sanitizing, the elevated helper, the OpenVPN management
 - [ ] Create-torrent dialog (uses librqbit `create_torrent`).
 
 ### Search
-- [ ] Test qBittorrent plugins with a real Python interpreter on Windows. The development machine has no Python, so the end-to-end test only runs in CI.
 - [ ] Test the Linux bubblewrap sandbox for plugins.
+- [ ] Try the popular community plugins against Riptor's shim (the official ones work with Python 3.14 on Windows). Set `RIPTOR_TEST_PYTHON` to run the end-to-end plugin test without a system Python.
+- [ ] Bump the embedded Python pin (`riptor-search/src/pyembed.rs`) with each Python security release.
+- [ ] Route tracker lookups through the VPN once the kill switch exists (they go out directly today).
 
 ### UI polish
 - [ ] Replace the `window.prompt` used for editing tags with a proper dialog.

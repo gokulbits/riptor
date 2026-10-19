@@ -94,19 +94,26 @@ fn quiet(cmd: &mut Command) {
     cmd.stdin(Stdio::null()).kill_on_drop(true);
 }
 
-/// Find Python 3.9+. Returns the real interpreter path (not the `py` launcher).
-pub async fn detect() -> Option<Python> {
-    let candidates: &[(&str, &[&str])] = if cfg!(windows) {
+/// Find Python 3.9+: on PATH first, then the given interpreters (Riptor's
+/// own copy). Returns the real interpreter path (not the `py` launcher).
+pub async fn detect(extra: &[PathBuf]) -> Option<Python> {
+    let names: &[(&str, &[&str])] = if cfg!(windows) {
         &[("py", &["-3"]), ("python3", &[]), ("python", &[])]
     } else {
         &[("python3", &[]), ("python", &[])]
     };
-    for (name, pre) in candidates {
-        let Some(exe) = find_in_path(name) else {
-            continue;
-        };
+    let candidates = names
+        .iter()
+        .filter_map(|(name, pre)| Some((find_in_path(name)?, *pre)))
+        .chain(
+            extra
+                .iter()
+                .filter(|p| p.is_absolute() && p.is_file())
+                .map(|p| (p.clone(), &[][..])),
+        );
+    for (exe, pre) in candidates {
         let mut cmd = Command::new(&exe);
-        cmd.args(*pre).args([
+        cmd.args(pre).args([
             "-I",
             "-c",
             "import sys;print(sys.version_info[0],sys.version_info[1]);print(sys.executable)",
@@ -381,7 +388,7 @@ pub struct PluginPreview {
     pub replaces_existing: bool,
 }
 
-fn declared(text: &str, attr: &str) -> Option<String> {
+pub fn declared(text: &str, attr: &str) -> Option<String> {
     text.lines().find_map(|l| {
         let l = l.trim();
         let rest = l.strip_prefix(attr)?.trim_start().strip_prefix('=')?.trim();
@@ -436,10 +443,12 @@ class demo(object):
     supported_categories = {"all": "0", "movies": "1"}
 
     def search(self, what, cat="all"):
-        for i in range(3):
+        for i in range(2):
             prettyPrinter({"link": "magnet:?xt=urn:btih:%040d" % i, "name": "Result | %d %s" % (i, what),
                            "size": "1.5 GB", "seeds": i, "leech": "-1", "engine_url": self.url,
                            "desc_link": self.url + "/%d" % i, "pub_date": 1700000000})
+        prettyPrinter({"link": "magnet:?xt=urn:btih:%040d" % 2, "name": "Strings", "size": "-1",
+                       "seeds": "1,234", "leech": " 56 ", "engine_url": self.url})
 "#;
 
     #[test]
@@ -459,7 +468,13 @@ class demo(object):
     /// Runs the real shim with a real interpreter when one is installed.
     #[tokio::test]
     async fn runs_a_plugin_end_to_end_if_python_present() {
-        let Some(py) = detect().await else {
+        // RIPTOR_TEST_PYTHON names an interpreter outside PATH (e.g. the
+        // embeddable package) so this also runs where there is no system Python.
+        let extra: Vec<PathBuf> = std::env::var_os("RIPTOR_TEST_PYTHON")
+            .map(PathBuf::from)
+            .into_iter()
+            .collect();
+        let Some(py) = detect(&extra).await else {
             eprintln!("python not installed; skipping");
             return;
         };
@@ -491,7 +506,12 @@ class demo(object):
         assert_eq!(n, 3);
         assert_eq!(got[1].name, "Result | 1 big+buck");
         assert_eq!(got[1].size, Some(1_610_612_736));
+        // The plugin's "seeds"/"leech" become seeders/leechers; -1 is unknown.
+        assert_eq!(got[1].seeders, Some(1));
         assert_eq!(got[1].leechers, None);
+        assert_eq!(got[2].seeders, Some(1234), "thousands separators");
+        assert_eq!(got[2].leechers, Some(56));
+        assert_eq!(got[2].size, None);
         assert!(search(
             &py,
             d.path(),

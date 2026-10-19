@@ -315,8 +315,13 @@ pub async fn search_start(
     let sink: Arc<dyn Fn(riptor_search::SearchEvent) + Send + Sync> = Arc::new(move |ev| {
         let _ = app.emit("riptor://search", ev);
     });
-    search(&state)?
-        .start(&query, &category, providers, sink)
+    let s = search(&state)?;
+    // Tracker lookups don't go through the VPN, so skip them unless the
+    // engine is on the normal connection.
+    if let Some(e) = state.engine.get() {
+        s.hold_lookups(e.network() != riptor_core::NetworkMode::Normal);
+    }
+    s.start(&query, &category, providers, sink)
         .await
         .map_err(err)
 }
@@ -365,6 +370,40 @@ pub async fn search_install_plugin(state: State<'_, AppState>, sha256: String) -
 #[tauri::command]
 pub async fn search_uninstall_plugin(state: State<'_, AppState>, id: String) -> Res<()> {
     search(&state)?.uninstall_plugin(&id).await.map_err(err)
+}
+
+/// qBittorrent plugins available from GitHub (official and community lists).
+#[tauri::command]
+pub async fn search_catalog(
+    state: State<'_, AppState>,
+    refresh: bool,
+) -> Res<riptor_search::catalog::Catalog> {
+    Ok(search(&state)?.catalog(refresh).await)
+}
+
+/// Download python.org's embeddable Python (hash-pinned) for plugins.
+#[tauri::command]
+pub async fn search_install_python(
+    state: State<'_, AppState>,
+) -> Res<riptor_search::manager::PythonStatus> {
+    search(&state)?.install_python().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn search_remove_python(
+    state: State<'_, AppState>,
+) -> Res<riptor_search::manager::PythonStatus> {
+    search(&state)?.remove_python().await.map_err(err)
+}
+
+#[tauri::command]
+pub fn search_options(state: State<'_, AppState>) -> Res<riptor_search::manager::SearchOptions> {
+    Ok(search(&state)?.options())
+}
+
+#[tauri::command]
+pub fn search_set_scrape(state: State<'_, AppState>, enabled: bool) -> Res<()> {
+    search(&state)?.set_scrape(enabled).map_err(err)
 }
 
 /// Fetch a plugin result's .torrent through the plugin; returns a temp file

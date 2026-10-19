@@ -97,6 +97,7 @@ export function SearchView() {
       category: s.category,
       selected: s.selected,
       running: s.running,
+      lookups: s.lookups,
       searchId: s.searchId,
       progress: s.progress,
       providers: s.providers,
@@ -216,6 +217,14 @@ export function SearchView() {
               {p.done && !p.error && <span className="tabular-nums">· {p.count}</span>}
             </span>
           ))}
+          {st.lookups && st.total > 0 && (
+            <span
+              className="flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-muted"
+              title="Asking the torrents' trackers how many people share them. Turn this off in Search engines."
+            >
+              <Loader2 size={11} className="animate-spin" /> Checking trackers for seeds &amp; peers
+            </span>
+          )}
           <span className="flex-1" />
           <input
             className="input w-48 py-1 text-xs"
@@ -286,6 +295,11 @@ export function SearchView() {
               <>
                 <p className="text-sm">Search the Internet Archive, your Jackett/Prowlarr indexers and installed plugins.</p>
                 <p className="text-xs">Double-click a result to download it.</p>
+                {st.providers.length > 0 && !st.providers.some((p) => p.kind !== "builtin") && (
+                  <button className="btn-ghost mt-2 border border-border text-xs" onClick={() => setEngines(true)}>
+                    Add qBittorrent search plugins…
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -305,8 +319,12 @@ export function SearchView() {
                     {r.name}
                   </span>
                   <span className="px-2 text-right tabular-nums">{r.size != null ? formatBytes(r.size) : "–"}</span>
-                  <span className="px-2 text-right tabular-nums text-ok">{r.seeders ?? "–"}</span>
-                  <span className="px-2 text-right tabular-nums text-muted">{r.leechers ?? "–"}</span>
+                  <span className="px-2 text-right tabular-nums text-ok" title={r.scraped ? "From the torrent's trackers" : undefined}>
+                    {r.seeders ?? (st.lookups && !r.via_plugin ? "…" : "–")}
+                  </span>
+                  <span className="px-2 text-right tabular-nums text-muted" title={r.scraped ? "From the torrent's trackers" : undefined}>
+                    {r.leechers ?? (st.lookups && !r.via_plugin ? "…" : "–")}
+                  </span>
                   <span className="truncate px-2 text-muted">{names[r.engine] ?? r.engine}</span>
                   <span className="truncate px-2 text-muted">{r.pub_date ? new Date(r.pub_date * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "–"}</span>
                   <span className="flex justify-end gap-0.5 px-1 opacity-60 group-hover:opacity-100">

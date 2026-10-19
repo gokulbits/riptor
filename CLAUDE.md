@@ -30,7 +30,7 @@ Run the app in development mode (it rebuilds and restarts on Rust changes):
 npx tauri dev
 ```
 
-Run the Rust tests (80 at last count) and the UI tests (4):
+Run the Rust tests and the UI tests:
 ```bash
 cargo test --workspace
 ```
@@ -67,7 +67,8 @@ cargo bench -p riptor-storage
 - **riptor-storage::CachedStorageFactory** is the session's *default* storage factory, so restored torrents use it. librqbit hides the output folder from factories, so the engine registers each torrent's root by info hash before adding or restoring it, and an unregistered torrent is refused.
 - **Pieces:** buffered per piece in memory, then flushed synchronously in `on_piece_completed`, which runs *before* the piece is announced to peers.
 - **Backups** (`riptor-core/src/backup.rs`): `RIPTRBK\0` header, XChaCha20-Poly1305 with the header as AAD, deflate+JSON payload. The built-in key (tamper-evident only) or an Argon2id password.
-- **Search plugins:** run through Riptor's own JSON-line shim in `crates/riptor-search/assets/nova`. Engines are loaded by file path and never put on `sys.path`.
+- **Search plugins:** run through Riptor's own JSON-line shim in `crates/riptor-search/assets/nova`. Engines are loaded by file path and never put on `sys.path`. The catalog (`catalog.rs`) is fetched from GitHub at runtime; never vendor plugin code. Riptor's own Python (`pyembed.rs`, Windows) is python.org's embeddable zip, pinned by SHA-256. `RIPTOR_TEST_PYTHON=<python.exe>` lets the end-to-end plugin test run without a system Python.
+- **Seed/peer lookups** (`scrape.rs`): results without counts are scraped from their trackers (HTTP + UDP BEP 15). Only public addresses are contacted; tests use `Net::new(true)` to allow 127.0.0.1. `search_start` holds lookups while the engine isn't on the normal network (VPN or kill switch), since they don't go through the tunnel.
 
 ## What's left to do (priority order)
 
@@ -96,7 +97,11 @@ cargo bench -p riptor-storage
    - Watched folder.
    - Move files on category or save-folder change.
    - Create-torrent dialog.
-7. **Search:** test plugins with real Python on Windows. Test the bubblewrap sandbox on Linux.
+7. **Search:**
+   - Test the bubblewrap sandbox on Linux.
+   - Try popular community plugins against the shim (official ones work on Windows with Python 3.14).
+   - Bump the embedded Python pin in `pyembed.rs` with Python security releases.
+   - Route tracker lookups (`scrape.rs`) through the VPN once it exists.
 8. **UI polish:**
    - Replace `window.prompt` for tags.
    - Persist detail-panel height and tab.

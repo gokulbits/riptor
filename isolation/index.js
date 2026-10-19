@@ -12,7 +12,8 @@ const APP_COMMANDS = new Set([
   "association_status", "make_default_app", "open_default_apps",
   "search_providers", "search_python_status", "search_start", "search_cancel", "search_set_enabled",
   "search_add_torznab", "search_remove_torznab", "search_preview_plugin", "search_install_plugin",
-  "search_uninstall_plugin", "search_plugin_download",
+  "search_uninstall_plugin", "search_plugin_download", "search_catalog", "search_install_python",
+  "search_remove_python", "search_options", "search_set_scrape",
   "vpn_profiles", "vpn_import", "vpn_delete", "vpn_set_credentials", "vpn_connect", "vpn_disconnect",
   "vpn_status", "vpn_get_prefs", "vpn_set_prefs", "vpn_openvpn_installed",
 ]);

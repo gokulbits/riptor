@@ -272,6 +272,8 @@ export interface SearchResult {
   pub_date: number | null;
   engine: string;
   via_plugin: boolean;
+  /** UI only: seeders/leechers came from a tracker scrape. */
+  scraped?: boolean;
 }
 
 export interface ProviderInfo {
@@ -287,12 +289,52 @@ export interface ProviderInfo {
 export type SearchEvent =
   | { type: "results"; search_id: number; provider: string; results: SearchResult[] }
   | { type: "provider_done"; search_id: number; provider: string; count: number; error: string | null }
-  | { type: "finished"; search_id: number };
+  | { type: "finished"; search_id: number }
+  | { type: "counts"; search_id: number; counts: ResultCounts[] }
+  | { type: "lookups_done"; search_id: number };
+
+/** Seed/peer counts from a tracker scrape for the result with this link. */
+export interface ResultCounts {
+  link: string;
+  seeders: number;
+  leechers: number;
+}
+
+export interface SearchOptions {
+  scrape: boolean;
+}
+
+export interface CatalogEntry {
+  id: string;
+  name: string;
+  site: string | null;
+  download_url: string;
+  origin: "official" | "community";
+  private: boolean;
+  version: string | null;
+  author: string | null;
+  health: "working" | "issues" | "broken" | "unknown";
+  note: string | null;
+  problem: string | null;
+  installed: boolean;
+}
+
+export interface PluginCatalog {
+  entries: CatalogEntry[];
+  errors: string[];
+}
 
 export interface PythonStatus {
   available: boolean;
   version: string | null;
   sandboxed: boolean;
+  /** The interpreter in use is the one Riptor set up. */
+  bundled: boolean;
+  bundled_installed: boolean;
+  /** Riptor can download Python by itself on this platform (Windows). */
+  can_bundle: boolean;
+  bundle_version: string;
+  bundle_size: number | null;
 }
 
 export interface PluginPreview {
