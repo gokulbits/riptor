@@ -74,7 +74,7 @@ export const events = {
   engine: (cb: (e: EngineEvent) => void): Promise<UnlistenFn> => listen<EngineEvent>("riptor://event", (e) => cb(e.payload)),
   ready: (cb: () => void) => listen("riptor://ready", () => cb()),
   externalAdd: (cb: (items: Source[]) => void) => listen<Source[]>("riptor://external-add", (e) => cb(e.payload)),
-  toggleAltSpeed: (cb: () => void) => listen("riptor://toggle-alt-speed", () => cb()),
+  trayAction: (cb: (action: string) => void) => listen<string>("riptor://tray-action", (e) => cb(e.payload)),
   search: (cb: (e: SearchEvent) => void) => listen<SearchEvent>("riptor://search", (e) => cb(e.payload)),
 };
 

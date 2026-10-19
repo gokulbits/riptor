@@ -658,6 +658,15 @@ impl Engine {
         Ok(())
     }
 
+    /// Ids of every torrent in the list (for "pause all" / "resume all").
+    pub fn torrent_ids(&self) -> Vec<String> {
+        self.records
+            .read()
+            .values()
+            .map(|r| r.info_hash.clone())
+            .collect()
+    }
+
     pub fn categories(&self) -> BTreeMap<String, Option<PathBuf>> {
         self.categories.read().clone()
     }

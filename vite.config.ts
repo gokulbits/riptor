@@ -12,7 +12,8 @@ export default defineConfig({
     strictPort: true,
     host: host || false,
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
-    watch: { ignored: ["**/src-tauri/**", "**/crates/**", "**/target/**"] },
+    // .claude/worktrees holds other sessions' checkouts; vendor/ has unrelated web assets.
+    watch: { ignored: ["**/src-tauri/**", "**/crates/**", "**/target/**", "**/.claude/**", "**/vendor/**"] },
   },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: {
@@ -23,5 +24,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Don't pick up tests from other sessions' worktrees or vendored code.
+    exclude: ["**/node_modules/**", "**/dist/**", "**/.claude/**", "**/vendor/**"],
   },
 });

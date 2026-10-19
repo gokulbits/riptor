@@ -69,7 +69,7 @@ fn pump_events(app: AppHandle, engine: Arc<Engine>) {
                                 .body(name)
                                 .show();
                         }
-                        Event::Tick { global, .. } => tray::update_tooltip(&app, global),
+                        Event::Tick { global, .. } => tray::update(&app, global),
                         _ => {}
                     }
                     let _ = app.emit("riptor://event", ev);
@@ -203,15 +203,59 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Riptor");
 
-    app.run(|handle, event| {
-        if let RunEvent::Exit = event {
-            if let Some(engine) = handle.state::<AppState>().engine.get().cloned() {
-                // Flush buffered pieces and persist statistics before exiting.
-                if let Err(e) = tauri::async_runtime::block_on(engine.shutdown()) {
-                    error!("shutdown: {e:#}");
-                }
+    app.run(|handle, event| match event {
+        // Last window closed (or the OS asked us to exit): shut down properly first.
+        RunEvent::ExitRequested { api, .. } => {
+            api.prevent_exit();
+            quit(handle);
+        }
+        // Only reached if something bypassed `quit`. The async runtime is
+        // already going away here, so don't await anything: just clean up the
+        // tray icon and leave.
+        RunEvent::Exit => {
+            let _ = handle.remove_tray_by_id(tray::TRAY_ID);
+            std::process::exit(0);
+        }
+        _ => {}
+    });
+}
+
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Quit Riptor for real: save statistics, flush every torrent's buffered
+/// pieces, remove the tray icon, then end the process.
+///
+/// This must run while the async runtime is alive. It used to run in
+/// `RunEvent::Exit`, where the runtime is already being torn down: timers
+/// never fire there, so librqbit's `stop()` (which sleeps for a second) hung
+/// forever and the process lingered without a window, which made "Quit" look
+/// broken and left the tray icon behind.
+pub fn quit(handle: &AppHandle) {
+    const LIMIT: std::time::Duration = std::time::Duration::from_secs(8);
+    if QUITTING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    if let Some(w) = handle.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    // Last resort if something below blocks a thread forever.
+    std::thread::spawn(|| {
+        std::thread::sleep(LIMIT + std::time::Duration::from_secs(4));
+        error!("shutdown did not finish in time; exiting anyway");
+        std::process::exit(1);
+    });
+    let handle = handle.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Some(engine) = handle.state::<AppState>().engine.get().cloned() {
+            match tokio::time::timeout(LIMIT, engine.shutdown()).await {
+                Ok(Ok(())) => info!("shutdown complete"),
+                Ok(Err(e)) => error!("shutdown: {e:#}"),
+                Err(_) => error!("shutdown timed out after {LIMIT:?}"),
             }
         }
+        // Remove the icon ourselves so Windows doesn't keep a dead one in the tray.
+        let _ = handle.remove_tray_by_id(tray::TRAY_ID);
+        std::process::exit(0);
     });
 }
 

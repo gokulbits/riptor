@@ -115,10 +115,6 @@ export default function App() {
         else if (e.type === "notice") toast(e.level, e.message);
       }),
       events.externalAdd((items) => queueAdds(items)),
-      events.toggleAltSpeed(() => {
-        const on = !useApp.getState().global?.alt_speed;
-        api.setAltSpeed(on).catch((e) => toast("error", errorText(e)));
-      }),
       getCurrentWebview().onDragDropEvent((ev) => {
         if (ev.payload.type !== "drop") return;
         const files = ev.payload.paths.filter((p) => p.toLowerCase().endsWith(".torrent"));
@@ -162,6 +158,21 @@ export default function App() {
     const list = Array.isArray(picked) ? picked : picked ? [picked] : [];
     if (list.length) actions.queueAdds(list.map((value) => ({ kind: "file", value }) as Source));
   };
+
+  // Tray menu items that need a dialog (Rust has already shown the window).
+  useEffect(() => {
+    const un = events.trayAction((action) => {
+      if (action === "add_file") addFile();
+      else if (action === "add_magnet") setModal({ kind: "magnet" });
+      else if (action === "stats") setModal({ kind: "stats" });
+      else if (action === "settings") setModal({ kind: "settings" });
+    });
+    return () => {
+      un.then((f) => f());
+    };
+    // addFile only touches stable store actions, so subscribing once is fine.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Keyboard shortcuts and paste-to-add.
   useEffect(() => {
