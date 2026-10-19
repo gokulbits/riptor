@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{bail, ensure};
 
 /// Exit codes Riptor maps to messages (stderr is not visible through UAC).
 mod code {
@@ -197,7 +197,7 @@ fn private_dir() -> anyhow::Result<PathBuf> {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .context("running icacls")?
+            .map_err(|e| anyhow::anyhow!("running icacls: {e}"))?
             .success();
         ensure!(ok, "could not restrict permissions on {}", dir.display());
         Ok(dir)
