@@ -5,8 +5,14 @@
 !include x64.nsh
 
 !define RIPTOR_HOOKS_DIR "${__FILEDIR__}"
+; Windows shows this file name when the uninstaller asks for admin rights.
+!define RIPTOR_UNINSTALLER "Uninstall Riptor.exe"
 
 !macro NSIS_HOOK_POSTINSTALL
+  Delete "$INSTDIR\${RIPTOR_UNINSTALLER}"
+  Rename "$INSTDIR\uninstall.exe" "$INSTDIR\${RIPTOR_UNINSTALLER}"
+  WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\${RIPTOR_UNINSTALLER}$\""
+
   SetRegView 64
   ReadRegStr $R0 HKLM "SOFTWARE\OpenVPN" "exe_path"
   ${If} $R0 == ""
@@ -26,4 +32,9 @@
   ${Else}
     DetailPrint "OpenVPN is already installed; leaving it as it is."
   ${EndIf}
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  Delete "$INSTDIR\${RIPTOR_UNINSTALLER}"
+  RMDir "$INSTDIR"
 !macroend

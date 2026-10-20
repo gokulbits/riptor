@@ -16,3 +16,6 @@ riptor-vpn = { path = "../riptor-vpn" }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+
+[build-dependencies]
+tauri-winres = "0.3"

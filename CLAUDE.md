@@ -22,7 +22,7 @@ Riptor is a Tauri 2 + Rust + React BitTorrent client for Windows and Linux. It w
 - **VPN is app-only.** Only Riptor's sockets may use the tunnel (pinned to its adapter). Never let the tunnel take over the system's routing (profiles get `route-nopull` and only a metric-9999 default route on the tunnel itself), and never connect a profile that can't be limited to Riptor (WireGuard on Windows).
 - **No third-party brand names** in the app, code, comments or docs: no VPN providers (e.g. Proton) and no other torrent clients or indexer apps. Say "your VPN provider", "Torznab indexer", "nova3 plugin". Protocol and tool names Riptor depends on (OpenVPN, WireGuard, Torznab, Python) are fine, as are URLs that must point somewhere specific (the plugin catalog). [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) names OpenVPN for licensing.
 - **Installers:** Windows is a per-machine NSIS setup (the elevated helper must live in Program Files) that silently installs the pinned OpenVPN MSI (`scripts/fetch-openvpn.mjs`, `src-tauri/windows/hooks.nsh`) and ships the pinned embeddable Python in `<install>/python` (`scripts/fetch-python.mjs` reads the pin from `pyembed.rs`; search prefers that Python). Both are wired in by `src-tauri/tauri.bundle.windows.conf.json`. Linux ships `.deb`/`.rpm` that depend on `openvpn`, pkexec, `python3` and `bubblewrap` and install the polkit policy in `src-tauri/linux/`. Users must never need to install anything for a Riptor feature. No AppImage. When upgrading OpenVPN, verify the new MSI's Authenticode signer ("OpenVPN Inc.") before pinning its hash, and update THIRD-PARTY-NOTICES.md.
-- Build `riptor-vpn-helper` once (`cargo build -p riptor-vpn-helper`) so it sits next to `riptor.exe` in dev. Release bundles add it through `src-tauri/tauri.bundle.conf.json` (externalBin).
+- Build `riptor-vpn-helper` once (`cargo build -p riptor-vpn-helper`) so it sits next to `riptor.exe` in dev. Release bundles add it through externalBin; on Windows it ships as `Riptor VPN Service.exe`, the name UAC shows.
 
 ## Commands
 
@@ -92,7 +92,7 @@ cargo bench -p riptor-storage
    - Done: per-machine NSIS setup bundling the OpenVPN MSI and embeddable Python, .deb/.rpm with `openvpn`/`python3`/`bubblewrap` + polkit policy, SHA-256 sums in CI, About page and log viewer.
    - Test the installers on clean machines (OpenVPN install, helper prompt, file/magnet registration).
    - Optional signing.
-   - Keep the setup under 20 MB (18.9 MB for 0.1.1; the next build adds roughly 0.3 MB).
+   - Keep the setup under 20 MB (19.3 MB for 0.1.2).
 4. **Engine:** web seeds, runtime per-torrent limits, force recheck, moving files and orphan cleanup are done.
    - A real-network download/seed check (e.g. Debian netinst). Needs the user's OK.
    - Storage download path: the benchmark now shows the store level with plain I/O (noisy; re-check on fast NVMe).

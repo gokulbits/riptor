@@ -227,7 +227,7 @@ npx tsc -b --noEmit
    ```bash
    cargo build --release -p riptor-vpn-helper
    ```
-3. Copy `target/release/riptor-vpn-helper(.exe)` to `src-tauri/binaries/riptor-vpn-helper-<target-triple>(.exe)`. Find your target triple with `rustc -vV`.
+3. Copy `target/release/riptor-vpn-helper(.exe)` to `src-tauri/binaries/`, named `Riptor VPN Service-<target-triple>.exe` on Windows (the admin prompt shows that name) or `riptor-vpn-helper-<target-triple>` on Linux. Find your target triple with `rustc -vV`.
 4. Build. On Windows:
    ```bash
    npx tauri build --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.bundle.windows.conf.json
@@ -282,7 +282,7 @@ Done: profile import and sanitizing, the elevated helper, the OpenVPN management
 Done: the Windows setup with OpenVPN and Python bundled, `.deb` and `.rpm` packages, checksums, draft releases from CI, an About page and a log viewer.
 - [ ] Test the installers on clean Windows and Linux machines.
 - [ ] Code signing (optional).
-- [ ] Keep the Windows setup under 20 MB (18.9 MB for 0.1.1; the next build adds roughly 0.3 MB).
+- [ ] Keep the Windows setup under 20 MB (19.3 MB for 0.1.2).
 
 ### Engine and storage
 Done: web seeds (BEP 19), runtime per-torrent speed limits, force recheck, moving a torrent's files, and removing leftover session entries.

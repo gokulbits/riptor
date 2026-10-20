@@ -168,15 +168,21 @@ fn random_password() -> anyhow::Result<String> {
         .collect())
 }
 
+/// UAC shows this file name, so it reads as a product name.
+const HELPER_EXE_WINDOWS: &str = "Riptor VPN Service.exe";
+
 fn helper_path() -> anyhow::Result<PathBuf> {
     let exe = std::env::current_exe()?;
     let dir = exe.parent().context("no exe folder")?;
-    let name = if cfg!(windows) {
-        "riptor-vpn-helper.exe"
+    let mut p = dir.join(if cfg!(windows) {
+        HELPER_EXE_WINDOWS
     } else {
         "riptor-vpn-helper"
-    };
-    let p = dir.join(name);
+    });
+    // Dev builds: cargo's own output name.
+    if cfg!(all(windows, debug_assertions)) && !p.is_file() {
+        p = dir.join("riptor-vpn-helper.exe");
+    }
     anyhow::ensure!(
         p.is_file(),
         "the VPN helper is missing next to Riptor ({})",

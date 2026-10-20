@@ -95,8 +95,10 @@ jobs:
           cargo build --release -p riptor-vpn-helper
           triple=$(rustc -vV | sed -n 's/^host: //p')
           ext=$([ "$RUNNER_OS" = Windows ] && echo .exe || true)
+          # Windows shows the file name in the admin prompt.
+          name=$([ "$RUNNER_OS" = Windows ] && echo "Riptor VPN Service" || echo riptor-vpn-helper)
           mkdir -p src-tauri/binaries
-          cp "target/release/riptor-vpn-helper$ext" "src-tauri/binaries/riptor-vpn-helper-$triple$ext"
+          cp "target/release/riptor-vpn-helper$ext" "src-tauri/binaries/$name-$triple$ext"
       # Hash is pinned in the script; the signature check is a second gate.
       - name: Fetch OpenVPN installer
         if: runner.os == 'Windows'

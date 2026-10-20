@@ -5038,6 +5038,7 @@ version = "0.1.2"
 dependencies = [
  "anyhow",
  "riptor-vpn",
+ "tauri-winres",
  "winreg 0.55.0",
 ]
 
