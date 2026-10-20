@@ -148,7 +148,9 @@ cargo build -p riptor-vpn-helper
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-Or use **Actions › CI › Run workflow** on GitHub. The installers and their SHA-256 sums are attached to the run as artifacts.
+A version tag also creates a **draft GitHub release** with the Windows setup, the `.deb`, the `.rpm` and a combined `SHA256SUMS.txt`. The release job checks that the installers match the tag's version and the checksums the build jobs recorded. Review the draft on the Releases page, then click Publish. Tags containing a hyphen (`v0.2.0-beta.1`) become pre-releases. Bump `version` in `src-tauri/tauri.conf.json` (and the workspace `Cargo.toml`) before tagging.
+
+Or use **Actions › CI › Run workflow** on GitHub to build the installers without a release; they are attached to the run as artifacts.
 
 ## What's left to do
 

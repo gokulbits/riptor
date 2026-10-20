@@ -81,7 +81,7 @@ cargo bench -p riptor-storage
    - WireGuard on Linux (helper `wg-quick` path; `connect` refuses WireGuard until then). It stays refused on Windows.
    - Linux: management over a 0600 Unix socket instead of 127.0.0.1 TCP.
    - Security review of the VPN milestone.
-2. **Dependencies:** there is no Dependabot; upgrades are done by hand. Check periodically (`cargo update --dry-run`, `npm outdated`), upgrade, then run the full gate and the app. cargo-deny and npm audit in CI catch advisories. (CI is green on Windows and Linux; installers build only for `v*` tags and manual runs.)
+2. **Dependencies:** there is no Dependabot; upgrades are done by hand. Check periodically (`cargo update --dry-run`, `npm outdated`), upgrade, then run the full gate and the app. cargo-deny and npm audit in CI catch advisories. (CI is green on Windows and Linux; installers build only for `v*` tags and manual runs; a `v*` tag also makes a *draft* GitHub release via the `release` job, which only a human publishes.)
 3. **Web seeds (BEP 19)** in vendored librqbit. A proposal card exists for a separate session.
 4. **Packaging (M5):**
    - Done: per-machine NSIS setup bundling the OpenVPN MSI and embeddable Python, .deb/.rpm with `openvpn`/`python3`/`bubblewrap` + polkit policy, SHA-256 sums in CI.
