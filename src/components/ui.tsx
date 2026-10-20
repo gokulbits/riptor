@@ -17,12 +17,22 @@ export function Dialog({
   width?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  // Callers pass a new onClose every render; re-running the effect on it stole focus each tick.
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close.current();
     window.addEventListener("keydown", onKey);
-    ref.current?.querySelector<HTMLElement>("input,button,select,textarea")?.focus();
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, []);
+  useEffect(() => {
+    if (ref.current?.contains(document.activeElement)) return;
+    const first =
+      body.current?.querySelector<HTMLElement>("input:not([type=hidden]):not([disabled]),select,textarea") ??
+      ref.current?.querySelector<HTMLElement>("button:not([disabled])");
+    first?.focus();
+  }, []);
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]" onMouseDown={onClose}>
       <div
@@ -38,7 +48,9 @@ export function Dialog({
             <X size={16} />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto p-4">{children}</div>
+        <div ref={body} className="min-h-0 flex-1 overflow-auto p-4">
+          {children}
+        </div>
         {footer && <div className="flex justify-end gap-2 border-t border-border px-4 py-3">{footer}</div>}
       </div>
     </div>
