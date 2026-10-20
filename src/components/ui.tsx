@@ -46,8 +46,9 @@ export function Dialog({
 }
 
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+  // Not space-y-1: v4 puts that gap on the inline label span, where it does nothing.
   return (
-    <label className="block space-y-1">
+    <label className="block [&>*+*]:mt-1">
       <span className="label">{label}</span>
       {children}
       {hint && <span className="block text-xs text-muted">{hint}</span>}
@@ -83,7 +84,7 @@ export function Toggle({
       >
         <span
           className={clsx(
-            "absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform",
+            "absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
             checked ? "translate-x-[18px]" : "translate-x-0.5",
           )}
         />

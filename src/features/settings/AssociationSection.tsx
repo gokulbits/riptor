@@ -37,7 +37,7 @@ export function AssociationSection() {
 
   return (
     <fieldset className="space-y-3">
-      <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Default app</legend>
+      <legend className="mb-5 text-xs font-semibold uppercase tracking-wider text-muted">Default app</legend>
       {status && (
         <div className="space-y-1">
           <Line ok={status.registered} label="Riptor is listed in “Open with” for torrent files" />

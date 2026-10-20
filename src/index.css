@@ -1,6 +1,38 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss" source(none);
+@source "../index.html";
+@source ".";
+
+/* Colours are CSS variables so light/dark themes swap at runtime. */
+@theme inline {
+  --color-bg: rgb(var(--bg));
+  --color-panel: rgb(var(--panel));
+  --color-raised: rgb(var(--raised));
+  --color-border: rgb(var(--border));
+  --color-fg: rgb(var(--fg));
+  --color-muted: rgb(var(--muted));
+  --color-accent: rgb(var(--accent));
+  --color-accent-fg: rgb(var(--accent-fg));
+  --color-ok: rgb(var(--ok));
+  --color-warn: rgb(var(--warn));
+  --color-danger: rgb(var(--danger));
+  --color-info: rgb(var(--info));
+}
+
+@theme {
+  --font-sans: Inter, "Segoe UI", Ubuntu, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  --text-xxs: 0.6875rem;
+  --text-xxs--line-height: 1rem;
+  /* v3's fixed line heights; v4's unitless ones shrink text-[13px] children. */
+  --text-xs--line-height: 1rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl--line-height: 2rem;
+}
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* Light tokens shown before JS runs; src/lib/themes.ts sets the active theme at runtime. */
 :root {
@@ -19,52 +51,74 @@
   color-scheme: light;
 }
 
-html,
-body,
-#root {
-  height: 100%;
-}
+@layer base {
+  /* Tailwind 3 defaults that v4 dropped. */
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: #e5e7eb;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: #9ca3af;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
 
-body {
-  @apply bg-bg text-fg font-sans text-sm antialiased;
-  overflow: hidden;
-  user-select: none;
-}
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
 
-input,
-textarea {
-  user-select: text;
-}
+  body {
+    @apply bg-bg text-fg font-sans text-sm antialiased;
+    overflow: hidden;
+    user-select: none;
+  }
 
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-::-webkit-scrollbar-thumb {
-  @apply rounded-full bg-border;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
+  input,
+  textarea {
+    user-select: text;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-border;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 
 @layer components {
-  .btn {
+  .btn,
+  .btn-ghost,
+  .btn-primary,
+  .btn-danger {
     @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors
       disabled:pointer-events-none disabled:opacity-40;
   }
   .btn-ghost {
-    @apply btn text-muted hover:bg-raised hover:text-fg;
+    @apply text-muted hover:bg-raised hover:text-fg;
   }
   .btn-primary {
-    @apply btn bg-accent text-accent-fg hover:bg-accent/90;
+    @apply bg-accent text-accent-fg hover:bg-accent/90;
   }
   .btn-danger {
-    @apply btn bg-danger text-white hover:bg-danger/90;
+    @apply bg-danger text-white hover:bg-danger/90;
   }
   .input {
-    @apply w-full rounded-md border border-border bg-panel px-2.5 py-1.5 text-sm outline-none
+    @apply w-full rounded-md border border-border bg-panel px-2.5 py-1.5 text-sm outline-hidden
       placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-accent/20;
   }
   .card {

@@ -26,19 +26,19 @@ export function StatusBar({ onToggleAlt }: { onToggleAlt: () => void }) {
         </span>
       )}
       {g?.network === "vpn" && (
-        <button className="flex items-center gap-1 rounded px-1.5 py-0.5 text-ok hover:bg-raised" onClick={() => setView("vpn")} title="Torrent traffic goes through the VPN">
+        <button className="flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-ok hover:bg-raised" onClick={() => setView("vpn")} title="Torrent traffic goes through the VPN">
           <ShieldCheck size={12} /> VPN
         </button>
       )}
       {g?.network === "blocked" && (
-        <button className="flex items-center gap-1 rounded px-1.5 py-0.5 text-danger hover:bg-raised" onClick={() => setView("vpn")} title="Kill switch: torrents are held until the VPN connects">
+        <button className="flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-danger hover:bg-raised" onClick={() => setView("vpn")} title="Kill switch: torrents are held until the VPN connects">
           <ShieldAlert size={12} /> Kill switch
         </button>
       )}
       <span className="flex-1" />
       <button
         onClick={onToggleAlt}
-        className={clsx("flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-raised", g?.alt_speed && "text-warn")}
+        className={clsx("flex items-center gap-1 rounded-sm px-1.5 py-0.5 hover:bg-raised", g?.alt_speed && "text-warn")}
         title="Alternative speed limits"
       >
         <Gauge size={12} /> {g?.alt_speed ? "Alt speed on" : "Alt speed"}

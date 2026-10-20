@@ -19,10 +19,10 @@ export function SpeedGraph() {
     <div className="p-3">
       <div className="mb-2 flex gap-4 text-xs">
         <span className="flex items-center gap-1.5">
-          <span className="h-0.5 w-3 rounded bg-accent" /> Download {formatRate(dl.at(-1) ?? 0)}
+          <span className="h-0.5 w-3 rounded-sm bg-accent" /> Download {formatRate(dl.at(-1) ?? 0)}
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="h-0.5 w-3 rounded bg-ok" /> Upload {formatRate(ul.at(-1) ?? 0)}
+          <span className="h-0.5 w-3 rounded-sm bg-ok" /> Upload {formatRate(ul.at(-1) ?? 0)}
         </span>
         <span className="ml-auto text-muted">peak {formatRate(max / 1.1)}</span>
       </div>

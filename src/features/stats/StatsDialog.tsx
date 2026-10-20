@@ -54,10 +54,10 @@ function DailyChart({ daily }: { daily: StatsReport["all_time"]["daily"] }) {
       <div className="mb-2 flex items-center gap-4 text-xs">
         <h3 className="font-semibold uppercase tracking-wider text-muted">Last 30 days</h3>
         <span className="flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-sm bg-accent" /> Downloaded
+          <span className="h-2 w-2 rounded-xs bg-accent" /> Downloaded
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-sm bg-ok" /> Uploaded
+          <span className="h-2 w-2 rounded-xs bg-ok" /> Uploaded
         </span>
         <span className="ml-auto tabular-nums text-muted">
           {h ? `${h.day}: ↓ ${formatBytes(h.downloaded)} · ↑ ${formatBytes(h.uploaded)}` : peak ? `peak day ${formatBytes(peak)}` : "No transfers yet"}
@@ -67,11 +67,11 @@ function DailyChart({ daily }: { daily: StatsReport["all_time"]["daily"] }) {
         {rows.map((r, i) => (
           <div
             key={r.day}
-            className={`flex h-full flex-1 items-end gap-px rounded-sm ${hover === i ? "bg-raised" : ""}`}
+            className={`flex h-full flex-1 items-end gap-px rounded-xs ${hover === i ? "bg-raised" : ""}`}
             onMouseEnter={() => setHover(i)}
           >
-            <div className="w-1/2 rounded-t-sm bg-accent" style={{ height: `${(r.downloaded / max) * 100}%`, minHeight: r.downloaded ? 2 : 0 }} />
-            <div className="w-1/2 rounded-t-sm bg-ok" style={{ height: `${(r.uploaded / max) * 100}%`, minHeight: r.uploaded ? 2 : 0 }} />
+            <div className="w-1/2 rounded-t-xs bg-accent" style={{ height: `${(r.downloaded / max) * 100}%`, minHeight: r.downloaded ? 2 : 0 }} />
+            <div className="w-1/2 rounded-t-xs bg-ok" style={{ height: `${(r.uploaded / max) * 100}%`, minHeight: r.uploaded ? 2 : 0 }} />
           </div>
         ))}
       </div>

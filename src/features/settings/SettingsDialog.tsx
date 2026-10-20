@@ -27,7 +27,7 @@ const MiB = 1024 * 1024;
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <fieldset className="space-y-3">
-      <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">{title}</legend>
+      <legend className="mb-5 text-xs font-semibold uppercase tracking-wider text-muted">{title}</legend>
       {children}
     </fieldset>
   );

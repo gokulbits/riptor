@@ -26,7 +26,7 @@ export function Toolbar(props: {
       onClick={() => setView(id)}
       className={clsx(
         "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-        view === id ? "bg-panel text-fg shadow-sm" : "text-muted hover:text-fg",
+        view === id ? "bg-panel text-fg shadow-xs" : "text-muted hover:text-fg",
       )}
     >
       {icon}

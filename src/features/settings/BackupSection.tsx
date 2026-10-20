@@ -91,7 +91,7 @@ export function BackupSection({ onSettingsRestored }: { onSettingsRestored: () =
   return (
     <div className="space-y-6">
       <fieldset className="space-y-3">
-        <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Create a backup</legend>
+        <legend className="mb-5 text-xs font-semibold uppercase tracking-wider text-muted">Create a backup</legend>
         <p className="text-xs text-muted">
           Saves your torrents (with their .torrent data, save folders and statistics), categories, settings and client
           statistics into one encrypted file. Any change to the file is detected and the restore is refused.
@@ -118,7 +118,7 @@ export function BackupSection({ onSettingsRestored }: { onSettingsRestored: () =
       </fieldset>
 
       <fieldset className="space-y-3">
-        <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Restore</legend>
+        <legend className="mb-5 text-xs font-semibold uppercase tracking-wider text-muted">Restore</legend>
         <button className="btn-ghost border border-border" disabled={busy !== null} onClick={pickFile}>
           {busy === "inspect" ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Choose backup file…
         </button>

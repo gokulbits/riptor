@@ -151,7 +151,7 @@ function ProfileRow({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate font-medium">{profile.name}</span>
-            <span className="rounded bg-raised px-1.5 py-0.5 text-[11px] text-muted">{profile.kind === "open_vpn" ? "OpenVPN" : "WireGuard"}</span>
+            <span className="rounded-sm bg-raised px-1.5 py-0.5 text-[11px] text-muted">{profile.kind === "open_vpn" ? "OpenVPN" : "WireGuard"}</span>
           </div>
           <div className="truncate text-xs text-muted">{profile.servers.join(", ") || "No server listed"}</div>
         </div>

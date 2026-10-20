@@ -58,7 +58,7 @@ function EnginePicker() {
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div className="card absolute right-0 top-full z-40 mt-1 w-64 p-1 shadow-xl" role="listbox">
-            <button className="w-full rounded px-2 py-1.5 text-left text-[13px] hover:bg-raised" onClick={() => setSelected(null)}>
+            <button className="w-full rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-raised" onClick={() => setSelected(null)}>
               {selected == null && <Check size={13} className="mr-1 inline text-accent" />}All enabled engines
             </button>
             <div className="my-1 h-px bg-border" />
@@ -69,10 +69,10 @@ function EnginePicker() {
                   key={p.id}
                   role="option"
                   aria-selected={on}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] hover:bg-raised"
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-raised"
                   onClick={() => setSelected(on ? active.filter((x) => x !== p.id) : [...active, p.id])}
                 >
-                  <span className={clsx("flex h-4 w-4 items-center justify-center rounded border", on ? "border-accent bg-accent text-accent-fg" : "border-border")}>
+                  <span className={clsx("flex h-4 w-4 items-center justify-center rounded-sm border", on ? "border-accent bg-accent text-accent-fg" : "border-border")}>
                     {on && <Check size={11} />}
                   </span>
                   <span className="flex-1 truncate">{p.name}</span>

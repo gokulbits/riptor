@@ -268,7 +268,7 @@ export function TagsDialog({ torrents, onClose }: { torrents: TorrentSummary[]; 
       <div className="space-y-3">
         <div className="flex min-h-9 flex-wrap gap-1.5 rounded-md border border-border p-1.5">
           {tags.map((t) => (
-            <span key={t} className="flex items-center gap-1 rounded bg-accent/15 px-2 py-0.5 text-xs">
+            <span key={t} className="flex items-center gap-1 rounded-sm bg-accent/15 px-2 py-0.5 text-xs">
               {t}
               <button className="text-muted hover:text-fg" onClick={() => setTags(tags.filter((x) => x !== t))} aria-label={`Remove ${t}`}>
                 <X size={12} />
@@ -276,7 +276,7 @@ export function TagsDialog({ torrents, onClose }: { torrents: TorrentSummary[]; 
             </span>
           ))}
           <input
-            className="min-w-24 flex-1 bg-transparent px-1 text-sm outline-none"
+            className="min-w-24 flex-1 bg-transparent px-1 text-sm outline-hidden"
             value={draft}
             maxLength={64}
             placeholder={tags.length ? "" : "Type a tag and press Enter"}
@@ -294,7 +294,7 @@ export function TagsDialog({ torrents, onClose }: { torrents: TorrentSummary[]; 
         {suggestions.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {suggestions.map((s) => (
-              <button key={s} className="rounded border border-border px-2 py-0.5 text-xs text-muted hover:text-fg" onClick={() => add(s)}>
+              <button key={s} className="rounded-sm border border-border px-2 py-0.5 text-xs text-muted hover:text-fg" onClick={() => add(s)}>
                 + {s}
               </button>
             ))}
