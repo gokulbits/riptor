@@ -54,6 +54,11 @@ cargo fmt --all
 npx tsc -b --noEmit
 ```
 
+CI runs Node 22 (npm 10), which rejects some lockfiles written by a newer local npm. After changing `package-lock.json`, check it the way CI will:
+```bash
+npx -y npm@10 ci --dry-run --ignore-scripts
+```
+
 Storage benchmark (results are noisy; compare medians):
 ```bash
 cargo bench -p riptor-storage
