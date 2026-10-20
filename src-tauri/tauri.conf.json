@@ -90,6 +90,12 @@
           "/usr/share/polkit-1/actions/app.riptor.vpn-helper.policy": "linux/app.riptor.vpn-helper.policy"
         }
       }
+    },
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
+      }
     }
   }
 }
