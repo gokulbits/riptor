@@ -24,11 +24,51 @@ pub struct ColumnPref {
 
 const MAX_COLUMNS: usize = 32;
 
+/// When the alternative speed limits switch on by themselves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AltSchedule {
+    pub enabled: bool,
+    /// Minutes after midnight, local time. `from == to` means all day.
+    pub from: u16,
+    pub to: u16,
+    /// Bit 0 = Monday ... bit 6 = Sunday.
+    pub days: u8,
+}
+
+impl Default for AltSchedule {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            from: 8 * 60,
+            to: 20 * 60,
+            days: 0x7f,
+        }
+    }
+}
+
+impl AltSchedule {
+    /// Monday = 0. Overnight windows count for the day they start.
+    pub fn active(&self, weekday: u32, minute: u16) -> bool {
+        let on = |d: u32| self.days & (1 << (d % 7)) != 0;
+        let yesterday = (weekday + 6) % 7;
+        match self.from.cmp(&self.to) {
+            std::cmp::Ordering::Equal => on(weekday),
+            std::cmp::Ordering::Less => on(weekday) && (self.from..self.to).contains(&minute),
+            std::cmp::Ordering::Greater => {
+                (on(weekday) && minute >= self.from) || (on(yesterday) && minute < self.to)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub download_dir: PathBuf,
     pub create_subfolder: bool,
+    /// Changing a torrent's category moves its files to that category's folder.
+    pub move_on_category_change: bool,
     /// 0 = random.
     pub listen_port: u16,
     /// `None` = all interfaces.
@@ -44,11 +84,16 @@ pub struct Settings {
     pub alt_dl_limit_kib: Option<u32>,
     pub alt_ul_limit_kib: Option<u32>,
     pub alt_speed_enabled: bool,
+    pub alt_schedule: AltSchedule,
+    /// `.torrent` files saved here are added automatically.
+    pub watched_folder: Option<PathBuf>,
     /// `socks5://[user:pass@]host:port` for peer connections.
     pub proxy_url: Option<String>,
     pub blocklist_url: Option<String>,
     /// No DHT/LSD/UPnP, generic client name.
     pub anonymous_mode: bool,
+    /// Download from the HTTP servers a torrent lists (BEP 19).
+    pub web_seeds: bool,
     pub mark_of_the_web: bool,
     /// Kill switch.
     pub vpn_required: bool,
@@ -65,6 +110,7 @@ impl Default for Settings {
         Self {
             download_dir: default_download_dir(),
             create_subfolder: true,
+            move_on_category_change: false,
             listen_port: 0,
             listen_address: None,
             transport: Transport::Tcp,
@@ -77,9 +123,12 @@ impl Default for Settings {
             alt_dl_limit_kib: Some(1024),
             alt_ul_limit_kib: Some(256),
             alt_speed_enabled: false,
+            alt_schedule: AltSchedule::default(),
+            watched_folder: None,
             proxy_url: None,
             blocklist_url: None,
             anonymous_mode: false,
+            web_seeds: true,
             mark_of_the_web: true,
             vpn_required: false,
             close_to_tray: true,
@@ -118,6 +167,14 @@ impl Settings {
             (16..=65536).contains(&self.storage.max_open_files),
             "open file limit out of range"
         );
+        let a = &self.alt_schedule;
+        anyhow::ensure!(
+            a.from < 24 * 60 && a.to < 24 * 60 && a.days <= 0x7f,
+            "invalid speed schedule"
+        );
+        if let Some(w) = &self.watched_folder {
+            anyhow::ensure!(w.is_absolute(), "watched folder must be an absolute path");
+        }
         anyhow::ensure!(self.columns.len() <= MAX_COLUMNS, "too many columns");
         let mut seen = std::collections::HashSet::new();
         for c in &self.columns {
@@ -223,5 +280,41 @@ mod tests {
         assert_eq!(s.listen_port, 6881);
         assert!(s.dht);
         assert!(s.columns.is_empty());
+    }
+
+    #[test]
+    fn speed_schedule_windows() {
+        let day = |from, to, days| AltSchedule {
+            enabled: true,
+            from,
+            to,
+            days,
+        };
+        // Weekdays 08:00-20:00.
+        let w = day(8 * 60, 20 * 60, 0b0011111);
+        assert!(w.active(0, 8 * 60));
+        assert!(!w.active(0, 20 * 60));
+        assert!(!w.active(5, 12 * 60));
+        // Friday night 22:00 into Saturday 06:00 only.
+        let n = day(22 * 60, 6 * 60, 1 << 4);
+        assert!(n.active(4, 23 * 60));
+        assert!(n.active(5, 60));
+        assert!(!n.active(5, 23 * 60));
+        assert!(!n.active(4, 60));
+        // from == to: all of every chosen day.
+        let all = day(0, 0, 1 << 6);
+        assert!(all.active(6, 0) && all.active(6, 1439) && !all.active(0, 600));
+
+        let mut s = Settings::default();
+        s.alt_schedule.to = 24 * 60;
+        assert!(s.validate().is_err());
+        let mut s = Settings::default();
+        s.alt_schedule.days = 0x80;
+        assert!(s.validate().is_err());
+        let s = Settings {
+            watched_folder: Some("relative".into()),
+            ..Default::default()
+        };
+        assert!(s.validate().is_err());
     }
 }

@@ -1,12 +1,8 @@
-//! The elevated VPN helper. It does one thing:
-//!
-//! ```text
-//! riptor-vpn-helper openvpn <config-file> <management-port> <management-password-file>
-//! ```
-//!
-//! Its caller is less privileged, so the config is sanitized again and copied
-//! to an admin-only folder before OpenVPN (from its installed path) reads it.
+//! Elevated VPN helper: `openvpn <config> <port|unix> <password-file>` or `wireguard <config>` (Linux).
 #![forbid(unsafe_code)]
+
+#[cfg(target_os = "linux")]
+mod linux;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -20,15 +16,19 @@ mod code {
     pub const BAD_CONFIG: i32 = 3;
     pub const NO_OPENVPN: i32 = 4;
     pub const START_FAILED: i32 = 5;
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub const NO_WIREGUARD: i32 = 6;
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("openvpn") if args.len() == 4 => openvpn(&args[1], &args[2], &args[3]),
+        #[cfg(target_os = "linux")]
+        Some("wireguard") if args.len() == 2 => wireguard(&args[1]),
         _ => {
             eprintln!(
-                "usage: riptor-vpn-helper openvpn <config> <management-port> <password-file>"
+                "usage: riptor-vpn-helper openvpn <config> <management-port | unix> <password-file>"
             );
             std::process::exit(code::USAGE);
         }
@@ -45,16 +45,53 @@ fn fail(code: i32) -> impl FnOnce(anyhow::Error) -> (i32, anyhow::Error) {
     move |e| (code, e)
 }
 
+fn read_small(p: &str, max: usize) -> anyhow::Result<Vec<u8>> {
+    let len = std::fs::metadata(p)?.len() as usize;
+    ensure!(len <= max, "{p} is too large");
+    Ok(std::fs::read(p)?)
+}
+
+/// Where OpenVPN's management interface listens.
+enum Mgmt {
+    Tcp(u16),
+    #[cfg(target_os = "linux")]
+    Unix {
+        uid: u32,
+        path: PathBuf,
+    },
+}
+
+#[cfg(target_os = "linux")]
+fn wireguard(config: &str) -> Res {
+    let raw =
+        read_small(config, riptor_vpn::wg::MAX_PROFILE_BYTES).map_err(fail(code::BAD_CONFIG))?;
+    let sanitized = riptor_vpn::wg::sanitize(&raw).map_err(|e| (code::BAD_CONFIG, e.into()))?;
+    let exe = linux::wg_quick().ok_or_else(|| {
+        (
+            code::NO_WIREGUARD,
+            anyhow::anyhow!("wg-quick is not installed"),
+        )
+    })?;
+    linux::wireguard(&sanitized.config, &exe).map_err(|e| (code::START_FAILED, anyhow::anyhow!(e)))
+}
+
 fn openvpn(config: &str, port: &str, pw_file: &str) -> Res {
-    let port: u16 = port
-        .parse()
-        .ok()
-        .filter(|p| *p >= 1024)
-        .ok_or_else(|| (code::USAGE, anyhow::anyhow!("bad port")))?;
-    let read_small = |p: &str, max: usize| -> anyhow::Result<Vec<u8>> {
-        let len = std::fs::metadata(p)?.len() as usize;
-        ensure!(len <= max, "{p} is too large");
-        Ok(std::fs::read(p)?)
+    let mgmt = match port {
+        #[cfg(target_os = "linux")]
+        "unix" => {
+            let uid = linux::caller_uid().map_err(|e| (code::USAGE, anyhow::anyhow!(e)))?;
+            linux::socket_dir(uid).map_err(|e| (code::START_FAILED, e.into()))?;
+            Mgmt::Unix {
+                uid,
+                path: linux::socket_path(uid),
+            }
+        }
+        p => Mgmt::Tcp(
+            p.parse()
+                .ok()
+                .filter(|p| *p >= 1024)
+                .ok_or_else(|| (code::USAGE, anyhow::anyhow!("bad port")))?,
+        ),
     };
     let raw =
         read_small(config, riptor_vpn::ovpn::MAX_PROFILE_BYTES).map_err(fail(code::BAD_CONFIG))?;
@@ -71,7 +108,8 @@ fn openvpn(config: &str, port: &str, pw_file: &str) -> Res {
 
     let exe = openvpn_exe().map_err(fail(code::NO_OPENVPN))?;
     let dir = private_dir().map_err(fail(code::START_FAILED))?;
-    let tag = format!("{}-{}", std::process::id(), port);
+    stop_previous(&dir, &exe);
+    let tag = std::process::id().to_string();
     let cfg_path = dir.join(format!("riptor-{tag}.ovpn"));
     let pw_path = dir.join(format!("riptor-{tag}.pw"));
     std::fs::write(&cfg_path, sanitized.config).map_err(|e| (code::START_FAILED, e.into()))?;
@@ -79,10 +117,17 @@ fn openvpn(config: &str, port: &str, pw_file: &str) -> Res {
         .map_err(|e| (code::START_FAILED, e.into()))?;
 
     let mut cmd = Command::new(&exe);
-    cmd.arg("--config")
-        .arg(&cfg_path)
-        .args(["--management", "127.0.0.1", &port.to_string()])
-        .arg(&pw_path)
+    cmd.arg("--config").arg(&cfg_path).arg("--management");
+    match &mgmt {
+        Mgmt::Tcp(port) => {
+            cmd.args(["127.0.0.1", &port.to_string()]);
+        }
+        #[cfg(target_os = "linux")]
+        Mgmt::Unix { path, .. } => {
+            cmd.arg(path).arg("unix");
+        }
+    }
+    cmd.arg(&pw_path)
         .args([
             "--management-hold",
             "--management-query-passwords",
@@ -98,24 +143,34 @@ fn openvpn(config: &str, port: &str, pw_file: &str) -> Res {
         // CREATE_NO_WINDOW | DETACHED_PROCESS
         cmd.creation_flags(0x0800_0000 | 0x0000_0008);
     }
-    cmd.spawn()
+    let child = cmd
+        .spawn()
         .map_err(|e| (code::START_FAILED, anyhow::anyhow!("starting OpenVPN: {e}")))?;
+    let _ = std::fs::write(dir.join(PID_FILE), child.id().to_string());
 
-    // Once the port is up OpenVPN has read the files.
-    let started = Instant::now();
-    let ready = loop {
-        if std::net::TcpStream::connect_timeout(
-            &([127, 0, 0, 1], port).into(),
-            Duration::from_millis(300),
-        )
-        .is_ok()
-        {
-            break true;
+    // Once the management interface is up OpenVPN has read the files.
+    let ready = match &mgmt {
+        Mgmt::Tcp(port) => {
+            let started = Instant::now();
+            loop {
+                if std::net::TcpStream::connect_timeout(
+                    &([127, 0, 0, 1], *port).into(),
+                    Duration::from_millis(300),
+                )
+                .is_ok()
+                {
+                    break true;
+                }
+                if started.elapsed() > Duration::from_secs(15) {
+                    break false;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
         }
-        if started.elapsed() > Duration::from_secs(15) {
-            break false;
+        #[cfg(target_os = "linux")]
+        Mgmt::Unix { uid, path } => {
+            linux::claim_socket(path, *uid, Duration::from_secs(15)).is_ok()
         }
-        std::thread::sleep(Duration::from_millis(200));
     };
     let _ = std::fs::remove_file(&pw_path);
     let _ = std::fs::remove_file(&cfg_path);
@@ -126,6 +181,47 @@ fn openvpn(config: &str, port: &str, pw_file: &str) -> Res {
         ));
     }
     Ok(())
+}
+
+const PID_FILE: &str = "openvpn.pid";
+
+/// The OpenVPN we started last time, if Riptor never got to stop it.
+fn stop_previous(dir: &Path, exe: &Path) {
+    let pid_file = dir.join(PID_FILE);
+    let pid = std::fs::read_to_string(&pid_file)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok());
+    let _ = std::fs::remove_file(&pid_file);
+    let Some(pid) = pid else { return };
+    #[cfg(windows)]
+    {
+        let _ = exe;
+        let sys =
+            Path::new(&std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()))
+                .join("System32");
+        let listed = Command::new(sys.join("tasklist.exe"))
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .stderr(Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_ascii_lowercase())
+            .unwrap_or_default();
+        if listed.starts_with("\"openvpn.exe\"") {
+            let _ = Command::new(sys.join("taskkill.exe"))
+                .args(["/PID", &pid.to_string(), "/F"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|p| p == exe) {
+            let _ = Command::new("/bin/kill")
+                .arg(pid.to_string())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
 }
 
 /// Never PATH.

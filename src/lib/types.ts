@@ -48,6 +48,8 @@ export interface TorrentSummary {
   limits: ShareLimits;
   limit_action: ShareLimitAction | null;
   has_executables: boolean;
+  dl_limit_kib: number | null;
+  ul_limit_kib: number | null;
   error: string | null;
 }
 
@@ -144,9 +146,36 @@ export interface ColumnPref {
   width: number | null;
 }
 
+export interface LogLine {
+  /** Unix milliseconds. */
+  time: number;
+  level: "error" | "warn" | "info" | "debug" | "trace";
+  target: string;
+  message: string;
+}
+
+export interface CreateOptions {
+  trackers: string[];
+  web_seeds: string[];
+  private: boolean;
+  comment: string | null;
+  /** null picks one from the total size. */
+  piece_length: number | null;
+}
+
+export interface AltSchedule {
+  enabled: boolean;
+  /** Minutes after midnight, local time. Equal values mean all day. */
+  from: number;
+  to: number;
+  /** Bit 0 = Monday … bit 6 = Sunday. */
+  days: number;
+}
+
 export interface Settings {
   download_dir: string;
   create_subfolder: boolean;
+  move_on_category_change: boolean;
   listen_port: number;
   listen_address: string | null;
   transport: "tcp" | "tcp_and_utp";
@@ -159,9 +188,12 @@ export interface Settings {
   alt_dl_limit_kib: number | null;
   alt_ul_limit_kib: number | null;
   alt_speed_enabled: boolean;
+  alt_schedule: AltSchedule;
+  watched_folder: string | null;
   proxy_url: string | null;
   blocklist_url: string | null;
   anonymous_mode: boolean;
+  web_seeds: boolean;
   mark_of_the_web: boolean;
   /** Kill switch. */
   vpn_required: boolean;
@@ -372,6 +404,11 @@ export interface VpnProfile {
   has_credentials: boolean;
   app_only_supported: boolean;
   created: number;
+}
+
+export interface PublicIp {
+  ip: string;
+  via_vpn: boolean;
 }
 
 export interface VpnPrefs {

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Dialog, Field, Toggle } from "../../components/ui";
 import { api, errorText } from "../../lib/ipc";
 import { formatBytes } from "../../lib/format";
+import { takePreview } from "../../lib/previewCache";
 import type { Preview, Source } from "../../lib/types";
 import { useApp } from "../../stores/app";
 
@@ -44,8 +45,8 @@ export function AddDialog({
       setDefaultPath(s.download_dir);
       setSubfolder(s.create_subfolder);
     });
-    api
-      .preview(source)
+    const cached = takePreview(source);
+    (cached ? Promise.resolve(cached) : api.preview(source))
       .then((p) => {
         if (!alive) return;
         setPreview(p);

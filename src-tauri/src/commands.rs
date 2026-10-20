@@ -101,6 +101,11 @@ pub async fn torrent_magnet(state: State<'_, AppState>, id: String) -> Res<Strin
     engine(&state).await?.magnet_link(&id).map_err(err)
 }
 
+#[tauri::command]
+pub async fn public_ip(state: State<'_, AppState>) -> Res<riptor_core::PublicIp> {
+    engine(&state).await?.public_ip().await.map_err(err)
+}
+
 /// Free space only; nothing else about the path is read.
 #[tauri::command]
 pub async fn free_space(state: State<'_, AppState>, path: PathBuf) -> Res<u64> {
@@ -122,10 +127,26 @@ pub async fn set_category(
     ids: Vec<String>,
     category: Option<String>,
 ) -> Res<()> {
+    let e = engine(&state).await?;
+    e.set_category(&ids, category).map_err(err)?;
+    if e.settings().move_on_category_change {
+        e.move_to_category_folders(&ids).await.map_err(err)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn move_torrents(state: State<'_, AppState>, ids: Vec<String>, path: PathBuf) -> Res<()> {
     engine(&state)
         .await?
-        .set_category(&ids, category)
+        .move_torrents(&ids, &path)
+        .await
         .map_err(err)
+}
+
+#[tauri::command]
+pub async fn recheck_torrents(state: State<'_, AppState>, ids: Vec<String>) -> Res<()> {
+    engine(&state).await?.recheck(&ids).await.map_err(err)
 }
 
 #[tauri::command]
@@ -143,6 +164,19 @@ pub async fn set_share_limits(
     engine(&state)
         .await?
         .set_share_limits(&ids, limits, action)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn set_speed_limits(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+    dl_kib: Option<u32>,
+    ul_kib: Option<u32>,
+) -> Res<()> {
+    engine(&state)
+        .await?
+        .set_speed_limits(&ids, dl_kib, ul_kib)
         .map_err(err)
 }
 
@@ -225,6 +259,38 @@ pub fn open_web_url(app: AppHandle, url: String) -> Res<()> {
 #[tauri::command]
 pub fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+#[tauri::command]
+pub fn recent_logs() -> Vec<crate::logs::LogLine> {
+    crate::logs::recent()
+}
+
+/// Returns the new torrent's id when it was added to seed.
+#[tauri::command]
+pub async fn create_torrent(
+    state: State<'_, AppState>,
+    source: PathBuf,
+    output: PathBuf,
+    options: riptor_core::create::CreateOptions,
+    seed: bool,
+) -> Res<Option<String>> {
+    engine(&state)
+        .await?
+        .create_torrent(source, output, options, seed)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn create_torrent_progress(state: State<'_, AppState>) -> Res<Option<(u64, u64)>> {
+    Ok(engine(&state).await?.create_progress())
+}
+
+#[tauri::command]
+pub async fn create_torrent_cancel(state: State<'_, AppState>) -> Res<()> {
+    engine(&state).await?.cancel_create();
+    Ok(())
 }
 
 #[tauri::command]
@@ -330,9 +396,24 @@ pub async fn search_start(
         let _ = app.emit("riptor://search", ev);
     });
     let s = search(&state)?;
-    // Tracker lookups would bypass the VPN.
+    // Lookups follow the torrents' network.
     if let Some(e) = state.engine.get() {
-        s.hold_lookups(e.network() != riptor_core::NetworkMode::Normal);
+        use riptor_core::NetworkMode;
+        use riptor_search::LookupRoute;
+        s.route_lookups(match e.network() {
+            NetworkMode::Normal => LookupRoute::Direct,
+            NetworkMode::Blocked => LookupRoute::Held,
+            NetworkMode::Vpn(b) => {
+                let r = riptor_core::dns::TunnelResolver::new(
+                    b.local_ip.into(),
+                    &riptor_core::dns::SERVERS,
+                );
+                LookupRoute::Tunnel(riptor_search::scrape::Tunnel {
+                    local: b.local_ip.into(),
+                    lookup: r.hook(),
+                })
+            }
+        });
     }
     s.start(&query, &category, providers, sink)
         .await

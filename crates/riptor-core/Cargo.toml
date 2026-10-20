@@ -8,18 +8,23 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio.workspace = true
 futures.workspace = true
+hickory-resolver = { version = "0.25", default-features = false, features = ["tokio"] }
+librqbit-bencode = "9.0.1"
+librqbit-dht = "9.0.1"
+librqbit-tracker-comms = "9.0.1"
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
 reqwest.workspace = true
 url.workspace = true
+riptor-net = { path = "../riptor-net" }
 bytes.workspace = true
 librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls"] }
 librqbit-core = { version = "9.0.1", default-features = false }
-librqbit-dht = "9.0.1"
 riptor-storage = { path = "../riptor-storage" }
 riptor-seeding = { path = "../riptor-seeding" }
 chacha20poly1305 = "0.10"
@@ -27,6 +32,7 @@ argon2 = "0.6"
 flate2 = "1"
 base64 = "0.23"
 thiserror.workspace = true
+sha1 = "0.10"
 network-interface = "2"
 
 [dev-dependencies]

@@ -1,0 +1,10 @@
+[package]
+name = "riptor-net"
+description = "Address checks shared by Riptor's outgoing connections"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+url.workspace = true

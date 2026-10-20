@@ -1,7 +1,4 @@
-//! WireGuard sanitizing. `PreUp`/`PostUp`/... run shell commands as root and
-//! `SaveConfig` writes the file back, so they're refused. `DNS` is taken out
-//! so the system's DNS is never changed, and `Table = off` is forced. The
-//! Windows client ignores `Table = off`, hence [`app_only_supported`].
+//! WireGuard sanitizing: no hooks, no DNS, `Table = off`.
 
 use std::net::IpAddr;
 
@@ -32,6 +29,16 @@ pub enum WgError {
     NoSection { line: usize },
     #[error("profile needs exactly one [Interface] with a PrivateKey and at least one [Peer]")]
     Structure,
+}
+
+/// The tunnel's IPv4 address from a sanitized config's `Address` line.
+pub fn tunnel_ipv4(config: &str) -> Option<std::net::Ipv4Addr> {
+    config
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("Address"))
+        .filter_map(|rest| rest.trim_start().strip_prefix('='))
+        .flat_map(|v| v.split(','))
+        .find_map(|a| a.trim().split('/').next()?.parse().ok())
 }
 
 pub fn app_only_supported() -> bool {
@@ -268,6 +275,34 @@ mod tests {
         assert_eq!(
             sanitize(format!("[Interface]\nPrivateKey = {KEY}\n").as_bytes()).unwrap_err(),
             WgError::Structure
+        );
+    }
+
+    #[test]
+    fn tunnel_address_is_the_first_ipv4() {
+        assert_eq!(
+            tunnel_ipv4(
+                "[Interface]
+Address = fd00::2/128, 10.2.0.2/32
+"
+            ),
+            Some("10.2.0.2".parse().unwrap())
+        );
+        assert_eq!(
+            tunnel_ipv4(
+                "[Interface]
+Address = fd00::2/128
+"
+            ),
+            None
+        );
+        assert_eq!(
+            tunnel_ipv4(
+                "[Interface]
+Addresses = 10.0.0.1/32
+"
+            ),
+            None
         );
     }
 }

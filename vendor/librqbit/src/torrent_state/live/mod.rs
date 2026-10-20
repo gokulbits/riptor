@@ -217,6 +217,134 @@ pub struct TorrentStateLive {
 }
 
 impl TorrentStateLive {
+    // RIPTOR PATCH: runtime per-torrent limits.
+    pub fn ratelimits(&self) -> &Limits {
+        &self.ratelimits
+    }
+
+    // RIPTOR PATCH: web seeds (BEP 19), as pseudo-peers.
+
+    /// (piece, offset, length)
+    pub fn webseed_acquire(&self, handle: PeerHandle) -> Option<(ValidPieceIndex, u64, u32)> {
+        if self.is_finished() {
+            return None;
+        }
+        let mut g = self.lock_write("webseed_acquire");
+        let TorrentStateLocked {
+            pieces,
+            file_priorities,
+            ..
+        } = &mut **g;
+        let pieces = pieces.as_mut()?;
+        match pieces.acquire_piece(AcquireRequest {
+            peer: handle,
+            peer_avg_time: None,
+            priority_pieces: self.streams.iter_next_pieces(&self.lengths),
+            file_priorities,
+            file_infos: &self.metadata.file_infos,
+            peer_has_piece: |_| true,
+            can_steal: |_| false,
+        }) {
+            AcquireResult::Reserved(p) => Some((
+                p,
+                self.lengths.piece_offset(p),
+                self.lengths.piece_length(p),
+            )),
+            _ => None,
+        }
+    }
+
+    /// `Ok(false)`: failed the hash check or wasn't ours any more.
+    pub fn webseed_piece(
+        &self,
+        handle: PeerHandle,
+        piece: ValidPieceIndex,
+        data: &[u8],
+    ) -> anyhow::Result<bool> {
+        anyhow::ensure!(
+            data.len() as u64 == self.lengths.piece_length(piece) as u64,
+            "web seed returned the wrong amount of data"
+        );
+        if self.cancellation_token.is_cancelled() {
+            return Ok(false);
+        }
+        self.stats
+            .fetched_bytes
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
+        self.session_stats
+            .counters
+            .fetched_bytes
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
+
+        let ppl = {
+            let g = self.lock_read("webseed_check_owner");
+            match g.get_pieces()?.get_inflight(piece) {
+                Some(i) if i.peer == handle => {}
+                _ => return Ok(false),
+            }
+            self.per_piece_locks[piece.get_usize()].read()
+        };
+        let mut started = None;
+        for chunk in self.lengths.iter_chunk_infos(piece) {
+            let start = (chunk.offset) as usize;
+            let block = &data[start..start + chunk.size as usize];
+            let msg = Piece::from_data(piece.get(), chunk.offset, block);
+            self.file_ops().write_chunk(handle, &msg, &chunk)?;
+            let mut g = self.lock_write("webseed_mark_chunk");
+            if let Some(ChunkMarkingResult::Completed) =
+                g.get_pieces_mut()?.mark_chunk_downloaded(&msg)
+            {
+                started = g.get_pieces_mut()?.take_inflight(piece);
+            }
+        }
+        drop(ppl);
+        let Some(elapsed) = started else {
+            return Ok(false);
+        };
+
+        if self.file_ops().check_piece(piece)? {
+            self.lock_write("webseed_hash_ok")
+                .get_pieces_mut()?
+                .mark_piece_hash_ok(piece);
+            // Flush before it counts towards progress.
+            self.on_piece_completed(piece)?;
+            let len = self.lengths.piece_length(piece) as u64;
+            self.stats
+                .downloaded_and_checked_bytes
+                .fetch_add(len, Ordering::Release);
+            self.stats
+                .downloaded_and_checked_pieces
+                .fetch_add(1, Ordering::Release);
+            self.stats.have_bytes.fetch_add(len, Ordering::Relaxed);
+            #[allow(clippy::cast_possible_truncation)]
+            self.stats
+                .total_piece_download_ms
+                .fetch_add(elapsed.as_millis() as u64, Ordering::Relaxed);
+            self.transmit_haves(piece);
+            Ok(true)
+        } else {
+            self.lock_write("webseed_hash_failed")
+                .get_pieces_mut()?
+                .mark_piece_hash_failed(piece);
+            self.new_pieces_notify.notify_waiters();
+            Ok(false)
+        }
+    }
+
+    /// Finished, or the torrent stopped running.
+    pub fn webseed_done(&self) -> bool {
+        self.is_finished() || self.cancellation_token.is_cancelled()
+    }
+
+    /// Gives back everything `handle` had reserved (fetch failed or stopping).
+    pub fn webseed_release(&self, handle: PeerHandle) {
+        if let Ok(p) = self.lock_write("webseed_release").get_pieces_mut() {
+            if p.release_pieces_owned_by(handle) > 0 {
+                self.new_pieces_notify.notify_waiters();
+            }
+        }
+    }
+
     pub(crate) fn new(
         paused: TorrentStatePaused,
         fatal_errors_tx: tokio::sync::oneshot::Sender<anyhow::Error>,

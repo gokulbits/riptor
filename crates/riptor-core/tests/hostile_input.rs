@@ -1,0 +1,164 @@
+//! Hostile input must be refused, never panic. Seeded, so failures reproduce.
+
+use std::net::Ipv4Addr;
+
+use rand::{RngExt, SeedableRng};
+use riptor_core::create::{create, CreateOptions, Progress};
+use riptor_core::{Engine, EngineConfig, Settings, Source};
+
+/// Runs `f` on a thread with a small stack, like a busy worker thread.
+fn on_small_stack(f: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(f)
+        .unwrap()
+        .join()
+        .expect("parser panicked or overflowed");
+}
+
+fn nested(depth: usize) -> Vec<u8> {
+    let mut b = b"d1:x".to_vec();
+    b.extend(std::iter::repeat_n(b'l', depth));
+    b.extend(std::iter::repeat_n(b'e', depth));
+    b.extend_from_slice(b"4:infod6:lengthi1e4:name1:x12:piece lengthi16384e6:pieces20:");
+    b.extend_from_slice(&[0u8; 20]);
+    b.extend_from_slice(b"ee");
+    b
+}
+
+#[test]
+fn deep_nesting_is_refused() {
+    on_small_stack(|| {
+        // Legit torrents nest a few levels; this is far past the cap.
+        for depth in [100, 10_000, 1_000_000] {
+            let b = nested(depth);
+            assert!(librqbit::torrent_from_bytes(&b).is_err(), "depth {depth}");
+            assert!(librqbit_bencode::dyn_from_bytes::<Vec<u8>>(&b).is_err());
+        }
+        // A shallow one still parses.
+        assert!(librqbit::torrent_from_bytes(&nested(3)).is_ok());
+    });
+}
+
+fn sample_torrent() -> Vec<u8> {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("files");
+    std::fs::create_dir_all(src.join("sub")).unwrap();
+    std::fs::write(src.join("a.bin"), vec![1u8; 50_000]).unwrap();
+    std::fs::write(src.join("sub").join("b.txt"), b"hello").unwrap();
+    create(
+        &src,
+        &CreateOptions {
+            trackers: vec!["https://t.example/announce".into()],
+            web_seeds: vec!["https://w.example/".into()],
+            piece_length: Some(16 * 1024),
+            ..Default::default()
+        },
+        &Progress::default(),
+    )
+    .unwrap()
+}
+
+fn mutate(rng: &mut rand::rngs::StdRng, base: &[u8]) -> Vec<u8> {
+    let mut b = base.to_vec();
+    for _ in 0..rng.random_range(1..6) {
+        if b.is_empty() {
+            break;
+        }
+        let i = rng.random_range(0..b.len());
+        match rng.random_range(0..5) {
+            0 => b[i] = rng.random(),
+            1 => b.truncate(i),
+            2 => b.insert(i, b"0123456789:ldie-"[rng.random_range(0..16)]),
+            3 => {
+                b.remove(i);
+            }
+            _ => {
+                // Huge length prefixes and integers.
+                let digits = b"99999999999999999999";
+                b.splice(i..i, digits.iter().copied());
+            }
+        }
+    }
+    b
+}
+
+#[test]
+fn mutated_torrents_never_panic() {
+    let base = sample_torrent();
+    on_small_stack(move || {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        for _ in 0..5_000 {
+            let b = mutate(&mut rng, &base);
+            let _ = librqbit::torrent_from_bytes(&b);
+            let _ = librqbit_bencode::dyn_from_bytes::<Vec<u8>>(&b);
+        }
+    });
+}
+
+/// The whole add-dialog path, file to preview, on mutated torrents.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn previews_of_mutated_torrents_fail_cleanly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().join("data");
+    riptor_core::state_file::save(
+        &data_dir.join("settings.json"),
+        &Settings {
+            download_dir: tmp.path().join("downloads"),
+            dht: false,
+            lsd: false,
+            upnp: false,
+            listen_address: Some(Ipv4Addr::LOCALHOST.into()),
+            ..Settings::default()
+        },
+    )
+    .unwrap();
+    let engine = Engine::start(EngineConfig { data_dir }).await.unwrap();
+    let base = sample_torrent();
+    let mut rng = rand::rngs::StdRng::seed_from_u64(11);
+    let file = tmp.path().join("t.torrent");
+    let mut ok = 0;
+    for _ in 0..300 {
+        std::fs::write(&file, mutate(&mut rng, &base)).unwrap();
+        if let Ok(p) = engine.preview(Source::File(file.clone())).await {
+            ok += 1;
+            for f in &p.files {
+                assert!(!f.path.contains(".."), "{}", f.path);
+            }
+        }
+    }
+    // Most mutations break the info hash or structure; a few survive.
+    assert!(ok < 300);
+    std::fs::write(&file, nested(50_000)).unwrap();
+    assert!(engine.preview(Source::File(file)).await.is_err());
+    engine.shutdown().await.unwrap();
+}
+
+#[test]
+fn backups_refuse_garbage_and_tampering() {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(3);
+    for len in [0, 1, 8, 31, 64, 4096] {
+        let mut b = vec![0u8; len];
+        rng.fill(&mut b[..]);
+        assert!(riptor_core::backup::open(&b, None).is_err());
+        assert!(riptor_core::backup::open(&b, Some("password1")).is_err());
+    }
+    let payload = riptor_core::backup::BackupPayload {
+        created: 1,
+        app_version: "test".into(),
+        settings: Settings::default(),
+        categories: Default::default(),
+        torrents: Vec::new(),
+        statistics: Default::default(),
+    };
+    for pw in [None, Some("correct horse")] {
+        let sealed = riptor_core::backup::seal(&payload, pw).unwrap();
+        assert!(riptor_core::backup::open(&sealed, pw).is_ok());
+        for _ in 0..500 {
+            let m = mutate(&mut rng, &sealed);
+            if m != sealed {
+                assert!(riptor_core::backup::open(&m, pw).is_err());
+            }
+        }
+    }
+}

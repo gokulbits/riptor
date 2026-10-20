@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import type { ColumnPref, GlobalStats, Source, TorrentState, TorrentSummary } from "../lib/types";
+import { api, errorText } from "../lib/ipc";
+import type { ColumnPref, GlobalStats, PublicIp, Source, TorrentState, TorrentSummary, VpnStatus } from "../lib/types";
 
 export type StatusFilter =
   | "all"
@@ -97,6 +98,10 @@ interface AppState {
   /** From settings; null until loaded. */
   columnPrefs: ColumnPref[] | null;
   setColumnPrefs: (c: ColumnPref[]) => void;
+  vpn: VpnStatus | null;
+  setVpn: (v: VpnStatus) => void;
+  publicIp: { value: PublicIp | null; error: string | null; loading: boolean };
+  refreshPublicIp: () => void;
   theme: Theme;
   accent: string;
   pendingAdds: Source[];
@@ -142,6 +147,17 @@ export const useApp = create<AppState>()((set, get) => ({
   view: "transfers",
   columnPrefs: null,
   setColumnPrefs: (columnPrefs) => set({ columnPrefs }),
+  vpn: null,
+  setVpn: (vpn) => set({ vpn }),
+  publicIp: { value: null, error: null, loading: false },
+  refreshPublicIp: () => {
+    if (get().publicIp.loading) return;
+    set((s) => ({ publicIp: { ...s.publicIp, loading: true } }));
+    api
+      .publicIp()
+      .then((value) => set({ publicIp: { value, error: null, loading: false } }))
+      .catch((e) => set({ publicIp: { value: null, error: errorText(e), loading: false } }));
+  },
   theme: loadPref("riptor.theme", "system"),
   accent: loadPref("riptor.accent", "theme"),
   pendingAdds: [],

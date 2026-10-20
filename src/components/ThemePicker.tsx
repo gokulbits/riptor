@@ -8,7 +8,7 @@ import { useApp } from "../stores/app";
 function Swatch({ t }: { t: ThemeDef }) {
   const c = (k: keyof ThemeDef["tokens"]) => `rgb(${t.tokens[k]})`;
   return (
-    <span className="flex h-6 w-10 shrink-0 overflow-hidden rounded border" style={{ borderColor: c("border"), background: c("bg") }}>
+    <span className="flex h-6 w-10 shrink-0 overflow-hidden rounded-sm border" style={{ borderColor: c("border"), background: c("bg") }}>
       <span className="w-3" style={{ background: c("panel") }} />
       <span className="flex flex-1 flex-col justify-center gap-0.5 px-1">
         <span className="h-1 rounded-full" style={{ background: c("accent") }} />
@@ -43,7 +43,7 @@ export function ThemePicker() {
       role="menuitemradio"
       aria-checked={theme === id}
       onClick={() => setTheme(id)}
-      className="flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-left text-[13px] hover:bg-raised"
+      className="flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-raised"
     >
       {preview}
       <span className="flex-1">{label}</span>
@@ -62,7 +62,7 @@ export function ThemePicker() {
           {row(
             "system",
             "Follow system",
-            <span className="flex h-6 w-10 items-center justify-center rounded border border-border">
+            <span className="flex h-6 w-10 items-center justify-center rounded-sm border border-border">
               <Monitor size={13} />
             </span>,
           )}
@@ -79,7 +79,7 @@ export function ThemePicker() {
                 className={clsx(
                   "h-6 w-6 rounded-full border-2 transition-transform hover:scale-110",
                   accent === a.id ? "border-fg" : "border-transparent",
-                  a.id === "theme" && "bg-gradient-to-br from-accent to-raised",
+                  a.id === "theme" && "bg-linear-to-br/srgb from-accent to-raised",
                 )}
                 style={a.rgb ? { background: `rgb(${a.rgb})` } : undefined}
               />

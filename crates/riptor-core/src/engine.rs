@@ -33,12 +33,15 @@ use crate::network::NetworkMode;
 use crate::reveal::{reveal_target, RevealTarget};
 use crate::settings::{Settings, Transport};
 use crate::stats::{self, Statistics, StatsReport};
-use crate::{backup, motw, paths, state_file};
+use crate::{backup, motw, paths, state_file, webseed};
 
 const TICK: Duration = Duration::from_secs(1);
 const PERSIST_EVERY_TICKS: u64 = 15;
 const METADATA_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_PENDING_PREVIEWS: usize = 32;
+const WATCH_EVERY_TICKS: u64 = 5;
+
+type WebSeedInfo = (Arc<webseed::Layout>, Vec<url::Url>);
 
 pub struct EngineConfig {
     pub data_dir: PathBuf,
@@ -89,6 +92,16 @@ pub struct Engine {
     statistics: Mutex<Statistics>,
     session_tally: Mutex<SessionTally>,
     last_tick_data: Mutex<(Vec<TorrentSummary>, GlobalStats)>,
+    web_seeds: Mutex<HashMap<Id20, webseed::Running>>,
+    /// What each torrent's metadata says about web seeds; `None` = none usable.
+    web_seed_info: Mutex<HashMap<Id20, Option<WebSeedInfo>>>,
+    /// Built for the current network mode.
+    web_seed_http: Mutex<Option<reqwest::Client>>,
+    allow_local_web_seeds: AtomicBool,
+    /// Whether the speed schedule was in its window at the last check.
+    alt_window: Mutex<Option<bool>>,
+    /// The torrent being created, if any.
+    creating: Mutex<Option<Arc<crate::create::Progress>>>,
 }
 
 #[derive(Default)]
@@ -168,6 +181,19 @@ impl Engine {
             }
         }
 
+        let known: HashSet<String> = records
+            .values()
+            .map(|r| r.info_hash.to_ascii_lowercase())
+            .collect();
+        match crate::session_db::prune(&data_dir.join("session"), &known) {
+            Ok(gone) => {
+                for h in gone {
+                    info!("removed leftover session entry {h} (no Riptor record)");
+                }
+            }
+            Err(e) => warn!("couldn't tidy the session folder: {e:#}"),
+        }
+
         let network = if settings.vpn_required {
             NetworkMode::Blocked
         } else {
@@ -200,6 +226,12 @@ impl Engine {
                 ..Default::default()
             }),
             last_tick_data: Mutex::new(Default::default()),
+            web_seeds: Mutex::new(HashMap::new()),
+            web_seed_info: Mutex::new(HashMap::new()),
+            web_seed_http: Mutex::new(None),
+            allow_local_web_seeds: AtomicBool::new(false),
+            alt_window: Mutex::new(None),
+            creating: Mutex::new(None),
         });
         engine.apply_limits();
         engine.forget_orphans().await;
@@ -228,8 +260,7 @@ impl Engine {
         });
     }
 
-    /// Without our record we don't know where its files are safe to go, so
-    /// drop it (files untouched).
+    /// No record means we don't know where its files belong. Files are kept.
     async fn forget_orphans(&self) {
         let session = self.session();
         let known: HashSet<Id20> = self.records.read().keys().copied().collect();
@@ -490,6 +521,8 @@ impl Engine {
                     Intent::Started
                 },
                 has_executables: p.has_executables,
+                dl_limit_kib: None,
+                ul_limit_kib: None,
             },
         );
         drop(records);
@@ -554,6 +587,7 @@ impl Engine {
 
     async fn remove_one(&self, hash: Id20, delete_files: bool) -> anyhow::Result<()> {
         let _g = self.admin.lock().await;
+        self.web_seeds.lock().remove(&hash);
         let result = self
             .session()
             .delete(TorrentIdOrHash::Hash(hash), delete_files)
@@ -568,6 +602,164 @@ impl Engine {
             id: hash.as_string(),
         });
         result
+    }
+
+    /// Moves each torrent's files under `dest`; a torrent's own folder comes along.
+    pub async fn move_torrents(&self, ids: &[String], dest: &Path) -> anyhow::Result<()> {
+        self.check_root(dest)?;
+        for id in ids {
+            self.reattach(parse_hash(id)?, Some(dest)).await?;
+        }
+        Ok(())
+    }
+
+    /// Moves torrents into their category's folder (or the default one).
+    pub async fn move_to_category_folders(&self, ids: &[String]) -> anyhow::Result<()> {
+        let download_dir = self.settings.read().download_dir.clone();
+        for id in ids {
+            let hash = parse_hash(id)?;
+            let Some(rec) = self.records.read().get(&hash).cloned() else {
+                continue;
+            };
+            let target = rec
+                .category
+                .as_ref()
+                .and_then(|c| self.categories.read().get(c).cloned().flatten())
+                .unwrap_or_else(|| download_dir.clone());
+            let base = if rec.owned_root {
+                rec.root.parent().map(Path::to_path_buf)
+            } else {
+                Some(rec.root.clone())
+            };
+            if base.as_deref() != Some(target.as_path()) {
+                self.check_root(&target)?;
+                self.reattach(hash, Some(&target)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks every piece on disk again.
+    pub async fn recheck(&self, ids: &[String]) -> anyhow::Result<()> {
+        for id in ids {
+            self.reattach(parse_hash(id)?, None).await?;
+        }
+        Ok(())
+    }
+
+    /// Remove, maybe move, re-add. Always ends in a full recheck.
+    async fn reattach(&self, hash: Id20, dest: Option<&Path>) -> anyhow::Result<()> {
+        let _g = self.admin.lock().await;
+        let rec = self
+            .records
+            .read()
+            .get(&hash)
+            .cloned()
+            .context("unknown torrent")?;
+        let new_root = match dest {
+            None => rec.root.clone(),
+            Some(d) if rec.owned_root => {
+                d.join(rec.root.file_name().context("torrent folder has no name")?)
+            }
+            Some(d) => d.to_path_buf(),
+        };
+        if dest.is_some() {
+            if new_root == rec.root {
+                return Ok(());
+            }
+            ensure!(
+                !(rec.owned_root && new_root.starts_with(&rec.root)),
+                "can't move a torrent's folder into itself"
+            );
+            self.check_root(&new_root)?;
+        }
+
+        let old = TorrentRoot {
+            path: rec.root.clone(),
+            owned: rec.owned_root,
+        };
+        let t = self.handle(&hash)?;
+        let (bytes, files, dirs) = t.with_metadata(|m| -> anyhow::Result<_> {
+            let layout = layout_for(&old, m)?;
+            let files: Vec<PathBuf> = layout
+                .files
+                .iter()
+                .filter(|f| !f.padding)
+                .map(|f| f.path.clone())
+                .collect();
+            Ok((
+                m.torrent_bytes.clone(),
+                files,
+                layout.subdirs_deepest_first(),
+            ))
+        })??;
+        let only_files = t.only_files();
+        let trackers: Vec<String> = t.shared().trackers.iter().map(|u| u.to_string()).collect();
+
+        let session = self.session();
+        self.web_seeds.lock().remove(&hash);
+        if !t.is_paused() {
+            session.pause(&t).await?;
+        }
+        drop(t);
+        session
+            .delete(TorrentIdOrHash::Hash(hash), false)
+            .await
+            .context("taking the torrent out of the session")?;
+        self.runtime.lock().remove(&hash);
+
+        let mut root = rec.root.clone();
+        let mut moved = Ok(());
+        if dest.is_some() {
+            let pairs: Vec<(PathBuf, PathBuf)> = files
+                .iter()
+                .map(|f| {
+                    let rel = f.strip_prefix(&rec.root).unwrap_or(f);
+                    (f.clone(), new_root.join(rel))
+                })
+                .collect();
+            moved = tokio::task::spawn_blocking(move || crate::relocate::move_files(&pairs))
+                .await
+                .context("move task failed")?
+                .map(|_| ());
+            if moved.is_ok() {
+                let mut leftovers = dirs;
+                if rec.owned_root {
+                    leftovers.push(rec.root.clone());
+                }
+                crate::relocate::remove_empty_dirs(leftovers);
+                root = new_root;
+            }
+        }
+
+        self.factory.register(
+            hash,
+            TorrentRoot {
+                path: root.clone(),
+                owned: rec.owned_root,
+            },
+        );
+        let opts = AddTorrentOptions {
+            paused: true, // the queue decides when it runs again
+            overwrite: true,
+            output_folder: Some(
+                root.to_str()
+                    .context("folder path is not valid Unicode")?
+                    .to_string(),
+            ),
+            only_files,
+            trackers: (!trackers.is_empty()).then_some(trackers),
+            ..Default::default()
+        };
+        let added = session
+            .add_torrent(AddTorrent::from_bytes(bytes), Some(opts))
+            .await;
+        if let Some(r) = self.records.write().get_mut(&hash) {
+            r.root = root;
+        }
+        self.persist_now()?;
+        added.context("adding the torrent back")?;
+        moved
     }
 
     pub async fn set_files(&self, id: &str, only_files: Vec<usize>) -> anyhow::Result<()> {
@@ -607,6 +799,26 @@ impl Engine {
         self.edit_records(ids, |r| {
             r.limits = limits;
             r.limit_action = action;
+        })
+    }
+
+    /// KiB/s each; `None` or 0 removes the torrent's own limit.
+    pub fn set_speed_limits(
+        &self,
+        ids: &[String],
+        dl_kib: Option<u32>,
+        ul_kib: Option<u32>,
+    ) -> anyhow::Result<()> {
+        const MAX_KIB: u32 = 4 * 1024 * 1024;
+        let norm = |v: Option<u32>| v.filter(|k| *k > 0);
+        let (dl, ul) = (norm(dl_kib), norm(ul_kib));
+        ensure!(
+            dl.is_none_or(|k| k <= MAX_KIB) && ul.is_none_or(|k| k <= MAX_KIB),
+            "speed limit too high"
+        );
+        self.edit_records(ids, |r| {
+            r.dl_limit_kib = dl;
+            r.ul_limit_kib = ul;
         })
     }
 
@@ -752,6 +964,22 @@ impl Engine {
         ))
     }
 
+    /// The address peers see.
+    pub async fn public_ip(&self) -> anyhow::Result<PublicIp> {
+        let (local, via_vpn) = match self.network() {
+            NetworkMode::Normal => (None, false),
+            NetworkMode::Vpn(b) => (Some(std::net::IpAddr::V4(b.local_ip)), true),
+            NetworkMode::Blocked => {
+                anyhow::bail!("the kill switch is holding traffic until the VPN connects")
+            }
+        };
+        let ip = crate::public_ip::lookup(local).await?;
+        Ok(PublicIp {
+            ip: ip.to_string(),
+            via_vpn,
+        })
+    }
+
     /// Free space where `folder` would be created; it may not exist yet.
     pub fn free_space(&self, folder: &Path) -> anyhow::Result<u64> {
         anyhow::ensure!(folder.is_absolute(), "not an absolute path");
@@ -803,7 +1031,13 @@ impl Engine {
     pub async fn update_settings(&self, new: Settings) -> anyhow::Result<()> {
         new.validate()?;
         self.check_root(&new.download_dir)?;
+        if let Some(w) = &new.watched_folder {
+            self.check_root(w)?;
+        }
         let old = self.settings();
+        if old.alt_schedule != new.alt_schedule {
+            *self.alt_window.lock() = None;
+        }
         state_file::save(&self.data_dir.join("settings.json"), &new)?;
         *self.settings.write() = new.clone();
         self.storage.reconfigure(new.storage.clone());
@@ -853,6 +1087,8 @@ impl Engine {
 
     async fn restart_session(&self) -> anyhow::Result<()> {
         let _g = self.admin.lock().await;
+        self.web_seeds.lock().clear();
+        *self.web_seed_http.lock() = None;
         let old = self.session();
         old.stop().await;
         let settings = self.settings();
@@ -881,6 +1117,76 @@ impl Engine {
         let stats = self.statistics.lock().clone();
         state_file::save(&self.data_dir.join("statistics.json"), &stats)?;
         state_file::save(&self.data_dir.join("torrents.json"), &self.snapshot_state())
+    }
+
+    // -------------------------------------------------------------- create
+
+    /// With `seed`, it's added and seeds from where the files are.
+    pub async fn create_torrent(
+        &self,
+        source: PathBuf,
+        output: PathBuf,
+        opts: crate::create::CreateOptions,
+        seed: bool,
+    ) -> anyhow::Result<Option<String>> {
+        opts.validate()?;
+        ensure!(source.is_absolute(), "source must be an absolute path");
+        self.check_root(&source)?;
+        ensure!(
+            output.is_absolute()
+                && output
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("torrent")),
+            "the new file must be a .torrent"
+        );
+        let out_dir = output.parent().context("no folder for the new file")?;
+        self.check_root(out_dir)?;
+        ensure!(
+            !output.starts_with(&source),
+            "save the .torrent outside the folder it describes"
+        );
+
+        let progress = Arc::new(crate::create::Progress::default());
+        {
+            let mut c = self.creating.lock();
+            ensure!(c.is_none(), "a torrent is already being created");
+            *c = Some(progress.clone());
+        }
+        let src = source.clone();
+        let p = progress.clone();
+        let made =
+            tokio::task::spawn_blocking(move || crate::create::create(&src, &opts, &p)).await;
+        *self.creating.lock() = None;
+        let bytes = made.context("hashing stopped unexpectedly")??;
+        state_file::save_bytes(&output, &bytes)?;
+        info!("created {}", output.display());
+        if !seed {
+            return Ok(None);
+        }
+        let params = AddParams {
+            save_path: source.parent().map(Path::to_path_buf),
+            create_subfolder: Some(true),
+            ..Default::default()
+        };
+        self.add_direct(Source::File(output), params)
+            .await
+            .map(Some)
+    }
+
+    /// (hashed, total) bytes of the torrent being created.
+    pub fn create_progress(&self) -> Option<(u64, u64)> {
+        self.creating.lock().as_ref().map(|p| {
+            (
+                p.done.load(Ordering::Relaxed),
+                p.total.load(Ordering::Relaxed),
+            )
+        })
+    }
+
+    pub fn cancel_create(&self) {
+        if let Some(p) = self.creating.lock().as_ref() {
+            p.cancel.store(true, Ordering::Relaxed);
+        }
     }
 
     // -------------------------------------------------------------- backup
@@ -1180,6 +1486,7 @@ impl Engine {
         let mut views = Vec::with_capacity(handles.len());
         let mut summaries = Vec::with_capacity(handles.len());
         let mut by_id: HashMap<usize, (Id20, Arc<ManagedTorrent>)> = HashMap::new();
+        let mut web_wanted = Vec::new();
         let mut finished = Vec::new();
         let (mut sum_dd, mut sum_ud, mut sum_waste) = (0u64, 0u64, 0u64);
         let mut global = GlobalStats {
@@ -1199,6 +1506,9 @@ impl Engine {
                     continue;
                 };
                 let stats = h.stats();
+                if let Some(live) = h.live() {
+                    apply_speed_limits(live.ratelimits(), rec.dl_limit_kib, rec.ul_limit_kib);
+                }
                 let r = rt.entry(hash).or_default();
                 let running = matches!(stats.state, TorrentStatsState::Live);
                 let (fetched, uploaded, checked, peers, seen) = stats
@@ -1304,6 +1614,11 @@ impl Engine {
                     limit_action: rec.limit_action,
                 });
                 summaries.push(summarize(rec, &stats, r, peers, seen));
+                if running && !stats.finished {
+                    if let Some(live) = h.live() {
+                        web_wanted.push((hash, h.clone(), live));
+                    }
+                }
                 by_id.insert(h.id(), (hash, h.clone()));
             }
         }
@@ -1324,6 +1639,8 @@ impl Engine {
             st.total_uptime_secs += whole as u64;
             t.uptime -= whole;
         }
+
+        self.sync_web_seeds(&session, web_wanted);
 
         for (hash, name, downloaded) in finished {
             let _ = self.events.send(Event::Finished {
@@ -1379,6 +1696,172 @@ impl Engine {
                 warn!("saving torrent state failed: {e:#}");
             }
         }
+        if n % 15 == 0 {
+            self.follow_alt_schedule();
+        }
+        if n % WATCH_EVERY_TICKS == 0 {
+            self.scan_watched_folder().await;
+        }
+    }
+
+    /// Only acts when the window opens or closes, so manual toggles stick.
+    fn follow_alt_schedule(&self) {
+        use chrono::{Datelike, Timelike};
+        let sched = self.settings.read().alt_schedule;
+        if !sched.enabled {
+            *self.alt_window.lock() = None;
+            return;
+        }
+        let now = chrono::Local::now();
+        let inside = sched.active(
+            now.weekday().num_days_from_monday(),
+            (now.hour() * 60 + now.minute()) as u16,
+        );
+        if self.alt_window.lock().replace(inside) == Some(inside) {
+            return;
+        }
+        if self.settings.read().alt_speed_enabled != inside {
+            match self.set_alt_speed(inside) {
+                Ok(()) => info!(
+                    "speed schedule: alternative limits {}",
+                    if inside { "on" } else { "off" }
+                ),
+                Err(e) => warn!("speed schedule: {e:#}"),
+            }
+        }
+    }
+
+    async fn scan_watched_folder(&self) {
+        let Some(dir) = self.settings.read().watched_folder.clone() else {
+            return;
+        };
+        let found = tokio::task::spawn_blocking(move || crate::watch::scan(&dir))
+            .await
+            .unwrap_or_default();
+        for path in found {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let added = match self.preview(Source::File(path.clone())).await {
+                Ok(p) if p.already_added => Ok(()),
+                Ok(p) => self
+                    .add(AddParams {
+                        info_hash: p.info_hash,
+                        ..Default::default()
+                    })
+                    .await
+                    .map(|_| ()),
+                Err(e) => Err(e),
+            };
+            match &added {
+                Ok(()) => info!("added {name} from the watched folder"),
+                Err(e) => {
+                    warn!("watched folder: {name}: {e:#}");
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!("Couldn't add {name} from the watched folder: {e:#}"),
+                    );
+                }
+            }
+            if let Err(e) = crate::watch::mark(&path, added.is_ok()) {
+                // Without the rename it would be retried forever.
+                warn!("watched folder: can't rename {name}: {e}; stopping the scan");
+                self.notice(
+                    NoticeLevel::Warning,
+                    format!("Can't rename {name} in the watched folder, so watching is off. Check the folder's permissions, then choose it again in Settings."),
+                );
+                self.settings.write().watched_folder = None;
+                return;
+            }
+        }
+    }
+
+    /// Workers that gave up stay off until the torrent restarts.
+    fn sync_web_seeds(
+        &self,
+        session: &Arc<Session>,
+        wanted: Vec<(Id20, Arc<ManagedTorrent>, Arc<librqbit::TorrentStateLive>)>,
+    ) {
+        let net = self.network.read().clone();
+        let local = match &net {
+            NetworkMode::Normal => None,
+            NetworkMode::Vpn(v) => Some(std::net::IpAddr::V4(v.local_ip)),
+            NetworkMode::Blocked => {
+                self.web_seeds.lock().clear();
+                return;
+            }
+        };
+        let mut running = self.web_seeds.lock();
+        let s = self.settings.read();
+        // They'd bypass the proxy, and the client name shows in requests.
+        let off = !s.web_seeds || s.proxy_url.is_some() || s.anonymous_mode;
+        drop(s);
+        if off {
+            running.clear();
+            return;
+        }
+        let keep: HashSet<Id20> = wanted.iter().map(|w| w.0).collect();
+        running.retain(|h, _| keep.contains(h));
+        if wanted
+            .iter()
+            .all(|(h, _, live)| running.get(h).is_some_and(|r| r.is_for(live)))
+        {
+            return;
+        }
+        let allow_local = self.allow_local_web_seeds.load(Ordering::Relaxed);
+        let http = {
+            let mut c = self.web_seed_http.lock();
+            if c.is_none() {
+                match webseed::client(local, allow_local) {
+                    Ok(client) => *c = Some(client),
+                    Err(e) => {
+                        warn!("web seeds unavailable: {e:#}");
+                        return;
+                    }
+                }
+            }
+            c.clone().expect("just set")
+        };
+        let mut info = self.web_seed_info.lock();
+        info.retain(|h, _| self.records.read().contains_key(h));
+        for (hash, h, live) in wanted {
+            if running.get(&hash).is_some_and(|r| r.is_for(&live)) {
+                continue;
+            }
+            let found = info.entry(hash).or_insert_with(|| {
+                h.with_metadata(|m| {
+                    let seeds = webseed::url_list(&m.torrent_bytes);
+                    if seeds.is_empty()
+                        || m.info.lengths().default_piece_length() > webseed::MAX_PIECE
+                    {
+                        return None;
+                    }
+                    let multi = m.info.info().files.is_some();
+                    webseed::Layout::new(&m.info, multi).map(|l| (Arc::new(l), seeds))
+                })
+                .ok()
+                .flatten()
+            });
+            let Some((layout, seeds)) = found.clone() else {
+                continue;
+            };
+            let job = webseed::Job {
+                live,
+                layout,
+                http: http.clone(),
+                session: session.clone(),
+                allow_local,
+            };
+            running.insert(hash, webseed::start(job, &seeds));
+        }
+    }
+
+    /// Tests only: lets web seeds on 127.0.0.1 through.
+    #[doc(hidden)]
+    pub fn allow_local_web_seeds(&self) {
+        self.allow_local_web_seeds.store(true, Ordering::Relaxed);
+        *self.web_seed_http.lock() = None;
     }
 
     async fn apply(
@@ -1531,6 +2014,8 @@ fn summarize(
         limits: rec.limits,
         limit_action: rec.limit_action,
         has_executables: rec.has_executables,
+        dl_limit_kib: rec.dl_limit_kib,
+        ul_limit_kib: rec.ul_limit_kib,
         error: stats.error.clone(),
     }
 }
@@ -1550,6 +2035,10 @@ async fn build_session(
     let listen_ip = vpn
         .map(|v| std::net::IpAddr::V4(v.local_ip))
         .or(s.listen_address);
+    // On the VPN, tracker and DHT lookups go through the tunnel too.
+    let resolver =
+        vpn.map(|v| crate::dns::TunnelResolver::new(v.local_ip.into(), &crate::dns::SERVERS));
+    crate::dns::install(resolver.as_ref());
     let dht = (s.dht && !anon && !blocked).then(|| DhtSessionConfig {
         persistence: Some(DhtPersistenceConfig {
             config_filename: Some(data_dir.join("dht.json")),
@@ -1594,6 +2083,7 @@ async fn build_session(
             NetworkMode::Normal => None,
         },
         bind_local_ip: vpn.map(|v| v.local_ip.into()),
+        dns_resolver: resolver.as_ref().map(crate::dns::TunnelResolver::hook),
         ipv4_only: vpn.is_some(),
         default_storage_factory: Some(factory.clone().into_boxed()),
         ratelimits: LimitsConfig {
@@ -1680,5 +2170,32 @@ fn summarize_backup(p: &backup::BackupPayload, protected: bool) -> BackupSummary
         categories: p.categories.len(),
         all_time_upload: p.statistics.all_time_upload,
         all_time_download: p.statistics.all_time_download,
+    }
+}
+
+/// Only touches the limiter when the setting changed.
+fn apply_speed_limits(l: &librqbit::limits::Limits, dl_kib: Option<u32>, ul_kib: Option<u32>) {
+    let (dl, ul) = (kib(dl_kib), kib(ul_kib));
+    if l.get_download_bps() != dl {
+        l.set_download_bps(dl);
+    }
+    if l.get_upload_bps() != ul {
+        l.set_upload_bps(ul);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speed_limits_reach_the_live_limiter() {
+        let l = librqbit::limits::Limits::new(Default::default());
+        apply_speed_limits(&l, Some(512), Some(64));
+        assert_eq!(l.get_download_bps().map(|v| v.get()), Some(512 * 1024));
+        assert_eq!(l.get_upload_bps().map(|v| v.get()), Some(64 * 1024));
+        apply_speed_limits(&l, None, Some(64));
+        assert_eq!(l.get_download_bps(), None);
+        assert_eq!(l.get_upload_bps().map(|v| v.get()), Some(64 * 1024));
     }
 }

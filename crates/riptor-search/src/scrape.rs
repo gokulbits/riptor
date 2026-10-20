@@ -1,6 +1,4 @@
-//! Seed/peer counts from tracker scrapes (HTTP and BEP 15) for results that
-//! have none. Results pick the trackers we contact, so only public addresses
-//! are allowed (checked after DNS and on redirects) and the work is bounded.
+//! Seed/peer counts from tracker scrapes. Public addresses only.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -13,7 +11,7 @@ use librqbit_bencode::ByteBuf;
 use serde::{Deserialize, Serialize};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use url::{Host, Url};
+use url::Url;
 
 use crate::SearchResult;
 
@@ -230,36 +228,34 @@ pub fn parse_http_reply(body: &[u8], info_hash: &[u8; 20]) -> anyhow::Result<Cou
         .unwrap_or_default())
 }
 
-pub fn is_public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            !(v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_unspecified()
-                || v4.is_multicast()
-                || v4.is_documentation()
-                || o[0] == 0
-                || (o[0] == 100 && (o[1] & 0xc0) == 64) // 100.64.0.0/10
-                || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24
-                || (o[0] == 198 && (o[1] & 0xfe) == 18) // 198.18.0.0/15
-                || o[0] >= 240)
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_public(IpAddr::V4(v4));
-            }
-            let s = v6.segments();
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || (s[0] & 0xfe00) == 0xfc00 // unique local
-                || (s[0] & 0xffc0) == 0xfe80 // link-local
-                || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
-                || (s[0] == 0x0064 && s[1] == 0xff9b)) // NAT64 to anything
-        }
+pub use riptor_net::is_public;
+
+/// Resolves `host` (the port is passed through), e.g. through a VPN tunnel.
+pub type Lookup = Arc<
+    dyn Fn(String, u16) -> futures::future::BoxFuture<'static, std::io::Result<Vec<SocketAddr>>>
+        + Send
+        + Sync,
+>;
+
+/// Send everything from `local` and resolve with `lookup` (the VPN tunnel).
+#[derive(Clone)]
+pub struct Tunnel {
+    pub local: IpAddr,
+    pub lookup: Lookup,
+}
+
+async fn lookup(
+    tunnel: Option<&Tunnel>,
+    host: &str,
+    port: u16,
+) -> std::io::Result<Vec<SocketAddr>> {
+    match tunnel {
+        Some(t) => Ok((t.lookup)(host.to_string(), port)
+            .await?
+            .into_iter()
+            .filter(|a| a.is_ipv4() == t.local.is_ipv4())
+            .collect()),
+        None => Ok(tokio::net::lookup_host((host, port)).await?.collect()),
     }
 }
 
@@ -268,18 +264,22 @@ pub fn is_public(ip: IpAddr) -> bool {
 pub struct Net {
     pub http: reqwest::Client,
     pub allow_local: bool,
+    tunnel: Option<Tunnel>,
 }
 
 struct PublicOnly {
     allow_local: bool,
+    tunnel: Option<Tunnel>,
 }
 
 impl reqwest::dns::Resolve for PublicOnly {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let allow = self.allow_local;
+        let tunnel = self.tunnel.clone();
         Box::pin(async move {
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((name.as_str(), 0))
+            let addrs: Vec<SocketAddr> = lookup(tunnel.as_ref(), name.as_str(), 0)
                 .await?
+                .into_iter()
                 .filter(|a| allow || is_public(a.ip()))
                 .collect();
             if addrs.is_empty() {
@@ -291,21 +291,30 @@ impl reqwest::dns::Resolve for PublicOnly {
 }
 
 fn host_allowed(u: &Url, allow_local: bool) -> bool {
-    allow_local
-        || match u.host() {
-            Some(Host::Ipv4(ip)) => is_public(ip.into()),
-            Some(Host::Ipv6(ip)) => is_public(ip.into()),
-            Some(Host::Domain(d)) => d.parse::<IpAddr>().map_or(true, is_public),
-            None => false,
-        }
+    allow_local || riptor_net::host_allowed(u)
 }
 
 impl Net {
     pub fn new(allow_local: bool) -> anyhow::Result<Self> {
-        let http = reqwest::Client::builder()
+        Self::build(allow_local, None)
+    }
+
+    pub fn through(tunnel: Tunnel, allow_local: bool) -> anyhow::Result<Self> {
+        Self::build(allow_local, Some(tunnel))
+    }
+
+    fn build(allow_local: bool, tunnel: Option<Tunnel>) -> anyhow::Result<Self> {
+        let mut b = reqwest::Client::builder();
+        if let Some(t) = &tunnel {
+            b = b.local_address(t.local);
+        }
+        let http = b
             .timeout(Duration::from_secs(20))
             .connect_timeout(Duration::from_secs(6))
-            .dns_resolver(Arc::new(PublicOnly { allow_local }))
+            .dns_resolver(Arc::new(PublicOnly {
+                allow_local,
+                tunnel: tunnel.clone(),
+            }))
             .redirect(reqwest::redirect::Policy::custom(move |a| {
                 if a.previous().len() >= 5 {
                     a.error("too many redirects")
@@ -319,7 +328,11 @@ impl Net {
             }))
             .user_agent(concat!("Riptor/", env!("CARGO_PKG_VERSION")))
             .build()?;
-        Ok(Self { http, allow_local })
+        Ok(Self {
+            http,
+            allow_local,
+            tunnel,
+        })
     }
 
     async fn get_capped(&self, url: Url, cap: usize) -> anyhow::Result<Vec<u8>> {
@@ -353,7 +366,7 @@ impl Net {
         let port = u.port().context("UDP tracker has no port")?;
         let addrs: Vec<SocketAddr> = match host.parse::<IpAddr>() {
             Ok(ip) => vec![SocketAddr::new(ip, port)],
-            Err(_) => tokio::net::lookup_host((host, port)).await?.collect(),
+            Err(_) => lookup(self.tunnel.as_ref(), host, port).await?,
         };
         addrs
             .into_iter()
@@ -363,13 +376,13 @@ impl Net {
 
     async fn udp_scrape(&self, tracker: &Url, info_hash: &[u8; 20]) -> anyhow::Result<Counts> {
         let addr = self.resolve_udp(tracker).await?;
-        let bind: SocketAddr = match (addr.is_ipv4(), addr.ip().is_loopback()) {
-            (true, true) => "127.0.0.1:0",
-            (true, false) => "0.0.0.0:0",
-            (false, true) => "[::1]:0",
-            (false, false) => "[::]:0",
-        }
-        .parse()?;
+        let bind: SocketAddr = match (&self.tunnel, addr.is_ipv4(), addr.ip().is_loopback()) {
+            (Some(t), _, _) => SocketAddr::new(t.local, 0),
+            (None, true, true) => "127.0.0.1:0".parse()?,
+            (None, true, false) => "0.0.0.0:0".parse()?,
+            (None, false, true) => "[::1]:0".parse()?,
+            (None, false, false) => "[::]:0".parse()?,
+        };
         let sock = UdpSocket::bind(bind).await?;
         sock.connect(addr).await?;
 
@@ -622,29 +635,6 @@ mod tests {
         assert!(parse_udp_scrape(b"\0\0\0\x03abcdnope").is_err());
     }
 
-    #[test]
-    fn private_addresses_are_refused() {
-        for ip in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "172.16.0.1",
-            "192.168.1.1",
-            "169.254.169.254",
-            "100.64.0.1",
-            "0.0.0.0",
-            "255.255.255.255",
-            "::1",
-            "fe80::1",
-            "fd00::1",
-            "::ffff:192.168.1.1",
-        ] {
-            assert!(!is_public(ip.parse().unwrap()), "{ip}");
-        }
-        for ip in ["93.184.216.34", "2606:4700::1111"] {
-            assert!(is_public(ip.parse().unwrap()), "{ip}");
-        }
-    }
-
     #[tokio::test]
     async fn local_trackers_are_not_contacted() {
         let net = Net::new(false).unwrap();
@@ -711,6 +701,47 @@ mod tests {
             }
         });
         addr
+    }
+
+    #[tokio::test]
+    async fn tunnel_lookups_use_the_given_resolver() {
+        let h = hash();
+        let http = http_server(reply_with(&h, 5, 30)).await;
+        let udp = udp_tracker().await;
+        // Only this resolver knows these names; the system resolver would fail.
+        let (hp, up) = (http.port(), udp.port());
+        let lookup: Lookup = Arc::new(move |host: String, port: u16| {
+            Box::pin(async move {
+                match host.as_str() {
+                    "http-tracker.riptor-test" | "udp-tracker.riptor-test" => {
+                        Ok(vec![SocketAddr::from(([127, 0, 0, 1], port))])
+                    }
+                    _ => Err(std::io::Error::other("unknown host")),
+                }
+            })
+        });
+        let net = Net::through(
+            Tunnel {
+                local: IpAddr::from([127, 0, 0, 1]),
+                lookup,
+            },
+            true,
+        )
+        .unwrap();
+        let t = Target {
+            info_hash: h,
+            trackers: vec![
+                Url::parse(&format!("http://http-tracker.riptor-test:{hp}/announce")).unwrap(),
+                Url::parse(&format!("udp://udp-tracker.riptor-test:{up}")).unwrap(),
+            ],
+        };
+        assert_eq!(
+            net.scrape(&t).await,
+            Some(Counts {
+                seeders: 42,
+                leechers: 30
+            })
+        );
     }
 
     #[tokio::test]

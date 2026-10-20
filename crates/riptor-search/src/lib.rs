@@ -1,5 +1,4 @@
-//! Search: providers queried in parallel, results streamed as they arrive.
-//! Results are untrusted; [`clean`] runs on each before the UI sees it.
+//! Search providers. Every result goes through [`clean`].
 #![forbid(unsafe_code)]
 
 pub mod archive;
@@ -14,7 +13,7 @@ pub mod torznab;
 
 use serde::{Deserialize, Serialize};
 
-pub use manager::{SearchConfig, SearchManager, TorznabEndpoint};
+pub use manager::{LookupRoute, SearchConfig, SearchManager, TorznabEndpoint};
 
 pub const CATEGORIES: [&str; 9] = [
     "all", "anime", "books", "games", "movies", "music", "pictures", "software", "tv",

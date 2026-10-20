@@ -179,9 +179,13 @@ export function ShareLimitsDialog({ torrents, onClose }: { torrents: TorrentSumm
   const first = torrents[0];
   const [limits, setLimits] = useState<ShareLimits>(first.limits);
   const [action, setAction] = useState<ShareLimitAction | "">(first.limit_action ?? "");
+  const [dl, setDl] = useState<number | null>(first.dl_limit_kib);
+  const [ul, setUl] = useState<number | null>(first.ul_limit_kib);
   const save = async () => {
     try {
-      await api.setShareLimits(torrents.map((t) => t.id), limits, action || null);
+      const ids = torrents.map((t) => t.id);
+      await api.setSpeedLimits(ids, dl, ul);
+      await api.setShareLimits(ids, limits, action || null);
       onClose();
     } catch (e) {
       toast("error", errorText(e));
@@ -189,7 +193,7 @@ export function ShareLimitsDialog({ torrents, onClose }: { torrents: TorrentSumm
   };
   return (
     <Dialog
-      title={torrents.length === 1 ? `Share limits · ${first.name}` : `Share limits · ${torrents.length} torrents`}
+      title={torrents.length === 1 ? `Limits · ${first.name}` : `Limits · ${torrents.length} torrents`}
       onClose={onClose}
       width="max-w-xl"
       footer={
@@ -204,6 +208,16 @@ export function ShareLimitsDialog({ torrents, onClose }: { torrents: TorrentSumm
       }
     >
       <div className="space-y-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Speed</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Download (KiB/s)" hint="Empty: no limit of its own; the global limit still applies.">
+            <OptionalNumber value={dl} onChange={setDl} min={1} />
+          </Field>
+          <Field label="Upload (KiB/s)">
+            <OptionalNumber value={ul} onChange={setUl} min={1} />
+          </Field>
+        </div>
+        <h3 className="pt-2 text-xs font-semibold uppercase tracking-wide text-muted">Sharing</h3>
         <LimitEditor label="Ratio" unit="" value={limits.ratio} onChange={(ratio) => setLimits({ ...limits, ratio })} />
         <LimitEditor label="Seeding time" unit="min" value={limits.seeding_time} onChange={(seeding_time) => setLimits({ ...limits, seeding_time })} />
         <LimitEditor
@@ -268,7 +282,7 @@ export function TagsDialog({ torrents, onClose }: { torrents: TorrentSummary[]; 
       <div className="space-y-3">
         <div className="flex min-h-9 flex-wrap gap-1.5 rounded-md border border-border p-1.5">
           {tags.map((t) => (
-            <span key={t} className="flex items-center gap-1 rounded bg-accent/15 px-2 py-0.5 text-xs">
+            <span key={t} className="flex items-center gap-1 rounded-sm bg-accent/15 px-2 py-0.5 text-xs">
               {t}
               <button className="text-muted hover:text-fg" onClick={() => setTags(tags.filter((x) => x !== t))} aria-label={`Remove ${t}`}>
                 <X size={12} />
@@ -276,7 +290,7 @@ export function TagsDialog({ torrents, onClose }: { torrents: TorrentSummary[]; 
             </span>
           ))}
           <input
-            className="min-w-24 flex-1 bg-transparent px-1 text-sm outline-none"
+            className="min-w-24 flex-1 bg-transparent px-1 text-sm outline-hidden"
             value={draft}
             maxLength={64}
             placeholder={tags.length ? "" : "Type a tag and press Enter"}
@@ -294,7 +308,7 @@ export function TagsDialog({ torrents, onClose }: { torrents: TorrentSummary[]; 
         {suggestions.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {suggestions.map((s) => (
-              <button key={s} className="rounded border border-border px-2 py-0.5 text-xs text-muted hover:text-fg" onClick={() => add(s)}>
+              <button key={s} className="rounded-sm border border-border px-2 py-0.5 text-xs text-muted hover:text-fg" onClick={() => add(s)}>
                 + {s}
               </button>
             ))}

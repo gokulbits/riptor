@@ -40,6 +40,11 @@ pub struct Record {
     pub intent: Intent,
     #[serde(default)]
     pub has_executables: bool,
+    /// KiB/s; `None` = no limit of its own.
+    #[serde(default)]
+    pub dl_limit_kib: Option<u32>,
+    #[serde(default)]
+    pub ul_limit_kib: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -91,6 +96,8 @@ pub struct TorrentSummary {
     pub limits: ShareLimits,
     pub limit_action: Option<ShareLimitAction>,
     pub has_executables: bool,
+    pub dl_limit_kib: Option<u32>,
+    pub ul_limit_kib: Option<u32>,
     pub error: Option<String>,
 }
 
@@ -175,4 +182,10 @@ pub enum NoticeLevel {
     Info,
     Warning,
     Error,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PublicIp {
+    pub ip: String,
+    pub via_vpn: bool,
 }

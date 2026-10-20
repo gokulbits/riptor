@@ -91,7 +91,7 @@ export function BackupSection({ onSettingsRestored }: { onSettingsRestored: () =
   return (
     <div className="space-y-6">
       <fieldset className="space-y-3">
-        <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Create a backup</legend>
+        <legend className="mb-5 text-xs font-semibold uppercase tracking-wider text-muted">Create A Backup</legend>
         <p className="text-xs text-muted">
           Saves your torrents (with their .torrent data, save folders and statistics), categories, settings and client
           statistics into one encrypted file. Any change to the file is detected and the restore is refused.
@@ -99,7 +99,7 @@ export function BackupSection({ onSettingsRestored }: { onSettingsRestored: () =
         <Toggle
           checked={usePassword}
           onChange={setUsePassword}
-          label="Protect with a password"
+          label="Protect With A Password"
           hint="Without a password any copy of Riptor can open the backup. With one, only someone who knows it can read or forge it."
         />
         {usePassword && (
@@ -107,25 +107,25 @@ export function BackupSection({ onSettingsRestored }: { onSettingsRestored: () =
             <Field label="Password" hint="At least 8 characters. It cannot be recovered if lost.">
               <input className="input" type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password" />
             </Field>
-            <Field label="Repeat password" hint={pw2 && pw !== pw2 ? "Passwords don't match" : undefined}>
+            <Field label="Repeat Password" hint={pw2 && pw !== pw2 ? "Passwords don't match" : undefined}>
               <input className="input" type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" />
             </Field>
           </div>
         )}
         <button className="btn-primary" disabled={!pwOk || busy !== null} onClick={createBackup}>
-          {busy === "backup" ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Create backup…
+          {busy === "backup" ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Create Backup…
         </button>
       </fieldset>
 
       <fieldset className="space-y-3">
-        <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Restore</legend>
+        <legend className="mb-5 text-xs font-semibold uppercase tracking-wider text-muted">Restore</legend>
         <button className="btn-ghost border border-border" disabled={busy !== null} onClick={pickFile}>
-          {busy === "inspect" ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Choose backup file…
+          {busy === "inspect" ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Choose Backup File…
         </button>
 
         {file && needsPw && !summary && (
           <div className="flex items-end gap-2">
-            <Field label="This backup is password protected">
+            <Field label="This Backup Is Password Protected">
               <input
                 className="input"
                 type="password"
@@ -173,7 +173,7 @@ export function BackupSection({ onSettingsRestored }: { onSettingsRestored: () =
               <Toggle
                 checked={opts.resume_torrents}
                 onChange={(v) => setOpts({ ...opts, resume_torrents: v })}
-                label="Resume torrents that were running"
+                label="Resume Torrents That Were Running"
                 hint={
                   summary.password_protected
                     ? undefined

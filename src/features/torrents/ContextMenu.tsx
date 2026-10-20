@@ -50,7 +50,7 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
               it.onClick?.();
               if (!it.keepOpen) onClose();
             }}
-            className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] hover:bg-raised disabled:opacity-40 ${it.danger ? "text-danger" : ""}`}
+            className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-raised disabled:opacity-40 ${it.danger ? "text-danger" : ""}`}
           >
             <span className="w-4 text-muted">{it.icon}</span>
             <span className="flex-1">{it.label}</span>

@@ -11,7 +11,14 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 }
 
 fn to_unix(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64, offset_secs: i64) -> Option<u64> {
-    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
+    // The year bound also keeps the arithmetic below from overflowing.
+    if !(1..=9999).contains(&y)
+        || !(1..=12).contains(&mo)
+        || !(1..=31).contains(&d)
+        || !(0..=23).contains(&h)
+        || !(0..=59).contains(&mi)
+        || !(0..=60).contains(&s)
+    {
         return None;
     }
     let t = days_from_civil(y, mo, d) * 86_400 + h * 3600 + mi * 60 + s - offset_secs;
@@ -27,7 +34,12 @@ pub fn parse_iso8601(s: &str) -> Option<u64> {
         return to_unix(y, mo, d, 0, 0, 0, 0);
     }
     let (h, mi, se) = (num(11, 13)?, num(14, 16)?, num(17, 19).unwrap_or(0));
-    let tz = s[19..].trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
+    let tz = match s.get(19..) {
+        Some(t) => t,
+        None if s.len() <= 19 => "",
+        None => return None,
+    };
+    let tz = tz.trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
     let off = match tz.as_bytes().first() {
         None | Some(b'Z') => 0,
         Some(b'+') | Some(b'-') => {
@@ -64,7 +76,8 @@ pub fn parse_rfc2822(s: &str) -> Option<u64> {
     let off = match it.next() {
         Some(z) if z.len() == 5 && (z.starts_with('+') || z.starts_with('-')) => {
             let sign = if z.starts_with('-') { -1 } else { 1 };
-            sign * (z[1..3].parse::<i64>().ok()? * 3600 + z[3..5].parse::<i64>().ok()? * 60)
+            sign * (z.get(1..3)?.parse::<i64>().ok()? * 3600
+                + z.get(3..5)?.parse::<i64>().ok()? * 60)
         }
         _ => 0, // GMT/UT/missing
     };
@@ -89,6 +102,8 @@ mod tests {
         );
         assert_eq!(parse_iso8601("garbage"), None);
         assert_eq!(parse_iso8601("2026-13-18"), None);
+        assert_eq!(parse_iso8601("2026-10-18T00:00"), Some(1_792_281_600));
+        assert_eq!(parse_iso8601("2026-10-18T00:00:0\u{202e}"), None);
     }
 
     #[test]
@@ -106,5 +121,7 @@ mod tests {
             Some(1_792_281_600)
         );
         assert_eq!(parse_rfc2822("nonsense"), None);
+        assert_eq!(parse_rfc2822("1 Jan 99999999999999999 00:00:00"), None);
+        assert_eq!(parse_rfc2822("1 Jan 2026 00:00:00 +1\u{e9}1"), None);
     }
 }

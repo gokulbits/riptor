@@ -424,11 +424,11 @@ pub struct SessionOptions {
     /// On OSX will use IP(V6)_BOUND_IF, on Linux will use SO_BINDTODEVICE.
     pub bind_device_name: Option<String>,
 
-    /// RIPTOR PATCH: local address for HTTP(S) tracker requests. reqwest can't
-    /// bind to an interface on Windows, so callers that bind to a VPN adapter
-    /// also pass its address here; if the adapter disappears, requests fail
-    /// instead of leaving through another interface.
+    /// RIPTOR PATCH: source address for HTTP trackers (the VPN's).
     pub bind_local_ip: Option<std::net::IpAddr>,
+
+    /// RIPTOR PATCH: resolver for HTTP tracker hosts.
+    pub dns_resolver: Option<tracker_comms::resolve_hook::Resolver>,
 
     /// Disable tracker communication
     pub disable_trackers: bool,
@@ -493,6 +493,7 @@ impl Default for SessionOptions {
             dht: Some(DhtSessionConfig::default()),
             bind_device_name: None,
             bind_local_ip: None,
+            dns_resolver: None,
             disable_trackers: false,
             fastresume: false,
             persistence: None,
@@ -725,6 +726,10 @@ impl Session {
                     // RIPTOR PATCH: see SessionOptions::bind_local_ip.
                     if let Some(ip) = opts.bind_local_ip {
                         b = b.local_address(ip);
+                    }
+                    // RIPTOR PATCH: see SessionOptions::dns_resolver.
+                    if let Some(r) = opts.dns_resolver.clone() {
+                        b = b.dns_resolver(Arc::new(DynResolver(r)));
                     }
                     b
                 };
@@ -1843,5 +1848,18 @@ mod tests {
         assert_eq!(parsed.info_hash, generated_parsed.info_hash);
         assert_eq!(parsed.info, generated_parsed.info);
         assert_eq!(parsed_trackers, get_trackers(&generated_parsed));
+    }
+}
+
+// RIPTOR PATCH: adapts the resolver closure to reqwest.
+struct DynResolver(tracker_comms::resolve_hook::Resolver);
+
+impl reqwest::dns::Resolve for DynResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let fut = (self.0)(name.as_str().to_string(), 0);
+        Box::pin(async move {
+            let addrs = fut.await?;
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
     }
 }

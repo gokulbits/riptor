@@ -42,4 +42,5 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_Foundatio
 # the fields that existed in 0.21.1; 0.21.2 added more in a minor release and
 # breaks the Linux build. Remove this pin once deep-link is fixed upstream.
 [target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["process"] }
 rust-ini = "=0.21.1"

@@ -15,7 +15,11 @@ pub fn load<T: DeserializeOwned + Default>(path: &Path) -> anyhow::Result<T> {
     }
 }
 
+/// Saves share a `.tmp` name per file, so they take turns.
+static SAVING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 pub fn save_bytes(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let _turn = SAVING.lock();
     let dir = path.parent().context("file has no parent folder")?;
     fs::create_dir_all(dir)?;
     let tmp = path.with_extension("tmp");
@@ -29,17 +33,9 @@ pub fn save_bytes(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 }
 
 pub fn save<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
-    let dir = path.parent().context("state file has no parent folder")?;
-    fs::create_dir_all(dir)?;
-    let tmp = path.with_extension("tmp");
-    {
-        let mut f = create_private(&tmp)?;
-        serde_json::to_writer_pretty(&mut f, value)?;
-        f.write_all(b"\n")?;
-        f.sync_all()?;
-    }
-    fs::rename(&tmp, path).with_context(|| format!("replacing {path:?}"))?;
-    Ok(())
+    let mut bytes = serde_json::to_vec_pretty(value)?;
+    bytes.push(b'\n');
+    save_bytes(path, &bytes)
 }
 
 fn create_private(path: &Path) -> std::io::Result<File> {

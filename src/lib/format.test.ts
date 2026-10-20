@@ -50,6 +50,8 @@ const t = (over: Partial<TorrentSummary>): TorrentSummary => ({
   limits: { ratio: { mode: "use_global" }, seeding_time: { mode: "use_global" }, inactive_seeding_time: { mode: "use_global" } },
   limit_action: null,
   has_executables: false,
+  dl_limit_kib: null,
+  ul_limit_kib: null,
   error: null,
   ...over,
 });

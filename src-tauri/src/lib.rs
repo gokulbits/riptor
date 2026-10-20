@@ -1,6 +1,7 @@
 mod associations;
 mod commands;
 mod elevate;
+mod logs;
 mod tray;
 mod vpn;
 
@@ -13,6 +14,8 @@ use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::OnceCell;
 use tracing::{error, info};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Default)]
@@ -79,11 +82,13 @@ fn pump_events(app: AppHandle, engine: Arc<Engine>) {
 }
 
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    tracing_subscriber::registry()
+        .with(
             EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| EnvFilter::new("info,librqbit=warn")),
         )
+        .with(tracing_subscriber::fmt::layer())
+        .with(logs::Capture)
         .init();
 
     let app = tauri::Builder::default()
@@ -184,6 +189,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
+            commands::recent_logs,
+            commands::create_torrent,
+            commands::create_torrent_progress,
+            commands::create_torrent_cancel,
             commands::engine_status,
             commands::take_startup_items,
             commands::preview_torrent,
@@ -198,9 +207,13 @@ pub fn run() {
             commands::torrent_peers,
             commands::torrent_magnet,
             commands::free_space,
+            commands::public_ip,
             commands::set_category,
+            commands::move_torrents,
+            commands::recheck_torrents,
             commands::set_tags,
             commands::set_share_limits,
+            commands::set_speed_limits,
             commands::queue_move,
             commands::get_categories,
             commands::save_category,
@@ -269,8 +282,7 @@ fn window_state_flags() -> tauri_plugin_window_state::StateFlags {
 
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Save stats, flush pieces, then exit. Must run while the async runtime is
-/// alive: in RunEvent::Exit, librqbit's stop() never wakes from its sleep.
+/// Needs a live runtime: in RunEvent::Exit librqbit's stop() hangs.
 pub fn quit(handle: &AppHandle) {
     const LIMIT: std::time::Duration = std::time::Duration::from_secs(8);
     if QUITTING.swap(true, std::sync::atomic::Ordering::SeqCst) {

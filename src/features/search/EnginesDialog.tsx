@@ -283,9 +283,9 @@ function CatalogRow({ e, selected, onToggle }: { e: CatalogEntry; selected: bool
         <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
           <span className="font-medium">{e.name}</span>
           {e.version && <span className="text-xs text-muted">v{e.version}</span>}
-          {e.installed && <span className="rounded bg-ok/15 px-1.5 py-0.5 text-xxs text-ok">Installed</span>}
-          {health && <span className={clsx("rounded px-1.5 py-0.5 text-xxs", health.className)}>{health.label}</span>}
-          {e.private && <span className="rounded bg-raised px-1.5 py-0.5 text-xxs text-muted">Needs an account</span>}
+          {e.installed && <span className="rounded-sm bg-ok/15 px-1.5 py-0.5 text-xxs text-ok">Installed</span>}
+          {health && <span className={clsx("rounded-sm px-1.5 py-0.5 text-xxs", health.className)}>{health.label}</span>}
+          {e.private && <span className="rounded-sm bg-raised px-1.5 py-0.5 text-xxs text-muted">Needs an account</span>}
         </p>
         <p className="truncate text-xs text-muted" title={e.note ?? undefined}>
           {[site, e.author && `by ${e.author}`, e.problem ?? e.note].filter(Boolean).join(" · ")}
@@ -569,7 +569,7 @@ export function EnginesDialog({ onClose }: { onClose: () => void }) {
                 <div className="min-w-0 flex-1">
                   <p className="flex items-center gap-2">
                     <span className="truncate font-medium">{p.name}</span>
-                    <span className="rounded bg-raised px-1.5 py-0.5 text-xxs text-muted">{KIND_LABEL[p.kind]}</span>
+                    <span className="rounded-sm bg-raised px-1.5 py-0.5 text-xxs text-muted">{KIND_LABEL[p.kind]}</span>
                   </p>
                   {p.error ? (
                     <p className="truncate text-xs text-danger" title={p.error}>

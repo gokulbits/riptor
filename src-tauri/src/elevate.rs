@@ -57,6 +57,18 @@ pub fn run(exe: &Path, args: &[String]) -> anyhow::Result<i32> {
     Ok(code as i32)
 }
 
+/// Linux: keeps the helper running with piped stdin/stdout (WireGuard).
+#[cfg(target_os = "linux")]
+pub fn spawn(exe: &Path, args: &[String]) -> std::io::Result<tokio::process::Child> {
+    tokio::process::Command::new("/usr/bin/pkexec")
+        .arg(exe)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+}
+
 #[cfg(not(windows))]
 pub fn run(exe: &Path, args: &[String]) -> anyhow::Result<i32> {
     let status = std::process::Command::new("/usr/bin/pkexec")

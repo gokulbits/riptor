@@ -78,9 +78,17 @@ pub struct SearchManager {
     catalog: tokio::sync::Mutex<Option<(Instant, Catalog)>>,
     active: Mutex<HashMap<u64, CancellationToken>>,
     next_id: AtomicU64,
-    /// Set while the VPN or kill switch is on; lookups would bypass the tunnel.
-    lookups_held: std::sync::atomic::AtomicBool,
+    lookup_route: RwLock<LookupRoute>,
     shipped_python: RwLock<Option<PathBuf>>,
+}
+
+#[derive(Clone)]
+pub enum LookupRoute {
+    Direct,
+    /// Through the VPN tunnel.
+    Tunnel(scrape::Tunnel),
+    /// Kill switch on: no lookups.
+    Held,
 }
 
 fn slug(name: &str) -> String {
@@ -120,7 +128,7 @@ impl SearchManager {
             catalog: tokio::sync::Mutex::new(None),
             active: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
-            lookups_held: std::sync::atomic::AtomicBool::new(false),
+            lookup_route: RwLock::new(LookupRoute::Direct),
             shipped_python: RwLock::new(None),
         }))
     }
@@ -131,8 +139,9 @@ impl SearchManager {
         }
     }
 
-    pub fn hold_lookups(&self, held: bool) {
-        self.lookups_held.store(held, Ordering::SeqCst);
+    /// How tracker lookups for the next searches reach the trackers.
+    pub fn route_lookups(&self, route: LookupRoute) {
+        *self.lookup_route.write() = route;
     }
 
     pub fn set_scrape(&self, on: bool) -> anyhow::Result<()> {
@@ -523,12 +532,17 @@ impl SearchManager {
         let category = category.to_string();
 
         let (lookup_tx, lookup_rx) = tokio::sync::mpsc::unbounded_channel::<scrape::Job>();
-        let lookups_on = self.config.read().scrape && !self.lookups_held.load(Ordering::SeqCst);
+        let route = self.lookup_route.read().clone();
+        let lookups_on = self.config.read().scrape && !matches!(route, LookupRoute::Held);
+        let net = match route {
+            LookupRoute::Tunnel(t) => scrape::Net::through(t, false)?,
+            _ => self.scrape_net.clone(),
+        };
 
         let me = self.clone();
         tokio::spawn(async move {
             let lookups = {
-                let (net, sink, token) = (me.scrape_net.clone(), sink.clone(), token.clone());
+                let (sink, token) = (sink.clone(), token.clone());
                 tokio::spawn(async move {
                     let emit = |counts| {
                         sink(SearchEvent::Counts {

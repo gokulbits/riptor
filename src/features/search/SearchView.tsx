@@ -1,14 +1,31 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
-import { AlertTriangle, ArrowDown, ArrowUp, Check, Download, ExternalLink, Loader2, Search, SlidersHorizontal, Square } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  Check,
+  Copy,
+  Download,
+  ExternalLink,
+  FolderDown,
+  Info,
+  Loader2,
+  Search,
+  SlidersHorizontal,
+  Square,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorText, events } from "../../lib/ipc";
 import { formatBytes } from "../../lib/format";
 import type { SearchResult, Source } from "../../lib/types";
 import { useApp } from "../../stores/app";
 import { useSearch, visibleResults, type ResultSort } from "../../stores/search";
+import { ContextMenu, type MenuItem } from "../torrents/ContextMenu";
 import { EnginesDialog } from "./EnginesDialog";
+import { ResultDetails } from "./ResultDetails";
 
 const CATEGORY_LABELS: Record<string, string> = {
   all: "All categories",
@@ -58,7 +75,7 @@ function EnginePicker() {
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div className="card absolute right-0 top-full z-40 mt-1 w-64 p-1 shadow-xl" role="listbox">
-            <button className="w-full rounded px-2 py-1.5 text-left text-[13px] hover:bg-raised" onClick={() => setSelected(null)}>
+            <button className="w-full rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-raised" onClick={() => setSelected(null)}>
               {selected == null && <Check size={13} className="mr-1 inline text-accent" />}All enabled engines
             </button>
             <div className="my-1 h-px bg-border" />
@@ -69,10 +86,10 @@ function EnginePicker() {
                   key={p.id}
                   role="option"
                   aria-selected={on}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] hover:bg-raised"
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-raised"
                   onClick={() => setSelected(on ? active.filter((x) => x !== p.id) : [...active, p.id])}
                 >
-                  <span className={clsx("flex h-4 w-4 items-center justify-center rounded border", on ? "border-accent bg-accent text-accent-fg" : "border-border")}>
+                  <span className={clsx("flex h-4 w-4 items-center justify-center rounded-sm border", on ? "border-accent bg-accent text-accent-fg" : "border-border")}>
                     {on && <Check size={11} />}
                   </span>
                   <span className="flex-1 truncate">{p.name}</span>
@@ -109,6 +126,9 @@ export function SearchView() {
   const actions = useSearch.getState();
   const [engines, setEngines] = useState(false);
   const [busyLink, setBusyLink] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; r: SearchResult } | null>(null);
+  const [details, setDetails] = useState<SearchResult | null>(null);
+  const pluginFiles = useRef(new Map<string, string>());
   const parent = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const virtualizer = useVirtualizer({ count: rows.length, getScrollElement: () => parent.current, estimateSize: () => ROW, overscan: 12 });
@@ -143,21 +163,72 @@ export function SearchView() {
     actions.stop();
   };
 
+  // Cached so details and download don't fetch twice.
+  const resolve = useCallback(async (r: SearchResult): Promise<Source> => {
+    if (r.link.startsWith("magnet:")) return { kind: "magnet", value: r.link };
+    if (!r.via_plugin) return { kind: "url", value: r.link };
+    const key = `${r.engine}|${r.link}`;
+    let path = pluginFiles.current.get(key);
+    if (!path) {
+      path = await api.pluginDownload(r.engine, r.link);
+      pluginFiles.current.set(key, path);
+    }
+    return { kind: "file", value: path };
+  }, []);
+
   const download = async (r: SearchResult) => {
+    setBusyLink(r.link);
     try {
-      let src: Source;
-      if (r.link.startsWith("magnet:")) src = { kind: "magnet", value: r.link };
-      else if (r.via_plugin) {
-        setBusyLink(r.link);
-        src = { kind: "file", value: await api.pluginDownload(r.engine, r.link) };
-      } else src = { kind: "url", value: r.link };
-      queueAdds([src]);
+      queueAdds([await resolve(r)]);
     } catch (e) {
       toast("error", errorText(e));
     } finally {
       setBusyLink(null);
     }
   };
+
+  // Straight to a folder, unless the add dialog has something to warn about.
+  const downloadTo = async (r: SearchResult) => {
+    const dir = await open({ directory: true, title: `Download "${r.name}" to` });
+    if (typeof dir !== "string") return;
+    setBusyLink(r.link);
+    try {
+      const src = await resolve(r);
+      const p = await api.preview(src);
+      if (p.already_added) {
+        toast("info", `${p.name} is already in your list`);
+      } else if (p.has_executables) {
+        toast("warning", "This torrent contains programs or scripts. Check the files before adding it.");
+        queueAdds([src]);
+      } else {
+        await api.add({ info_hash: p.info_hash, save_path: dir });
+        toast("success", `Downloading ${p.name}`);
+      }
+    } catch (e) {
+      toast("error", errorText(e));
+    } finally {
+      setBusyLink(null);
+    }
+  };
+
+  const menuItems = (r: SearchResult): (MenuItem | "sep")[] => [
+    { label: "Download…", icon: <Download size={14} />, onClick: () => download(r) },
+    { label: "Download to folder…", icon: <FolderDown size={14} />, onClick: () => downloadTo(r) },
+    "sep",
+    { label: "View details", icon: <Info size={14} />, onClick: () => setDetails(r) },
+    {
+      label: "Open web page",
+      icon: <ExternalLink size={14} />,
+      disabled: !r.desc_link,
+      onClick: () => api.openWebUrl(r.desc_link!).catch((e) => toast("error", errorText(e))),
+    },
+    "sep",
+    {
+      label: r.link.startsWith("magnet:") ? "Copy magnet link" : "Copy download link",
+      icon: <Copy size={14} />,
+      onClick: () => navigator.clipboard.writeText(r.link).catch(() => {}),
+    },
+  ];
 
   const progress = Object.entries(st.progress);
   const template = COLUMNS.map((c) => c.width).join(" ") + " 72px";
@@ -293,7 +364,7 @@ export function SearchView() {
             ) : (
               <>
                 <p className="text-sm">Search the Internet Archive, your Torznab indexers and installed plugins.</p>
-                <p className="text-xs">Double-click a result to download it.</p>
+                <p className="text-xs">Double-click a result for its details, or right-click for more options.</p>
                 {st.providers.length > 0 && !st.providers.some((p) => p.kind !== "builtin") && (
                   <button className="btn-ghost mt-2 border border-border text-xs" onClick={() => setEngines(true)}>
                     Add search plugins…
@@ -310,8 +381,15 @@ export function SearchView() {
                 <div
                   key={`${r.engine}|${r.link}`}
                   role="row"
-                  onDoubleClick={() => download(r)}
-                  className={clsx("group absolute left-0 grid w-full items-center text-[13px] hover:bg-raised", v.index % 2 && "bg-raised/40")}
+                  onDoubleClick={() => setDetails(r)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ x: e.clientX, y: e.clientY, r });
+                  }}
+                  className={clsx(
+                    "group absolute left-0 grid w-full items-center text-[13px] hover:bg-raised",
+                    menu?.r === r ? "bg-accent/15" : v.index % 2 && "bg-raised/40",
+                  )}
                   style={{ top: v.start, height: ROW, gridTemplateColumns: template }}
                 >
                   <span className="truncate px-2" title={r.name}>
@@ -328,7 +406,7 @@ export function SearchView() {
                   <span className="truncate px-2 text-muted">{r.pub_date ? new Date(r.pub_date * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "–"}</span>
                   <span className="flex justify-end gap-0.5 px-1 opacity-60 group-hover:opacity-100">
                     {r.desc_link && (
-                      <button className="btn-ghost p-1" title="Open details page" onClick={() => api.openWebUrl(r.desc_link!).catch(() => {})}>
+                      <button className="btn-ghost p-1" title="Open web page" onClick={() => api.openWebUrl(r.desc_link!).catch(() => {})}>
                         <ExternalLink size={13} />
                       </button>
                     )}
@@ -342,6 +420,16 @@ export function SearchView() {
           </div>
         )}
       </div>
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.r)} onClose={() => setMenu(null)} />}
+      {details && (
+        <ResultDetails
+          result={details}
+          engineName={names[details.engine] ?? details.engine}
+          resolve={resolve}
+          onDownload={(src) => queueAdds([src])}
+          onClose={() => setDetails(null)}
+        />
+      )}
       {engines && (
         <EnginesDialog
           onClose={() => {

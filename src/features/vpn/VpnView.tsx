@@ -14,6 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { PublicIpView } from "../../components/PublicIp";
 import { Field, Toggle } from "../../components/ui";
 import { api, errorText, events } from "../../lib/ipc";
 import type { VpnPrefs, VpnProfile, VpnStatus } from "../../lib/types";
@@ -63,6 +64,9 @@ function StatusCard({ status, killSwitch, onDisconnect }: { status: VpnStatus; k
                 ? "Kill switch is on."
                 : "Torrents use your normal connection."}
         </p>
+        <div className="flex items-center gap-1 pt-1 text-xs text-muted">
+          Public IP: <PublicIpView />
+        </div>
       </div>
       {status.phase !== "disconnected" && (
         <button className="btn-ghost" onClick={onDisconnect}>
@@ -151,7 +155,7 @@ function ProfileRow({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate font-medium">{profile.name}</span>
-            <span className="rounded bg-raised px-1.5 py-0.5 text-[11px] text-muted">{profile.kind === "open_vpn" ? "OpenVPN" : "WireGuard"}</span>
+            <span className="rounded-sm bg-raised px-1.5 py-0.5 text-[11px] text-muted">{profile.kind === "open_vpn" ? "OpenVPN" : "WireGuard"}</span>
           </div>
           <div className="truncate text-xs text-muted">{profile.servers.join(", ") || "No server listed"}</div>
         </div>

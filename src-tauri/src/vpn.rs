@@ -1,5 +1,4 @@
-//! App-only VPN: OpenVPN via the elevated helper, driven over its management
-//! interface. Only Riptor's sockets are pinned to the tunnel.
+//! App-only VPN through the elevated helper.
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
@@ -14,10 +13,10 @@ use riptor_vpn::natpmp;
 use riptor_vpn::profiles::{Kind, Profile, ProfileStore};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::tcp::OwnedWriteHalf;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+#[cfg(not(target_os = "linux"))]
 use tokio::net::TcpStream;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,9 +46,30 @@ pub struct VpnPrefs {
     pub port_forwarding: bool,
 }
 
+type Reader = BufReader<Box<dyn AsyncRead + Send + Unpin>>;
+type Writer = Box<dyn AsyncWrite + Send + Unpin>;
+
 struct Conn {
-    writer: tokio::sync::Mutex<OwnedWriteHalf>,
+    /// OpenVPN's management interface.
+    writer: Option<tokio::sync::Mutex<Writer>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// The WireGuard helper; closing its stdin takes the tunnel down.
+    keeper: Option<tokio::process::Child>,
+}
+
+impl Conn {
+    async fn close(mut self) {
+        if let Some(w) = &self.writer {
+            let _ = w.lock().await.write_all(b"signal SIGTERM\n").await;
+        }
+        for t in self.tasks.drain(..) {
+            t.abort();
+        }
+        if let Some(mut child) = self.keeper.take() {
+            drop(child.stdin.take());
+            let _ = tokio::time::timeout(Duration::from_secs(15), child.wait()).await;
+        }
+    }
 }
 
 pub struct VpnManager {
@@ -60,6 +80,83 @@ pub struct VpnManager {
     status: Mutex<VpnStatus>,
     conn: tokio::sync::Mutex<Option<Conn>>,
     prefs: Mutex<VpnPrefs>,
+}
+
+/// One at a time: OpenVPN 2.7 can drop or mix up commands sent together.
+#[derive(Default)]
+struct Commands {
+    queue: std::collections::VecDeque<String>,
+    waiting: bool,
+}
+
+impl Commands {
+    fn push(&mut self, c: String) {
+        self.queue.push_back(c);
+    }
+
+    fn on_line(&mut self, line: &str) {
+        if line.starts_with("SUCCESS:") || line.starts_with("ERROR:") {
+            self.waiting = false;
+        }
+    }
+
+    fn next(&mut self) -> Option<String> {
+        if self.waiting {
+            return None;
+        }
+        let c = self.queue.pop_front()?;
+        self.waiting = true;
+        Some(c)
+    }
+}
+
+/// A new address is unusable (WSAEADDRNOTAVAIL) until duplicate-address detection ends.
+async fn wait_until_bindable(ip: Ipv4Addr) -> anyhow::Result<()> {
+    for _ in 0..40 {
+        if std::net::UdpSocket::bind((ip, 0)).is_ok() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    bail!("the VPN address {ip} never became usable")
+}
+
+/// Includes OpenVPN's own retries across the profile's servers.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_MGMT_LINE: usize = 64 * 1024;
+
+/// Like `read_line`, except OpenVPN's `ENTER PASSWORD:` prompt has no newline.
+async fn next_line<R: tokio::io::AsyncBufRead + Unpin>(
+    r: &mut R,
+    line: &mut String,
+) -> std::io::Result<usize> {
+    let mut bytes = Vec::new();
+    loop {
+        let buf = r.fill_buf().await?;
+        if buf.is_empty() {
+            break;
+        }
+        match buf.iter().position(|b| *b == b'\n') {
+            Some(i) => {
+                bytes.extend_from_slice(&buf[..=i]);
+                r.consume(i + 1);
+                break;
+            }
+            None => {
+                let n = buf.len();
+                bytes.extend_from_slice(buf);
+                r.consume(n);
+            }
+        }
+        if bytes.starts_with(b"ENTER PASSWORD:") {
+            break;
+        }
+        if bytes.len() > MAX_MGMT_LINE {
+            return Err(std::io::Error::other("management line too long"));
+        }
+    }
+    line.push_str(&String::from_utf8_lossy(&bytes));
+    Ok(bytes.len())
 }
 
 fn random_password() -> anyhow::Result<String> {
@@ -182,14 +279,13 @@ impl VpnManager {
         if !profile.app_only_supported() {
             bail!("This WireGuard profile can't run app-only on Windows yet. Use the provider's OpenVPN config instead.");
         }
-        if profile.kind != Kind::OpenVpn {
-            bail!("Connecting with WireGuard isn't available yet. Use the provider's OpenVPN config instead.");
-        }
-        if profile.needs_credentials && !self.store.has_credentials(profile_id) {
-            bail!("Enter the profile's OpenVPN username and password first.");
-        }
-        if !openvpn_installed() {
-            bail!("OpenVPN isn't installed. Install OpenVPN Community, then try again.");
+        if profile.kind == Kind::OpenVpn {
+            if profile.needs_credentials && !self.store.has_credentials(profile_id) {
+                bail!("Enter the profile's OpenVPN username and password first.");
+            }
+            if !openvpn_installed() {
+                bail!("OpenVPN isn't installed. Install OpenVPN Community, then try again.");
+            }
         }
         self.set_status(|s| {
             *s = VpnStatus {
@@ -200,7 +296,14 @@ impl VpnManager {
                 ..Default::default()
             }
         });
-        match self.start(&profile).await {
+        let started = match profile.kind {
+            Kind::OpenVpn => self.start(&profile).await,
+            #[cfg(target_os = "linux")]
+            Kind::WireGuard => self.start_wireguard(&profile).await,
+            #[cfg(not(target_os = "linux"))]
+            Kind::WireGuard => Err(anyhow::anyhow!("WireGuard isn't available on this system")),
+        };
+        match started {
             Ok(()) => Ok(()),
             Err(e) => {
                 self.set_status(|s| {
@@ -215,9 +318,15 @@ impl VpnManager {
 
     async fn start(self: &Arc<Self>, profile: &Profile) -> anyhow::Result<()> {
         let config = self.store.materialize(&profile.id)?;
+        // Linux: a Unix socket only this user can open. Elsewhere: loopback TCP.
         let port = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
             .local_addr()?
             .port();
+        let endpoint = if cfg!(target_os = "linux") {
+            "unix".to_string()
+        } else {
+            port.to_string()
+        };
         let password = random_password()?;
         // The helper copies these into an admin-only folder before use.
         let run = self.dir.join("run");
@@ -230,7 +339,7 @@ impl VpnManager {
         let args = vec![
             "openvpn".to_string(),
             cfg_path.to_string_lossy().into_owned(),
-            port.to_string(),
+            endpoint,
             pw_path.to_string_lossy().into_owned(),
         ];
         let code =
@@ -245,15 +354,32 @@ impl VpnManager {
             c => bail!("the VPN helper failed (code {c})"),
         }
 
-        let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
-            .await
-            .context("connecting to OpenVPN")?;
-        let (read, write) = stream.into_split();
+        let (read, write): (Box<dyn AsyncRead + Send + Unpin>, Writer) = {
+            #[cfg(target_os = "linux")]
+            {
+                let uid = rustix::process::getuid().as_raw();
+                let path = format!("/run/riptor-vpn-sock/{uid}/mgmt.sock");
+                let stream = tokio::net::UnixStream::connect(&path)
+                    .await
+                    .context("connecting to OpenVPN")?;
+                let (r, w) = stream.into_split();
+                (Box::new(r), Box::new(w))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+                    .await
+                    .context("connecting to OpenVPN")?;
+                let (r, w) = stream.into_split();
+                (Box::new(r), Box::new(w))
+            }
+        };
         // The password prompt arrives immediately, so the writer must exist first.
         let mut conn = self.conn.lock().await;
         *conn = Some(Conn {
-            writer: tokio::sync::Mutex::new(write),
+            writer: Some(tokio::sync::Mutex::new(write)),
             tasks: Vec::new(),
+            keeper: None,
         });
         let me = self.clone();
         let profile_id = profile.id.clone();
@@ -262,38 +388,68 @@ impl VpnManager {
         if let Some(c) = conn.as_mut() {
             c.tasks.push(reader);
         }
+        let me = self.clone();
+        let timeout = tokio::spawn(async move {
+            tokio::time::sleep(CONNECT_TIMEOUT).await;
+            if matches!(me.status.lock().phase, Phase::Connecting) {
+                warn!("VPN connect timed out");
+                me.set_status(|s| {
+                    s.phase = Phase::Error;
+                    s.message = Some(
+                        "Timed out connecting. Try another server from your VPN provider.".into(),
+                    );
+                });
+                me.send("signal SIGTERM\n").await;
+            }
+        });
+        if let Some(c) = conn.as_mut() {
+            c.tasks.push(timeout);
+        }
         drop(conn);
         self.set_status(|s| s.message = Some("Connecting…".into()));
         Ok(())
     }
 
     async fn send(&self, line: &str) {
-        if let Some(c) = self.conn.lock().await.as_ref() {
-            let _ = c.writer.lock().await.write_all(line.as_bytes()).await;
+        if let Some(w) = self
+            .conn
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|c| c.writer.as_ref())
+        {
+            let _ = w.lock().await.write_all(line.as_bytes()).await;
         }
     }
 
-    async fn drive(
-        self: Arc<Self>,
-        mut r: BufReader<tokio::net::tcp::OwnedReadHalf>,
-        password: String,
-        profile_id: String,
-    ) {
+    async fn drive(self: Arc<Self>, mut r: Reader, password: String, profile_id: String) {
         let mut line = String::new();
         let mut watchdog: Option<tokio::task::JoinHandle<()>> = None;
+        let mut cmds = Commands::default();
         loop {
             line.clear();
-            match r.read_line(&mut line).await {
+            match next_line(&mut r, &mut line).await {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {}
             }
-            match mgmt::parse(&line) {
+            if line.starts_with("ERROR:") {
+                // It can echo back what we sent.
+                debug!("openvpn: ERROR");
+            } else {
+                debug!("openvpn: {}", line.trim_end());
+            }
+            cmds.on_line(&line);
+            let parsed = mgmt::parse(&line);
+            if let Line::State { state, .. } = &parsed {
+                info!("VPN state: {state}");
+            }
+            match parsed {
                 Line::ManagementPassword => {
-                    self.send(&format!("{password}\n")).await;
-                    self.send("state on\n").await;
-                    self.send("hold release\n").await;
+                    cmds.push(format!("{password}\n"));
+                    cmds.push("state on\n".into());
+                    cmds.push("hold release\n".into());
                 }
-                Line::Hold => self.send("hold release\n").await,
+                Line::Hold => cmds.push("hold release\n".into()),
                 Line::NeedCredentials => match self
                     .store
                     .credentials(&profile_id)
@@ -301,8 +457,8 @@ impl VpnManager {
                     .and_then(|(u, p)| mgmt::credentials(&u, &p))
                 {
                     Some([u, p]) => {
-                        self.send(&u).await;
-                        self.send(&p).await;
+                        cmds.push(u);
+                        cmds.push(p);
                     }
                     None => {
                         self.set_status(|s| {
@@ -334,11 +490,13 @@ impl VpnManager {
                         match self.on_connected(ip).await {
                             Ok(w) => watchdog = Some(w),
                             Err(e) => {
+                                warn!("VPN connected but unusable: {e:#}");
                                 self.set_status(|s| {
                                     s.phase = Phase::Error;
                                     s.message = Some(format!("{e:#}"));
                                 });
                                 self.fall_back().await;
+                                self.send("signal SIGTERM\n").await;
                             }
                         }
                     }
@@ -362,6 +520,9 @@ impl VpnManager {
                 },
                 Line::Other => {}
             }
+            if let Some(c) = cmds.next() {
+                self.send(&c).await;
+            }
         }
         if let Some(w) = watchdog {
             w.abort();
@@ -379,6 +540,7 @@ impl VpnManager {
         self: &Arc<Self>,
         ip: Ipv4Addr,
     ) -> anyhow::Result<tokio::task::JoinHandle<()>> {
+        wait_until_bindable(ip).await?;
         let adapter =
             riptor_core::network::adapter_for_ip(ip).context("couldn't find the VPN adapter")?;
         let mut forwarded = None;
@@ -446,25 +608,124 @@ impl VpnManager {
         }))
     }
 
+    /// The tunnel lasts as long as we hold the helper's stdin.
+    #[cfg(target_os = "linux")]
+    async fn start_wireguard(self: &Arc<Self>, profile: &Profile) -> anyhow::Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let config = self.store.materialize(&profile.id)?;
+        let ip = riptor_vpn::wg::tunnel_ipv4(&config)
+            .context("the WireGuard profile has no IPv4 address")?;
+        let run = self.dir.join("run");
+        std::fs::create_dir_all(&run)?;
+        let cfg_path = run.join("connect.conf");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&cfg_path)?
+            .write_all(config.as_bytes())?;
+        let args = vec![
+            "wireguard".to_string(),
+            cfg_path.to_string_lossy().into_owned(),
+        ];
+        let mut child = crate::elevate::spawn(&helper_path()?, &args)?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("no output from the VPN helper")?;
+        let mut lines = BufReader::new(stdout).lines();
+        // Includes the time the user takes to approve the prompt.
+        let first = tokio::time::timeout(Duration::from_secs(180), lines.next_line()).await;
+        let _ = std::fs::remove_file(&cfg_path);
+        if !matches!(&first, Ok(Ok(Some(l))) if l.trim() == "up") {
+            drop(child.stdin.take());
+            let code = tokio::time::timeout(Duration::from_secs(5), child.wait())
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .and_then(|s| s.code());
+            bail!(match code {
+                Some(126) | Some(127) => "administrator permission was declined",
+                Some(3) => "the profile was rejected by the VPN helper",
+                Some(6) => "WireGuard tools (wg-quick) aren't installed",
+                _ => "WireGuard failed to start",
+            });
+        }
+        let watchdog = self.on_connected(ip).await?;
+        *self.conn.lock().await = Some(Conn {
+            writer: None,
+            tasks: vec![watchdog],
+            keeper: Some(child),
+        });
+        Ok(())
+    }
+
     /// For quitting: no session restart.
     pub async fn shutdown(&self) {
         if let Some(c) = self.conn.lock().await.take() {
-            let _ = c.writer.lock().await.write_all(b"signal SIGTERM\n").await;
-            for t in c.tasks {
-                t.abort();
-            }
+            c.close().await;
         }
     }
 
     pub async fn disconnect(&self) {
         let conn = self.conn.lock().await.take();
         if let Some(c) = conn {
-            let _ = c.writer.lock().await.write_all(b"signal SIGTERM\n").await;
-            for t in c.tasks {
-                t.abort();
-            }
+            c.close().await;
             self.fall_back().await;
         }
         self.set_status(|s| *s = VpnStatus::default());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn password_prompt_without_newline_is_read() {
+        let (mut ours, theirs) = tokio::io::duplex(64);
+        let mut r = BufReader::new(theirs);
+        // Exactly what OpenVPN 2.7 sends, then it waits.
+        ours.write_all(b"ENTER PASSWORD:").await.unwrap();
+        let mut line = String::new();
+        tokio::time::timeout(Duration::from_secs(2), next_line(&mut r, &mut line))
+            .await
+            .expect("hung waiting for a newline")
+            .unwrap();
+        assert_eq!(mgmt::parse(&line), Line::ManagementPassword);
+
+        ours.write_all(b"SUCCESS: password is correct\r\n>HOLD:Waiting for hold release:0\r\n")
+            .await
+            .unwrap();
+        line.clear();
+        next_line(&mut r, &mut line).await.unwrap();
+        assert!(line.starts_with("SUCCESS"));
+        line.clear();
+        next_line(&mut r, &mut line).await.unwrap();
+        assert_eq!(mgmt::parse(&line), Line::Hold);
+        drop(ours);
+        line.clear();
+        assert_eq!(next_line(&mut r, &mut line).await.unwrap(), 0);
+    }
+
+    #[test]
+    fn commands_wait_for_each_reply() {
+        let mut c = Commands::default();
+        for cmd in ["pw\n", "state on\n", "hold release\n"] {
+            c.push(cmd.into());
+        }
+        assert_eq!(c.next().as_deref(), Some("pw\n"));
+        assert_eq!(c.next(), None);
+        c.on_line(">INFO:OpenVPN Management Interface Version 6\r\n");
+        assert_eq!(c.next(), None);
+        c.on_line("SUCCESS: password is correct\r\n");
+        assert_eq!(c.next().as_deref(), Some("state on\n"));
+        c.on_line("ERROR: whatever\r\n");
+        assert_eq!(c.next().as_deref(), Some("hold release\n"));
+        c.on_line("SUCCESS: hold release succeeded\r\n");
+        assert_eq!(c.next(), None);
     }
 }

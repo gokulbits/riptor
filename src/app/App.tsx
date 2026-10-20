@@ -1,5 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import clsx from "clsx";
 import {
   ArrowDownToLine,
@@ -9,7 +9,9 @@ import {
   Copy,
   Link2,
   Folder,
+  FolderInput,
   FolderOpen,
+  RefreshCw,
   Gauge,
   Pause,
   Play,
@@ -34,6 +36,9 @@ import { Toolbar } from "../features/torrents/Toolbar";
 import { loadColumnPrefs, TorrentTable } from "../features/torrents/TorrentTable";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { StatsDialog } from "../features/stats/StatsDialog";
+import { AboutDialog } from "../features/about/AboutDialog";
+import { LogsDialog } from "../features/about/LogsDialog";
+import { CreateTorrentDialog } from "../features/create/CreateTorrentDialog";
 import { SearchView, useSearchEvents } from "../features/search/SearchView";
 import { VpnView } from "../features/vpn/VpnView";
 
@@ -42,6 +47,9 @@ type Modal =
   | { kind: "remove"; ids: string[] }
   | { kind: "settings" }
   | { kind: "stats" }
+  | { kind: "create" }
+  | { kind: "logs" }
+  | { kind: "about" }
   | { kind: "category" }
   | { kind: "limits"; ids: string[] }
   | { kind: "tags"; ids: string[] }
@@ -120,6 +128,7 @@ export default function App() {
         else if (e.type === "notice") toast(e.level, e.message);
       }),
       events.externalAdd((items) => queueAdds(items)),
+      events.vpn((v) => useApp.getState().setVpn(v)),
       getCurrentWebview().onDragDropEvent((ev) => {
         if (ev.payload.type !== "drop") return;
         const files = ev.payload.paths.filter((p) => p.toLowerCase().endsWith(".torrent"));
@@ -135,6 +144,7 @@ export default function App() {
           await api.engineStatus();
           setReady(true);
           loadColumnPrefs().catch(() => {});
+          api.vpnStatus().then(useApp.getState().setVpn, () => {});
           refreshCategories();
           const startup = await api.takeStartupItems();
           if (startup.length) queueAdds(startup);
@@ -231,6 +241,33 @@ export default function App() {
     window.addEventListener("mouseup", up);
   };
 
+  const moveSelected = async (ids: string[]) => {
+    const first = s.torrents.get(ids[0]);
+    const dir = await open({
+      directory: true,
+      defaultPath: first?.save_path,
+      title: ids.length === 1 ? `Move "${first?.name}" to` : `Move ${ids.length} torrents to`,
+    });
+    if (typeof dir !== "string") return;
+    actions.toast("info", ids.length === 1 ? `Moving ${first?.name}…` : `Moving ${ids.length} torrents…`);
+    try {
+      await api.move(ids, dir);
+      actions.toast("success", "Moved. Riptor is checking the files at their new place.");
+    } catch (e) {
+      actions.toast("error", errorText(e));
+    }
+  };
+
+  const recheckSelected = async (ids: string[]) => {
+    const ok = await ask(
+      ids.length === 1
+        ? "Check every piece of this torrent again? It pauses while checking."
+        : `Check every piece of ${ids.length} torrents again? They pause while checking.`,
+      { title: "Force recheck", kind: "info" },
+    );
+    if (ok) run(api.recheck(ids));
+  };
+
   const menuItems = (): (MenuItem | "sep")[] => {
     return [
       { label: "Resume", icon: <Play size={14} />, onClick: () => run(api.resume(selected)) },
@@ -251,7 +288,7 @@ export default function App() {
         icon: <Tag size={14} />,
         onClick: () => setModal({ kind: "tags", ids: selected }),
       },
-      { label: "Share limits…", icon: <Gauge size={14} />, onClick: () => setModal({ kind: "limits", ids: selected }) },
+      { label: "Limits…", icon: <Gauge size={14} />, onClick: () => setModal({ kind: "limits", ids: selected }) },
       {
         label: "Queue",
         icon: <ChevronUp size={14} />,
@@ -264,6 +301,8 @@ export default function App() {
       },
       "sep",
       { label: "Open folder", icon: <FolderOpen size={14} />, disabled: selected.length !== 1, onClick: () => run(api.reveal(selected[0])) },
+      { label: "Move…", icon: <FolderInput size={14} />, onClick: () => moveSelected(selected) },
+      { label: "Force recheck", icon: <RefreshCw size={14} />, onClick: () => recheckSelected(selected) },
       {
         label: "Copy magnet link",
         icon: <Link2 size={14} />,
@@ -311,6 +350,9 @@ export default function App() {
         onQueue={(how) => run(api.queueMove(selected, how))}
         onSettings={() => setModal({ kind: "settings" })}
         onStats={() => setModal({ kind: "stats" })}
+        onCreate={() => setModal({ kind: "create" })}
+        onLogs={() => setModal({ kind: "logs" })}
+        onAbout={() => setModal({ kind: "about" })}
       />
       {view === "search" ? (
         <div className="min-h-0 flex-1">
@@ -358,6 +400,9 @@ export default function App() {
         />
       )}
       {modal?.kind === "stats" && <StatsDialog onClose={() => setModal(null)} />}
+      {modal?.kind === "create" && <CreateTorrentDialog onClose={() => setModal(null)} />}
+      {modal?.kind === "logs" && <LogsDialog onClose={() => setModal(null)} />}
+      {modal?.kind === "about" && <AboutDialog onClose={() => setModal(null)} onLogs={() => setModal({ kind: "logs" })} />}
       {modal?.kind === "category" && <CategoryDialog onClose={() => setModal(null)} onSaved={refreshCategories} />}
       {modal?.kind === "limits" && limitTargets.length > 0 && <ShareLimitsDialog torrents={limitTargets} onClose={() => setModal(null)} />}
       {modal?.kind === "tags" && tagTargets.length > 0 && <TagsDialog torrents={tagTargets} onClose={() => setModal(null)} />}

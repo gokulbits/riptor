@@ -100,6 +100,8 @@ pub use torrent_state::{
     ManagedTorrent, ManagedTorrentShared, ManagedTorrentState, TorrentMetadata, TorrentStats,
     TorrentStatsState,
 };
+// RIPTOR PATCH: name the live state so web-seed workers can hold it.
+pub use torrent_state::TorrentStateLive;
 pub use type_aliases::FileInfos;
 
 pub use buffers::*;

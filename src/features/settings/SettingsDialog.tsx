@@ -15,19 +15,44 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "downloads", label: "Downloads" },
   { id: "connection", label: "Connection" },
   { id: "speed", label: "Speed" },
-  { id: "bittorrent", label: "Seeding & queue" },
-  { id: "storage", label: "Disk cache" },
-  { id: "privacy", label: "Privacy & security" },
-  { id: "apps", label: "Default app" },
-  { id: "backup", label: "Backup & restore" },
+  { id: "bittorrent", label: "Seeding & Queue" },
+  { id: "storage", label: "Disk Cache" },
+  { id: "privacy", label: "Privacy & Security" },
+  { id: "apps", label: "Default App" },
+  { id: "backup", label: "Backup & Restore" },
 ];
+
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+const toTime = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const fromTime = (v: string) => {
+  const [h, m] = v.split(":").map(Number);
+  return Number.isFinite(h) && Number.isFinite(m) ? Math.min(1439, Math.max(0, h * 60 + m)) : 0;
+};
+
+function FolderInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+  return (
+    <div className="flex gap-1">
+      <input className="input" value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+      <button
+        className="btn-ghost border border-border"
+        onClick={async () => {
+          const d = await open({ directory: true, defaultPath: value || undefined });
+          if (typeof d === "string") onChange(d);
+        }}
+      >
+        <FolderOpen size={15} />
+      </button>
+    </div>
+  );
+}
 
 const MiB = 1024 * 1024;
 
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <fieldset className="space-y-3">
-      <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">{title}</legend>
+      <legend className="mb-5 text-xs font-semibold uppercase tracking-wider text-muted">{title}</legend>
       {children}
     </fieldset>
   );
@@ -49,6 +74,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const queue = (patch: Partial<Settings["seeding"]["queue"]>) =>
     setS({ ...s, seeding: { ...s.seeding, queue: { ...s.seeding.queue, ...patch } } });
   const storage = (patch: Partial<Settings["storage"]>) => setS({ ...s, storage: { ...s.storage, ...patch } });
+  const schedule = (patch: Partial<Settings["alt_schedule"]>) => setS({ ...s, alt_schedule: { ...s.alt_schedule, ...patch } });
 
   const save = async () => {
     setSaving(true);
@@ -96,31 +122,40 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="flex-1 space-y-6">
           {section === "downloads" && (
             <Group title="Saving">
-              <Field label="Default download folder">
-                <div className="flex gap-1">
-                  <input className="input" value={s.download_dir} onChange={(e) => set({ download_dir: e.target.value })} />
-                  <button
-                    className="btn-ghost border border-border"
-                    onClick={async () => {
-                      const d = await open({ directory: true, defaultPath: s.download_dir });
-                      if (typeof d === "string") set({ download_dir: d });
-                    }}
-                  >
-                    <FolderOpen size={15} />
-                  </button>
-                </div>
+              <Field label="Default Download Folder">
+                <FolderInput value={s.download_dir} onChange={(v) => set({ download_dir: v })} />
               </Field>
               <Toggle
                 checked={s.create_subfolder}
                 onChange={(v) => set({ create_subfolder: v })}
-                label="Put multi-file torrents in their own folder"
+                label="Put Multi-File Torrents In Their Own Folder"
+              />
+              <Toggle
+                checked={s.move_on_category_change}
+                onChange={(v) => set({ move_on_category_change: v })}
+                label="Move Files When A Torrent's Category Changes"
+                hint="Files go to the new category's folder, or the default folder if it has none."
               />
               <Toggle
                 checked={s.mark_of_the_web}
                 onChange={(v) => set({ mark_of_the_web: v })}
-                label="Mark downloaded files as coming from the internet"
+                label="Mark Downloaded Files As Coming From The Internet"
                 hint="Windows: lets SmartScreen and Office warn before opening downloaded programs and documents."
               />
+            </Group>
+          )}
+          {section === "downloads" && (
+            <Group title="Watched Folder">
+              <Field
+                label="Add Torrents Saved To This Folder"
+                hint="Checked every few seconds. Added files are renamed to .added, unreadable ones to .invalid. Leave empty to turn it off."
+              >
+                <FolderInput
+                  value={s.watched_folder ?? ""}
+                  placeholder="Off"
+                  onChange={(v) => set({ watched_folder: v.trim() || null })}
+                />
+              </Field>
             </Group>
           )}
           {section === "downloads" && (
@@ -128,7 +163,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <Toggle
                 checked={s.close_to_tray}
                 onChange={(v) => set({ close_to_tray: v })}
-                label="Keep running in the tray when the window is closed"
+                label="Keep Running In The Tray When The Window Is Closed"
                 hint="Downloads and seeding carry on. Use Quit in the tray menu to exit."
               />
             </Group>
@@ -151,27 +186,33 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   <Field label="Protocol">
                     <select className="input" value={s.transport} onChange={(e) => set({ transport: e.target.value as Settings["transport"] })}>
                       <option value="tcp">TCP</option>
-                      <option value="tcp_and_utp">TCP and µTP (experimental)</option>
+                      <option value="tcp_and_utp">TCP And µTP (Experimental)</option>
                     </select>
                   </Field>
                 </div>
-                <Field label="Listen on address" hint="Leave empty for all network adapters. Set a VPN adapter's IP to accept peers only through the VPN.">
+                <Field label="Listen On Address" hint="Leave empty for all network adapters. Set a VPN adapter's IP to accept peers only through the VPN.">
                   <input
                     className="input font-mono text-xs"
                     value={s.listen_address ?? ""}
                     onChange={(e) => set({ listen_address: e.target.value.trim() || null })}
-                    placeholder="All adapters"
+                    placeholder="All Adapters"
                   />
                 </Field>
-                <Toggle checked={s.upnp} onChange={(v) => set({ upnp: v })} label="Forward the port with UPnP" />
+                <Toggle checked={s.upnp} onChange={(v) => set({ upnp: v })} label="Forward The Port With UPnP" />
               </Group>
               <Group title="Peers">
-                <Toggle checked={s.dht} onChange={(v) => set({ dht: v })} label="DHT (find peers without trackers)" />
-                <Toggle checked={s.lsd} onChange={(v) => set({ lsd: v })} label="Local peer discovery" />
-                <Field label="Max peers per torrent">
+                <Toggle checked={s.dht} onChange={(v) => set({ dht: v })} label="DHT (Find Peers Without Trackers)" />
+                <Toggle checked={s.lsd} onChange={(v) => set({ lsd: v })} label="Local Peer Discovery" />
+                <Toggle
+                  checked={s.web_seeds}
+                  onChange={(v) => set({ web_seeds: v })}
+                  label="Web Seeds"
+                  hint="Also download from HTTP servers a torrent lists. Off while a proxy or anonymous mode is in use. Local and private addresses are never contacted."
+                />
+                <Field label="Max Peers Per Torrent">
                   <OptionalNumber value={s.peer_limit} onChange={(v) => set({ peer_limit: v })} min={1} />
                 </Field>
-                <Field label="SOCKS5 proxy for peer connections" hint="socks5://user:pass@host:port — leave empty for none">
+                <Field label="SOCKS5 Proxy For Peer Connections" hint="socks5://user:pass@host:port — leave empty for none">
                   <input
                     className="input font-mono text-xs"
                     value={s.proxy_url ?? ""}
@@ -185,7 +226,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
           {section === "speed" && (
             <>
-              <Group title="Global limits (KiB/s)">
+              <Group title="Global Limits (KiB/s)">
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Download">
                     <OptionalNumber value={s.dl_limit_kib} onChange={(v) => set({ dl_limit_kib: v })} min={1} />
@@ -195,7 +236,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   </Field>
                 </div>
               </Group>
-              <Group title="Alternative limits (KiB/s)">
+              <Group title="Alternative Limits (KiB/s)">
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Download">
                     <OptionalNumber value={s.alt_dl_limit_kib} onChange={(v) => set({ alt_dl_limit_kib: v })} min={1} />
@@ -204,60 +245,108 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     <OptionalNumber value={s.alt_ul_limit_kib} onChange={(v) => set({ alt_ul_limit_kib: v })} min={1} />
                   </Field>
                 </div>
-                <Toggle checked={s.alt_speed_enabled} onChange={(v) => set({ alt_speed_enabled: v })} label="Use alternative limits now" />
+                <Toggle checked={s.alt_speed_enabled} onChange={(v) => set({ alt_speed_enabled: v })} label="Use Alternative Limits Now" />
+              </Group>
+              <Group title="Schedule">
+                <Toggle
+                  checked={s.alt_schedule.enabled}
+                  onChange={(v) => schedule({ enabled: v })}
+                  label="Use Alternative Limits On A Schedule"
+                  hint="They switch on when the window starts and off when it ends. You can still change them by hand in between."
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="From">
+                    <input
+                      className="input"
+                      type="time"
+                      disabled={!s.alt_schedule.enabled}
+                      value={toTime(s.alt_schedule.from)}
+                      onChange={(e) => schedule({ from: fromTime(e.target.value) })}
+                    />
+                  </Field>
+                  <Field label="To" hint={s.alt_schedule.from === s.alt_schedule.to ? "Same time: all day" : undefined}>
+                    <input
+                      className="input"
+                      type="time"
+                      disabled={!s.alt_schedule.enabled}
+                      value={toTime(s.alt_schedule.to)}
+                      onChange={(e) => schedule({ to: fromTime(e.target.value) })}
+                    />
+                  </Field>
+                </div>
+                <div className="flex gap-1" role="group" aria-label="Days">
+                  {DAYS.map((d, i) => {
+                    const on = (s.alt_schedule.days & (1 << i)) !== 0;
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        aria-pressed={on}
+                        disabled={!s.alt_schedule.enabled}
+                        onClick={() => schedule({ days: s.alt_schedule.days ^ (1 << i) })}
+                        className={clsx(
+                          "w-11 rounded-md border px-2 py-1 text-xs disabled:opacity-50",
+                          on ? "border-accent bg-accent/15 text-fg" : "border-border text-muted hover:text-fg",
+                        )}
+                      >
+                        {d}
+                      </button>
+                    );
+                  })}
+                </div>
               </Group>
             </>
           )}
 
           {section === "bittorrent" && (
             <>
-              <Group title="Seeding limits">
+              <Group title="Seeding Limits">
                 <div className="grid grid-cols-3 gap-3">
-                  <Field label="Max ratio">
+                  <Field label="Max Ratio">
                     <OptionalNumber value={s.seeding.max_ratio} onChange={(v) => seeding({ max_ratio: v })} step={0.1} />
                   </Field>
-                  <Field label="Max seeding time (min)">
+                  <Field label="Max Seeding Time (Minutes)">
                     <OptionalNumber value={s.seeding.max_seeding_minutes} onChange={(v) => seeding({ max_seeding_minutes: v })} />
                   </Field>
-                  <Field label="Max inactive time (min)">
+                  <Field label="Max Inactive Time (Minutes)">
                     <OptionalNumber
                       value={s.seeding.max_inactive_seeding_minutes}
                       onChange={(v) => seeding({ max_inactive_seeding_minutes: v })}
                     />
                   </Field>
                 </div>
-                <Field label="When a limit is reached">
+                <Field label="When A Limit Is Reached">
                   <select
                     className="input"
                     value={s.seeding.limit_action}
                     onChange={(e) => seeding({ limit_action: e.target.value as Settings["seeding"]["limit_action"] })}
                   >
-                    <option value="stop">Stop torrent</option>
-                    <option value="remove">Remove torrent</option>
-                    <option value="remove_with_files">Remove torrent and its files</option>
+                    <option value="stop">Stop Torrent</option>
+                    <option value="remove">Remove Torrent</option>
+                    <option value="remove_with_files">Remove Torrent And Its Files</option>
                   </select>
                 </Field>
               </Group>
               <Group title="Queueing">
-                <Toggle checked={s.seeding.queue.enabled} onChange={(v) => queue({ enabled: v })} label="Limit how many torrents run at once" />
+                <Toggle checked={s.seeding.queue.enabled} onChange={(v) => queue({ enabled: v })} label="Limit How Many Torrents Run At Once" />
                 <div className="grid grid-cols-3 gap-3">
-                  <Field label="Active downloads">
+                  <Field label="Active Downloads">
                     <OptionalNumber value={s.seeding.queue.max_active_downloads} onChange={(v) => queue({ max_active_downloads: v })} />
                   </Field>
-                  <Field label="Active uploads">
+                  <Field label="Active Uploads">
                     <OptionalNumber value={s.seeding.queue.max_active_uploads} onChange={(v) => queue({ max_active_uploads: v })} />
                   </Field>
-                  <Field label="Active torrents">
+                  <Field label="Active Torrents">
                     <OptionalNumber value={s.seeding.queue.max_active_torrents} onChange={(v) => queue({ max_active_torrents: v })} />
                   </Field>
                 </div>
                 <Toggle
                   checked={s.seeding.queue.dont_count_slow}
                   onChange={(v) => queue({ dont_count_slow: v })}
-                  label="Don't count slow torrents in these limits"
+                  label="Don't Count Slow Torrents In These Limits"
                 />
                 <div className="grid grid-cols-3 gap-3">
-                  <Field label="Download threshold (KiB/s)">
+                  <Field label="Download Threshold (KiB/s)">
                     <input
                       className="input"
                       type="number"
@@ -266,7 +355,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                       onChange={(e) => queue({ dl_rate_threshold: Math.max(0, Number(e.target.value) || 0) * 1024 })}
                     />
                   </Field>
-                  <Field label="Upload threshold (KiB/s)">
+                  <Field label="Upload Threshold (KiB/s)">
                     <input
                       className="input"
                       type="number"
@@ -275,7 +364,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                       onChange={(e) => queue({ ul_rate_threshold: Math.max(0, Number(e.target.value) || 0) * 1024 })}
                     />
                   </Field>
-                  <Field label="Inactivity timer (s)">
+                  <Field label="Inactivity Timer (Seconds)">
                     <input
                       className="input"
                       type="number"
@@ -290,13 +379,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           )}
 
           {section === "storage" && (
-            <Group title="Disk cache">
+            <Group title="Disk Cache">
               <p className="text-xs text-muted">
                 Riptor keeps downloaded pieces in memory until they are verified, then writes each one in a few large writes.
                 It also keeps recently uploaded data in memory, so peers asking for the same piece don't hit the disk again.
               </p>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Read cache (MiB)" hint="0 disables it">
+                <Field label="Read Cache (MiB)" hint="0 disables it">
                   <input
                     className="input"
                     type="number"
@@ -306,7 +395,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => storage({ read_cache_bytes: Math.min(4096, Math.max(0, Number(e.target.value) || 0)) * MiB })}
                   />
                 </Field>
-                <Field label="Write buffer (MiB)" hint="0 writes straight to disk">
+                <Field label="Write Buffer (MiB)" hint="0 writes straight to disk">
                   <input
                     className="input"
                     type="number"
@@ -316,7 +405,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => storage({ write_buffer_bytes: Math.min(4096, Math.max(0, Number(e.target.value) || 0)) * MiB })}
                   />
                 </Field>
-                <Field label="Max open files">
+                <Field label="Max Open Files">
                   <input
                     className="input"
                     type="number"
@@ -326,14 +415,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => storage({ max_open_files: Math.min(65536, Math.max(16, Number(e.target.value) || 16)) })}
                   />
                 </Field>
-                <Field label="Disk space allocation">
+                <Field label="Disk Space Allocation">
                   <select
                     className="input"
                     value={s.storage.preallocation}
                     onChange={(e) => storage({ preallocation: e.target.value as Settings["storage"]["preallocation"] })}
                   >
-                    <option value="sparse">Sparse (allocate as data arrives)</option>
-                    <option value="full">Pre-allocate full size</option>
+                    <option value="sparse">Sparse (Allocate As Data Arrives)</option>
+                    <option value="full">Pre-Allocate Full Size</option>
                   </select>
                 </Field>
               </div>
@@ -349,11 +438,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 <Toggle
                   checked={s.anonymous_mode}
                   onChange={(v) => set({ anonymous_mode: v })}
-                  label="Anonymous mode"
+                  label="Anonymous Mode"
                   hint="Turns off DHT, local discovery and UPnP, and hides the client name."
                 />
               </Group>
-              <Group title="IP blocklist">
+              <Group title="IP Blocklist">
                 <Field label="Blocklist URL" hint="https only. Peers on the list are never connected.">
                   <input
                     className="input font-mono text-xs"
