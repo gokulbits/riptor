@@ -25,7 +25,6 @@ import { useApp } from "../../stores/app";
 const KIND_LABEL = { builtin: "Built in", torznab: "Torznab", plugin: "Plugin" } as const;
 const PYTHON_DOWNLOADS = "https://www.python.org/downloads/";
 const COMMUNITY_PAGE = "https://github.com/qbittorrent/search-plugins/wiki/Unofficial-search-plugins";
-/** Plugins reviewed and installed together at most. */
 const MAX_BATCH = 20;
 
 const openUrl = (url: string) => api.openWebUrl(url).catch(() => {});
@@ -83,7 +82,6 @@ function TorznabForm({ onAdded }: { onAdded: () => void }) {
   );
 }
 
-/** Where plugins get their Python from, and what to do when there is none. */
 function PythonPanel({ python, onChange }: { python: PythonStatus | null; onChange: (p: PythonStatus) => void }) {
   const toast = useApp((s) => s.toast);
   const [busy, setBusy] = useState<"check" | "install" | "remove" | null>(null);
@@ -162,7 +160,6 @@ function PythonPanel({ python, onChange }: { python: PythonStatus | null; onChan
   );
 }
 
-/** Review fetched plugins (source + SHA-256) and install the confirmed ones. */
 function ReviewPanel({
   previews,
   failures,
@@ -303,7 +300,6 @@ function CatalogRow({ e, selected, onToggle }: { e: CatalogEntry; selected: bool
   );
 }
 
-/** Plugins from the official search-plugins repository and community list. */
 function PluginCatalogView({ onInstalled }: { onInstalled: () => void }) {
   const toast = useApp((s) => s.toast);
   const [catalog, setCatalog] = useState<PluginCatalog | null>(null);
@@ -449,7 +445,6 @@ function PluginCatalogView({ onInstalled }: { onInstalled: () => void }) {
   );
 }
 
-/** Install one plugin from a URL or a file. */
 function PluginInstaller({ onInstalled }: { onInstalled: () => void }) {
   const [url, setUrl] = useState("");
   const [review, setReview] = useState<Review | null>(null);

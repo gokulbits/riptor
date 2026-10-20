@@ -1,9 +1,4 @@
-"""Riptor's implementation of the nova3 search-plugin helper API.
-
-retrieve_url / download_file / htmlentitydecode with the same signatures
-plugins expect, plus safety limits: http(s) only, timeouts and size caps.
-Written for Riptor; API-compatible with the nova3 helpers.
-"""
+"""nova3 helper API, with http(s) only, timeouts and size caps."""
 
 import gzip
 import html
@@ -68,7 +63,7 @@ def htmlentitydecode(s):
 
 
 def retrieve_url(url, custom_headers={}, request_data=None, ssl_context=None, unescape_html_entities=True):
-    """Fetch a URL and return its body as text ('' on failure)."""
+    """'' on failure."""
     try:
         _check_url(url)
         req = urllib.request.Request(url, data=request_data, headers={**headers, **dict(custom_headers)})
@@ -83,7 +78,7 @@ def retrieve_url(url, custom_headers={}, request_data=None, ssl_context=None, un
 
 
 def download_file(url, referer=None, ssl_context=None):
-    """Download a .torrent to a temp file; returns 'path url'."""
+    """Returns 'path url'."""
     _check_url(url)
     h = dict(headers)
     if referer:
@@ -98,7 +93,7 @@ def download_file(url, referer=None, ssl_context=None):
 
 
 def enable_socks_proxy(enable):
-    """Riptor does not route plugin traffic through a proxy."""
+    """No proxy support."""
     return None
 
 

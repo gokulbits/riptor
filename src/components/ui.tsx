@@ -96,7 +96,7 @@ export function Toggle({
   );
 }
 
-/** Number input where empty means "no limit" (null). */
+/** Empty means no limit (null). */
 export function OptionalNumber({
   value,
   onChange,

@@ -1,6 +1,4 @@
-//! Mark-of-the-Web for finished downloads (Windows), as browsers
-//! do. SmartScreen and Office then treat the files as coming
-//! from the internet. A no-op elsewhere.
+//! Mark-of-the-Web on finished downloads (Windows only), like browsers do.
 
 use std::path::Path;
 
@@ -28,7 +26,6 @@ mod tests {
         s.push(":Zone.Identifier");
         let z = std::fs::read_to_string(s).unwrap();
         assert!(z.contains("ZoneId=3"));
-        // The main data stream is untouched.
         assert_eq!(std::fs::read(&f).unwrap(), b"MZ");
     }
 }

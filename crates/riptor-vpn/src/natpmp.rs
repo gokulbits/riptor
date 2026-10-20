@@ -1,13 +1,11 @@
-//! NAT-PMP (RFC 6886) port mapping, used for VPN port forwarding:
-//! the VPN gateway (commonly `10.2.0.1`) maps a public port to Riptor so peers can
-//! connect in. Mappings expire after `lifetime` seconds and must be renewed.
+//! NAT-PMP (RFC 6886) port forwarding through the VPN gateway. Mappings
+//! expire and must be renewed.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Context};
 
-/// The usual NAT-PMP gateway address inside the tunnel.
 pub const DEFAULT_GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 2, 0, 1);
 pub const PORT: u16 = 5351;
 
@@ -39,7 +37,6 @@ pub fn encode_request(
     b
 }
 
-/// Strictly parse a mapping response for the request we sent.
 pub fn decode_response(b: &[u8], proto: Proto, internal_port: u16) -> anyhow::Result<Mapping> {
     ensure!(
         b.len() == 16,
@@ -73,9 +70,7 @@ pub fn decode_response(b: &[u8], proto: Proto, internal_port: u16) -> anyhow::Re
     })
 }
 
-/// Request a mapping. The socket is bound to `local` (the VPN adapter's
-/// address) so the request itself goes through the tunnel. Retries per RFC 6886
-/// with a doubling timeout.
+/// Bound to `local` so the request goes through the tunnel.
 pub async fn map(
     gateway: SocketAddr,
     local: Ipv4Addr,
@@ -137,7 +132,6 @@ mod tests {
         assert!(decode_response(&[0u8; 15], Proto::Tcp, 6881).is_err());
     }
 
-    /// Against a fake gateway on loopback (no firewall prompt).
     #[tokio::test]
     async fn client_round_trip() {
         let gw = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
@@ -146,7 +140,6 @@ mod tests {
         let addr = gw.local_addr().unwrap();
         tokio::spawn(async move {
             let mut buf = [0u8; 12];
-            // Drop the first request to exercise the retry.
             let (_, _) = gw.recv_from(&mut buf).await.unwrap();
             let (_, from) = gw.recv_from(&mut buf).await.unwrap();
             let internal = u16::from_be_bytes([buf[4], buf[5]]);

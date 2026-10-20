@@ -1,5 +1,4 @@
-//! Internet Archive: every item has a `{id}_archive.torrent`. Legal content,
-//! no account or setup, so it is Riptor's default search provider.
+//! Internet Archive. Every item has an `{id}_archive.torrent`.
 
 use serde::Deserialize;
 

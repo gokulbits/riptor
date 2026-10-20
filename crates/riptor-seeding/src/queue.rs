@@ -1,12 +1,5 @@
-//! Torrent queueing, following libtorrent's auto-manage rules:
-//!
-//! * Downloading torrents are ordered by queue position; seeds by least
-//!   seeding time first, so seeding is shared fairly.
-//! * Forced torrents always run and still use up slots.
-//! * With "don't count slow torrents", a running torrent that has been below
-//!   the rate threshold for the inactivity timer keeps running but does not
-//!   use up a slot, which lets the next queued torrent start.
-//! * Downloads are placed first, then seeds take whatever total slots remain.
+//! Queueing after libtorrent's auto-manage rules. Seeds go by least seeding
+//! time; slow torrents can run without holding a slot.
 
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +22,6 @@ pub struct QueuePrefs {
 }
 
 impl Default for QueuePrefs {
-    // Conventional defaults.
     fn default() -> Self {
         Self {
             enabled: true,
@@ -44,7 +36,6 @@ impl Default for QueuePrefs {
     }
 }
 
-/// A downloading torrent is judged by its download rate, a seed by its upload rate.
 pub(crate) fn below_thresholds(t: &TorrentView, q: &QueuePrefs) -> bool {
     if t.finished {
         t.ul_rate < q.ul_rate_threshold
@@ -100,7 +91,6 @@ pub fn plan(
 
     let counts = |t: &TorrentView| !(q.dont_count_slow && t.running && is_slow(t.id));
 
-    // Forced torrents run unconditionally but use up slots first.
     for t in torrents
         .iter()
         .filter(eligible)
@@ -150,8 +140,7 @@ pub fn plan(
     out
 }
 
-/// Queue-position editing helpers. `order` holds the ids of downloading
-/// torrents, index = queue position.
+/// `order[i]` is the torrent at queue position i.
 pub mod order {
     use crate::TorrentId;
 

@@ -68,6 +68,7 @@ cargo bench -p riptor-storage
   - librqbit's own JSON persistence and fastresume live in `<data>/session`.
 - **riptor-storage::CachedStorageFactory** is the session's *default* storage factory, so restored torrents use it. librqbit hides the output folder from factories, so the engine registers each torrent's root by info hash before adding or restoring it, and an unregistered torrent is refused.
 - **Pieces:** buffered per piece in memory, then flushed synchronously in `on_piece_completed`, which runs *before* the piece is announced to peers.
+- **UI preferences:** anything that should survive a backup (e.g. the torrent list's `columns`) lives in `Settings` and is validated in Rust. localStorage is only for throwaway view state (sort, panel height, tab).
 - **Backups** (`riptor-core/src/backup.rs`): `RIPTRBK\0` header, XChaCha20-Poly1305 with the header as AAD, deflate+JSON payload. The built-in key (tamper-evident only) or an Argon2id password.
 - **Search plugins:** run through Riptor's own JSON-line shim in `crates/riptor-search/assets/nova`. Engines are loaded by file path and never put on `sys.path`. The catalog (`catalog.rs`) is fetched from GitHub at runtime; never vendor plugin code. Riptor's own Python (`pyembed.rs`, Windows) is python.org's embeddable zip, pinned by SHA-256. `RIPTOR_TEST_PYTHON=<python.exe>` lets the end-to-end plugin test run without a system Python.
 - **Seed/peer lookups** (`scrape.rs`): results without counts are scraped from their trackers (HTTP + UDP BEP 15). Only public addresses are contacted; tests use `Net::new(true)` to allow 127.0.0.1. `search_start` holds lookups while the engine isn't on the normal network (VPN or kill switch), since they don't go through the tunnel.
@@ -94,6 +95,7 @@ cargo bench -p riptor-storage
    - Force recheck.
    - Profile the storage download path (~35% slower than plain I/O at NVMe speeds).
    - A real-network download/seed check (e.g. Debian netinst).
+   - Orphaned librqbit session entries (no Riptor record) are refused every start but never removed.
 6. **M2 leftovers:**
    - Alt-speed weekly scheduler.
    - Watched folder.
@@ -104,10 +106,7 @@ cargo bench -p riptor-storage
    - Try popular community plugins against the shim (official ones work on Windows with Python 3.14).
    - Bump the embedded Python pin in `pyembed.rs` with Python security releases.
    - Route tracker lookups (`scrape.rs`) through the VPN once it exists.
-8. **UI polish:**
-   - Replace `window.prompt` for tags.
-   - Persist detail-panel height and tab.
-9. **Security and quality:**
+8. **Security and quality:**
    - A security review per milestone.
    - Fuzz parsers (Torznab, plugin output, backup, VPN configs).
    - Privately report librqbit's Windows path escape upstream.

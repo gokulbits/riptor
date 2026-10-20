@@ -1,11 +1,7 @@
-/// Ratios are capped here; the UI may show this as "∞".
 pub const MAX_RATIO: f64 = 9999.0;
 
-/// Share ratio (the conventional "real ratio").
-///
-/// If the recorded download is under 1% of the data we have (for example a
-/// torrent that was added already complete, or whose stats were lost), the
-/// data we have is used as the denominator instead.
+/// If we downloaded under 1% of what we have (added complete, or stats lost),
+/// divide by what we have instead.
 pub fn real_ratio(all_time_upload: u64, all_time_download: u64, total_done: u64) -> f64 {
     let download = if (all_time_download as f64) < (total_done as f64) * 0.01 {
         total_done

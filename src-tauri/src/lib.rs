@@ -24,8 +24,7 @@ pub struct AppState {
     pub vpn: OnceCell<Arc<vpn::VpnManager>>,
 }
 
-/// Turn command-line arguments / deep links into add requests. Anything that
-/// is not a magnet link or an existing `.torrent` file is ignored.
+/// Magnet links and existing .torrent files only.
 fn items_from_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Vec<Source> {
     args.into_iter()
         .filter_map(|a| {
@@ -43,17 +42,12 @@ fn items_from_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Vec<Source> {
         .collect()
 }
 
-/// External add requests always go to the UI's add dialog; nothing is added
-/// without the user seeing it.
+/// Always goes through the add dialog, never added silently.
 fn forward_external(app: &AppHandle, items: Vec<Source>) {
     if items.is_empty() {
         return;
     }
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.unminimize();
-        let _ = w.show();
-        let _ = w.set_focus();
-    }
+    tray::show_main(app);
     let _ = app.emit("riptor://external-add", items);
 }
 
@@ -94,6 +88,8 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Launching Riptor again brings back a window hidden in the tray.
+            tray::show_main(app);
             forward_external(
                 app,
                 items_from_args(argv.iter().skip(1).map(String::as_str)),
@@ -103,7 +99,26 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(window_state_flags())
+                .build(),
+        )
         .manage(AppState::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let to_tray = window
+                    .state::<AppState>()
+                    .engine
+                    .get()
+                    .is_some_and(|e| e.settings().close_to_tray);
+                if to_tray && window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    tray::set_toggle_text(window.app_handle(), false);
+                }
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             let args: Vec<String> = std::env::args().skip(1).collect();
@@ -118,8 +133,7 @@ pub fn run() {
 
             tray::create(&handle)?;
 
-            // Installed builds list Riptor under "Open with" (never changes defaults).
-            // Skipped in dev so the registry never points at a target/debug exe.
+            // Not in dev builds, or the registry would point at target/debug.
             if !cfg!(debug_assertions) {
                 std::thread::spawn(|| {
                     if let Err(e) = associations::register() {
@@ -139,7 +153,6 @@ pub fn run() {
                             riptor_search::SearchManager::new(&data_dir_search, http)
                         }) {
                             Ok(s) => {
-                                // Installed builds ship Python next to Riptor.
                                 if let Ok(res) = handle.path().resource_dir() {
                                     s.set_shipped_python(res.join("python"));
                                 }
@@ -183,6 +196,8 @@ pub fn run() {
             commands::torrent_files,
             commands::torrent_trackers,
             commands::torrent_peers,
+            commands::torrent_magnet,
+            commands::free_space,
             commands::set_category,
             commands::set_tags,
             commands::set_share_limits,
@@ -233,14 +248,11 @@ pub fn run() {
         .expect("error while building Riptor");
 
     app.run(|handle, event| match event {
-        // Last window closed (or the OS asked us to exit): shut down properly first.
         RunEvent::ExitRequested { api, .. } => {
             api.prevent_exit();
             quit(handle);
         }
-        // Only reached if something bypassed `quit`. The async runtime is
-        // already going away here, so don't await anything: just clean up the
-        // tray icon and leave.
+        // Only if something bypassed quit(). The runtime is already gone here.
         RunEvent::Exit => {
             let _ = handle.remove_tray_by_id(tray::TRAY_ID);
             std::process::exit(0);
@@ -249,25 +261,29 @@ pub fn run() {
     });
 }
 
+/// Not VISIBLE: a window hidden to the tray should still open next launch.
+fn window_state_flags() -> tauri_plugin_window_state::StateFlags {
+    use tauri_plugin_window_state::StateFlags;
+    StateFlags::all() - StateFlags::VISIBLE
+}
+
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Quit Riptor for real: save statistics, flush every torrent's buffered
-/// pieces, remove the tray icon, then end the process.
-///
-/// This must run while the async runtime is alive. It used to run in
-/// `RunEvent::Exit`, where the runtime is already being torn down: timers
-/// never fire there, so librqbit's `stop()` (which sleeps for a second) hung
-/// forever and the process lingered without a window, which made "Quit" look
-/// broken and left the tray icon behind.
+/// Save stats, flush pieces, then exit. Must run while the async runtime is
+/// alive: in RunEvent::Exit, librqbit's stop() never wakes from its sleep.
 pub fn quit(handle: &AppHandle) {
     const LIMIT: std::time::Duration = std::time::Duration::from_secs(8);
     if QUITTING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
+    // process::exit below skips the plugin's own save.
+    {
+        use tauri_plugin_window_state::AppHandleExt;
+        let _ = handle.save_window_state(window_state_flags());
+    }
     if let Some(w) = handle.get_webview_window("main") {
         let _ = w.hide();
     }
-    // Last resort if something below blocks a thread forever.
     std::thread::spawn(|| {
         std::thread::sleep(LIMIT + std::time::Duration::from_secs(4));
         error!("shutdown did not finish in time; exiting anyway");
@@ -275,7 +291,6 @@ pub fn quit(handle: &AppHandle) {
     });
     let handle = handle.clone();
     tauri::async_runtime::spawn(async move {
-        // Stop OpenVPN first: the tunnel is ours and must not outlive Riptor.
         if let Some(v) = handle.state::<AppState>().vpn.get().cloned() {
             if tokio::time::timeout(std::time::Duration::from_secs(3), v.shutdown())
                 .await
@@ -291,7 +306,7 @@ pub fn quit(handle: &AppHandle) {
                 Err(_) => error!("shutdown timed out after {LIMIT:?}"),
             }
         }
-        // Remove the icon ourselves so Windows doesn't keep a dead one in the tray.
+        // Otherwise Windows leaves a dead icon in the tray.
         let _ = handle.remove_tray_by_id(tray::TRAY_ID);
         std::process::exit(0);
     });

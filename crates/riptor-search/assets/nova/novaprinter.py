@@ -1,8 +1,5 @@
-"""Riptor's implementation of the nova3 search-plugin printer API.
-
-Plugins call prettyPrinter(dict) once per result. Riptor reads one JSON object
-per line from stdout, so names containing '|' or newlines cannot corrupt the
-output. Written for Riptor; API-compatible with the nova3 novaprinter.
+"""nova3 printer API. Prints JSON lines, so a '|' or newline in a name can't
+corrupt the output.
 """
 
 import json
@@ -18,7 +15,7 @@ _SIZE_RE = re.compile(r"^\s*([0-9]+(?:[.,][0-9]+)?)\s*([a-zA-Z]*)\s*$")
 
 
 def anySizeToBytes(size_string):
-    """Convert '1.5 GB', '700 MiB', '12345' etc. to bytes; -1 if unknown."""
+    """'1.5 GB', '700 MiB', '12345' -> bytes; -1 if unknown."""
     if isinstance(size_string, (int, float)):
         return int(size_string) if size_string >= 0 else -1
     m = _SIZE_RE.match(str(size_string or ""))

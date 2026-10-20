@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  Link2,
   Folder,
   FolderOpen,
   Gauge,
@@ -22,15 +23,15 @@ import { useShallow } from "zustand/react/shallow";
 import { api, errorText, events } from "../lib/ipc";
 import { applyTheme, resolveTheme } from "../lib/themes";
 import type { Source } from "../lib/types";
-import { useApp, visibleTorrents } from "../stores/app";
+import { loadPref, savePref, useApp, visibleTorrents } from "../stores/app";
 import { AddDialog } from "../features/torrents/AddDialog";
 import { ContextMenu, type MenuItem } from "../features/torrents/ContextMenu";
 import { DetailPanel } from "../features/torrents/DetailPanel";
 import { Sidebar } from "../features/torrents/Sidebar";
-import { CategoryDialog, MagnetDialog, RemoveDialog, ShareLimitsDialog } from "../features/torrents/SmallDialogs";
+import { CategoryDialog, MagnetDialog, RemoveDialog, ShareLimitsDialog, TagsDialog } from "../features/torrents/SmallDialogs";
 import { StatusBar } from "../features/torrents/StatusBar";
 import { Toolbar } from "../features/torrents/Toolbar";
-import { TorrentTable } from "../features/torrents/TorrentTable";
+import { loadColumnPrefs, TorrentTable } from "../features/torrents/TorrentTable";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { StatsDialog } from "../features/stats/StatsDialog";
 import { SearchView, useSearchEvents } from "../features/search/SearchView";
@@ -43,6 +44,7 @@ type Modal =
   | { kind: "stats" }
   | { kind: "category" }
   | { kind: "limits"; ids: string[] }
+  | { kind: "tags"; ids: string[] }
   | null;
 
 function useTheme() {
@@ -98,14 +100,16 @@ export default function App() {
   const [modal, setModal] = useState<Modal>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [categories, setCategories] = useState<Record<string, string | null>>({});
-  const [detailHeight, setDetailHeight] = useState(260);
+  const [detailHeight, setDetailHeight] = useState(() => {
+    const h = Number(loadPref("riptor.detailHeight", "260"));
+    return Number.isFinite(h) ? Math.min(Math.max(h, 120), 2000) : 260;
+  });
 
   const refreshCategories = useCallback(() => {
     api.categories().then(setCategories).catch(() => {});
   }, []);
 
-  // Engine events, readiness, and external add requests. No "run once" guard:
-  // StrictMode mounts effects twice and the cleanup below must be allowed to undo the first.
+  // No "run once" guard: StrictMode mounts twice and the cleanup must undo the first.
   useEffect(() => {
     const { applyTick, removeTorrent, toast, queueAdds, setReady } = useApp.getState();
     const subs = [
@@ -123,13 +127,14 @@ export default function App() {
         else if (ev.payload.paths.length) toast("warning", "Only .torrent files can be dropped here");
       }),
     ];
-    // Poll until the engine is up (its ready event may fire before we listen).
+    // The ready event can fire before we listen.
     let stop = false;
     const poll = async () => {
       while (!stop) {
         try {
           await api.engineStatus();
           setReady(true);
+          loadColumnPrefs().catch(() => {});
           refreshCategories();
           const startup = await api.takeStartupItems();
           if (startup.length) queueAdds(startup);
@@ -160,7 +165,6 @@ export default function App() {
     if (list.length) actions.queueAdds(list.map((value) => ({ kind: "file", value }) as Source));
   };
 
-  // Tray menu items that need a dialog (Rust has already shown the window).
   useEffect(() => {
     const un = events.trayAction((action) => {
       if (action === "add_file") addFile();
@@ -172,11 +176,9 @@ export default function App() {
     return () => {
       un.then((f) => f());
     };
-    // addFile only touches stable store actions, so subscribing once is fine.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keyboard shortcuts and paste-to-add.
   useEffect(() => {
     const inField = (t: EventTarget | null) => t instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName);
     const onKey = (e: KeyboardEvent) => {
@@ -220,13 +222,16 @@ export default function App() {
     const up = () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
+      setDetailHeight((h) => {
+        savePref("riptor.detailHeight", String(h));
+        return h;
+      });
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
   };
 
   const menuItems = (): (MenuItem | "sep")[] => {
-    const ts = selected.map((id) => s.torrents.get(id)).filter(Boolean);
     return [
       { label: "Resume", icon: <Play size={14} />, onClick: () => run(api.resume(selected)) },
       { label: "Stop", icon: <Pause size={14} />, onClick: () => run(api.stop(selected)) },
@@ -244,11 +249,7 @@ export default function App() {
       {
         label: "Edit tags…",
         icon: <Tag size={14} />,
-        onClick: () => {
-          const current = ts[0]?.tags.join(", ") ?? "";
-          const next = window.prompt("Tags (comma separated)", current);
-          if (next != null) run(api.setTags(selected, next.split(",").map((t) => t.trim()).filter(Boolean)));
-        },
+        onClick: () => setModal({ kind: "tags", ids: selected }),
       },
       { label: "Share limits…", icon: <Gauge size={14} />, onClick: () => setModal({ kind: "limits", ids: selected }) },
       {
@@ -263,6 +264,16 @@ export default function App() {
       },
       "sep",
       { label: "Open folder", icon: <FolderOpen size={14} />, disabled: selected.length !== 1, onClick: () => run(api.reveal(selected[0])) },
+      {
+        label: "Copy magnet link",
+        icon: <Link2 size={14} />,
+        onClick: () =>
+          run(
+            Promise.all(selected.map((id) => api.magnet(id))).then((links) =>
+              navigator.clipboard.writeText(links.join("\n")),
+            ),
+          ),
+      },
       {
         label: "Copy info hash",
         icon: <Copy size={14} />,
@@ -286,6 +297,7 @@ export default function App() {
   }
 
   const limitTargets = modal?.kind === "limits" ? modal.ids.map((id) => s.torrents.get(id)!).filter(Boolean) : [];
+  const tagTargets = modal?.kind === "tags" ? modal.ids.map((id) => s.torrents.get(id)!).filter(Boolean) : [];
 
   return (
     <div className="flex h-full flex-col">
@@ -314,7 +326,7 @@ export default function App() {
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">
             {s.ready ? (
-              <TorrentTable onContextMenu={(e) => setMenu({ x: e.clientX, y: e.clientY })} />
+              <TorrentTable onContextMenu={(e) => setMenu({ x: e.clientX, y: e.clientY })} onOpen={(id) => run(api.reveal(id))} />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-muted">Starting engine…</div>
             )}
@@ -336,10 +348,19 @@ export default function App() {
       )}
       {modal?.kind === "magnet" && <MagnetDialog onSubmit={actions.queueAdds} onClose={() => setModal(null)} />}
       {modal?.kind === "remove" && <RemoveDialog ids={modal.ids} onClose={() => setModal(null)} />}
-      {modal?.kind === "settings" && <SettingsDialog onClose={() => setModal(null)} />}
+      {modal?.kind === "settings" && (
+        <SettingsDialog
+          onClose={() => {
+            setModal(null);
+            // A restore may have brought back a different layout.
+            loadColumnPrefs().catch(() => {});
+          }}
+        />
+      )}
       {modal?.kind === "stats" && <StatsDialog onClose={() => setModal(null)} />}
       {modal?.kind === "category" && <CategoryDialog onClose={() => setModal(null)} onSaved={refreshCategories} />}
       {modal?.kind === "limits" && limitTargets.length > 0 && <ShareLimitsDialog torrents={limitTargets} onClose={() => setModal(null)} />}
+      {modal?.kind === "tags" && tagTargets.length > 0 && <TagsDialog torrents={tagTargets} onClose={() => setModal(null)} />}
       <Toasts />
     </div>
   );

@@ -1,16 +1,6 @@
-//! The storage engine proper, independent of librqbit's trait so it can be
-//! tested directly.
-//!
-//! Write path: blocks land in per-piece [`Segments`] in memory. The engine's
-//! hash check reads them back from memory. When the piece verifies,
-//! [`Store::piece_completed`] writes it to disk as a few large writes *before*
-//! the engine announces the piece to peers, so anything a peer can request is
-//! already on disk. If memory runs short, the least recently touched pieces
-//! are spilled to disk early.
-//!
-//! Read path: buffered bytes are overlaid on disk data; otherwise reads go
-//! through an extent-sized LRU cache, so a peer fetching a piece as sixteen
-//! 16 KiB blocks costs one disk read instead of sixteen.
+//! The storage engine, kept apart from librqbit's trait so it can be tested.
+//! Verified pieces are flushed *before* the engine announces them, so peers
+//! can only ask for data that's on disk.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,7 +18,6 @@ use crate::{os, Preallocation, StorageConfig};
 
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Resources shared by every torrent.
 pub struct Shared {
     pub read_cache: ReadCache,
     pub write_budget: WriteBudget,
@@ -36,12 +25,10 @@ pub struct Shared {
     pub metrics: Metrics,
 }
 
-/// Cumulative disk activity across all torrents since the session started.
 #[derive(Default)]
 pub struct Metrics {
     pub pieces_flushed: AtomicU64,
-    /// Unfinished pieces written early because the write buffer was full
-    /// (also known as "write cache overload").
+    /// Pieces written early because the buffer was full.
     pub spills: AtomicU64,
     pub bytes_written: AtomicU64,
     pub bytes_read: AtomicU64,
@@ -58,7 +45,7 @@ pub struct MetricsSnapshot {
     pub bytes_read: u64,
     pub disk_writes: u64,
     pub disk_reads: u64,
-    /// Average time to commit one verified piece, in microseconds.
+    /// Microseconds.
     pub avg_flush_us: u64,
 }
 
@@ -96,7 +83,7 @@ impl Shared {
 
 struct PieceBuf {
     segs: Segments,
-    /// Set once flushed and removed from the map; holders must look it up again.
+    /// Holders must look the piece up again once this is set.
     dead: bool,
 }
 
@@ -112,7 +99,7 @@ pub struct Store {
     pieces: Mutex<HashMap<u32, Arc<PieceEntry>>>,
     shared: Arc<Shared>,
     clock: AtomicU64,
-    /// Bumped on every invalidation; a cache fill that raced with a write is dropped.
+    /// A cache fill that raced with a write is dropped.
     generation: AtomicU64,
     extent: u64,
 }
@@ -124,8 +111,6 @@ impl Store {
             layout.files.iter().map(|f| f.path.clone()).collect(),
             cfg.max_open_files,
         );
-        // One extent ~ one piece, bounded so small reads stay cheap and big pieces
-        // do not blow the cache.
         let extent = layout.piece_len.clamp(64 * 1024, 1024 * 1024);
         Self {
             id: NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed),
@@ -172,7 +157,6 @@ impl Store {
         let (pstart, plen) = self.layout.piece_bounds(piece);
 
         if !self.shared.write_budget.enabled() || abs + len as u64 > pstart + plen {
-            // Buffering off, or a write spanning pieces (the engine never does this).
             let mut pos = offset;
             for b in bufs {
                 self.disk_write(file_id, pos, b)?;
@@ -226,7 +210,6 @@ impl Store {
         Some(e)
     }
 
-    /// Write a piece's buffered bytes to disk and drop the buffer.
     fn flush_piece(&self, piece: u32, entry: &Arc<PieceEntry>) -> anyhow::Result<()> {
         let mut g = entry.buf.lock();
         if g.dead {
@@ -252,7 +235,6 @@ impl Store {
         Ok(())
     }
 
-    /// Called once a piece has passed its hash check.
     pub fn piece_completed(&self, piece: u32) -> anyhow::Result<()> {
         let Some(e) = self.entry(piece, false) else {
             return Ok(());
@@ -266,7 +248,6 @@ impl Store {
         Ok(())
     }
 
-    /// Flush least recently touched pieces until we are back under budget.
     fn spill(&self, keep: u32) -> anyhow::Result<()> {
         while self.shared.write_budget.over() {
             let victim = {
@@ -284,7 +265,6 @@ impl Store {
         Ok(())
     }
 
-    /// Flush everything buffered and fsync (pause, shutdown, before a move).
     pub fn flush_all(&self) -> anyhow::Result<()> {
         let entries: Vec<(u32, Arc<PieceEntry>)> = self
             .pieces
@@ -326,7 +306,7 @@ impl Store {
             buf.fill(0);
             return Ok(());
         }
-        // Seeding fast path: nothing buffered, so no per-piece lookups needed.
+        // Seeding fast path.
         if self.pieces.lock().is_empty() {
             return self.read_cached(file_id, offset, buf);
         }
@@ -366,8 +346,7 @@ impl Store {
                 continue; // flushed meanwhile: data is now on disk
             }
             if !g.segs.covers(rel, buf.len() as u64) {
-                // Partly on disk (spilled earlier or pre-existing data). Hold the
-                // lock so a concurrent spill cannot slip between the two reads.
+                // Hold the lock so a spill can't land between the two reads.
                 self.disk_read(file_id, offset, buf)?;
             }
             g.segs.overlay(rel, buf);
@@ -399,7 +378,6 @@ impl Store {
                     let generation = self.generation.load(Ordering::Acquire);
                     let mut v = vec![0u8; ext_len as usize];
                     if let Err(e) = self.disk_read(file_id, ext_start, &mut v) {
-                        // e.g. a short file still being preallocated: read only what was asked.
                         debug!("extent read failed ({e:#}), falling back to a direct read");
                         return self.disk_read(file_id, pos, &mut buf[done..]);
                     }
@@ -407,7 +385,6 @@ impl Store {
                     if self.generation.load(Ordering::Acquire) == generation {
                         self.shared.read_cache.insert(key, d.clone());
                     }
-                    // Peers usually walk forward; let the kernel start on the next extent.
                     let next = ext_start + ext_len;
                     if next < file_len {
                         if let Ok(f) = self.files.get(file_id, false) {
@@ -488,8 +465,7 @@ impl Store {
         Ok(())
     }
 
-    /// Delete one file. The engine passes its own idea of the name; it is
-    /// ignored in favour of the sanitized path for this file id.
+    /// The engine's filename is ignored; we use our own path for the id.
     pub fn remove_file(&self, file_id: usize) -> anyhow::Result<()> {
         let slot = self.layout.files.get(file_id).context("no such file")?;
         self.files.close(file_id);
@@ -503,9 +479,7 @@ impl Store {
         }
     }
 
-    /// Remove empty folders this torrent created. The engine's `path` is not
-    /// trusted: an empty path means "the torrent root", which is only removed
-    /// when Riptor created it; anything else removes our own empty subfolders.
+    /// The engine's `path` isn't trusted. The root only goes if we created it.
     pub fn remove_empty_dirs(&self, root_requested: bool) -> anyhow::Result<()> {
         for d in self.layout.subdirs_deepest_first() {
             remove_dir_if_empty(&d);
@@ -516,7 +490,6 @@ impl Store {
         Ok(())
     }
 
-    /// Flush and release file handles (torrent paused).
     pub fn release(&self) -> anyhow::Result<()> {
         self.flush_all()?;
         self.files.close_all();

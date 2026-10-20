@@ -4,10 +4,11 @@ import { api, errorText } from "../../lib/ipc";
 import { formatBytes, formatDate, formatDuration, formatPercent, formatRatio } from "../../lib/format";
 import type { FileEntry, Limit, TorrentSummary } from "../../lib/types";
 import { ProgressBar, StateLabel, Tabs } from "../../components/ui";
-import { useApp } from "../../stores/app";
+import { loadPref, savePref, useApp } from "../../stores/app";
 import { SpeedGraph } from "./SpeedGraph";
 
-type Tab = "general" | "files" | "trackers" | "peers" | "speed";
+const TABS = ["general", "files", "trackers", "peers", "speed"] as const;
+type Tab = (typeof TABS)[number];
 
 function limitText(l: Limit, unit = ""): string {
   if (l.mode === "use_global") return "Global";
@@ -244,7 +245,14 @@ function Peers({ t }: { t: TorrentSummary }) {
 }
 
 export function DetailPanel() {
-  const [tab, setTab] = useState<Tab>("general");
+  const [tab, setTabState] = useState<Tab>(() => {
+    const t = loadPref("riptor.detailTab", "general");
+    return TABS.includes(t as Tab) ? (t as Tab) : "general";
+  });
+  const setTab = (t: Tab) => {
+    savePref("riptor.detailTab", t);
+    setTabState(t);
+  };
   const focused = useApp((s) => (s.focused ? s.torrents.get(s.focused) : undefined));
   return (
     <section className="flex h-full flex-col bg-panel" aria-label="Torrent details">

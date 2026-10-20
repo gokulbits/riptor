@@ -1,30 +1,12 @@
-//! OpenVPN profile sanitizing.
-//!
-//! A `.ovpn` file is a list of OpenVPN options, and some of them run programs
-//! (`up`, `down`, `plugin`, ...) as the user that starts OpenVPN, which for a
-//! VPN is an administrator. Imported profiles are therefore treated as
-//! hostile. Only an allowlist of options survives:
-//!
-//! * options that run code or touch files are **removed** and reported (some
-//!   providers' own Linux profiles contain `script-security 2` + `up`/`down` scripts, so
-//!   rejecting them outright would refuse real profiles);
-//! * options that reference files (`ca file.crt`, `auth-user-pass creds.txt`)
-//!   are **refused**: certificates must be inline, and credentials come from
-//!   the OS keyring through the management interface;
-//! * routing and DNS options are **replaced** with Riptor's app-only settings:
-//!   no pushed routes, no system DNS changes, and a low-priority default route
-//!   on the tunnel that only adapter-pinned sockets (Riptor's) use;
-//! * anything unknown is refused, so a new or unusual option is never silently
-//!   trusted.
-//!
-//! The output is a canonical config that the privileged helper re-validates
-//! with this same code before starting OpenVPN.
+//! `.ovpn` sanitizing. OpenVPN runs as admin and options like `up` run
+//! programs, so only an allowlist survives. Script options are removed (some
+//! providers ship them), file references are refused, routing is replaced with
+//! app-only settings, and anything unknown is refused. The helper re-runs this.
 
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-/// Inline blocks we accept (PEM material only).
 const INLINE_BLOCKS: &[&str] = &[
     "ca",
     "cert",
@@ -35,7 +17,6 @@ const INLINE_BLOCKS: &[&str] = &[
     "extra-certs",
 ];
 
-/// Options that are safe to keep as written (argument checks below).
 const ALLOWED: &[&str] = &[
     "client",
     "dev",
@@ -94,7 +75,6 @@ const ALLOWED: &[&str] = &[
     "peer-fingerprint",
 ];
 
-/// Options that run programs or load code: removed, never executed.
 const REMOVED_EXEC: &[&str] = &[
     "up",
     "down",
@@ -132,7 +112,6 @@ const REMOVED_EXEC: &[&str] = &[
     "push-peer-info",
 ];
 
-/// Routing/DNS options: replaced by Riptor's app-only settings.
 const REMOVED_ROUTING: &[&str] = &[
     "redirect-gateway",
     "redirect-private",
@@ -155,7 +134,6 @@ const REMOVED_ROUTING: &[&str] = &[
     "tun-ipv6",
 ];
 
-/// Options that would make OpenVPN read or write a local file.
 const FILE_ARG: &[&str] = &[
     "ca",
     "cert",
@@ -174,7 +152,6 @@ const FILE_ARG: &[&str] = &[
     "http-proxy-user-pass",
 ];
 
-/// Appended to every sanitized profile.
 const APP_ONLY: &str = "\
 # --- added by Riptor: app-only VPN ---
 # Never run scripts or plugins.
@@ -202,12 +179,9 @@ pub struct Remote {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sanitized {
-    /// Canonical config to hand to OpenVPN.
     pub config: String,
-    /// The profile wants a username/password (sent via the management interface).
     pub needs_credentials: bool,
     pub remotes: Vec<Remote>,
-    /// Options that were dropped, for the import summary.
     pub removed: Vec<String>,
 }
 
@@ -239,7 +213,6 @@ pub enum OvpnError {
 
 pub const MAX_PROFILE_BYTES: usize = 256 * 1024;
 
-/// Split an OpenVPN option line into words, honouring quotes.
 fn words(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -275,7 +248,6 @@ fn safe_token(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "._-:+/@=,[] ".contains(c))
 }
 
-/// Re-quote a value for the canonical config when it contains a space.
 fn emit(arg: &str) -> String {
     if arg.contains(' ') {
         format!("\"{arg}\"")
@@ -321,7 +293,6 @@ pub fn sanitize(input: &[u8]) -> Result<Sanitized, OvpnError> {
                 if l == end {
                     break;
                 }
-                // PEM / static-key text only.
                 if !l.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
                     return Err(OvpnError::BadValue {
                         line: n,
@@ -350,7 +321,6 @@ pub fn sanitize(input: &[u8]) -> Result<Sanitized, OvpnError> {
             continue;
         }
         if opt == "auth-user-pass" {
-            // Credentials come from the keyring via the management interface; never a file.
             needs_credentials = true;
             if !args.is_empty() {
                 removed.insert("auth-user-pass file".into());
@@ -439,7 +409,6 @@ mod tests {
 
     const CA: &str = "<ca>\n-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----\n</ca>\n";
 
-    /// Shaped like a typical provider OpenVPN profile for Linux.
     fn provider() -> String {
         format!(
             "# Provider config\nclient\ndev tun\nproto udp\nremote 185.159.157.1 51820\nremote 185.159.157.1 1194\nremote-random\nresolv-retry infinite\nnobind\ncipher AES-256-GCM\nsetenv CLIENT_CERT 0\ntun-mtu 1500\nmssfix 0\npersist-key\npersist-tun\nreneg-sec 0\nremote-cert-tls server\nauth-user-pass\npull\nfast-io\nscript-security 2\nup /etc/openvpn/update-resolv-conf\ndown /etc/openvpn/update-resolv-conf\n{CA}key-direction 1\n<tls-crypt>\n-----BEGIN OpenVPN Static key V1-----\nabcdef\n-----END OpenVPN Static key V1-----\n</tls-crypt>\n"
@@ -452,7 +421,6 @@ mod tests {
         assert!(s.needs_credentials);
         assert_eq!(s.remotes.len(), 2);
         assert_eq!(s.removed, vec!["down", "script-security", "setenv", "up"]);
-        // No way to run anything.
         for bad in [
             "update-resolv-conf",
             "script-security 2",
@@ -461,7 +429,6 @@ mod tests {
         ] {
             assert!(!s.config.contains(bad), "{bad:?} survived");
         }
-        // App-only settings are enforced.
         for must in [
             "script-security 1",
             "route-nopull",
@@ -471,7 +438,6 @@ mod tests {
             assert!(s.config.contains(must), "{must:?} missing");
         }
         assert!(s.config.contains("<tls-crypt>"));
-        // Re-sanitizing the output is stable (the helper re-validates it).
         let again = sanitize(s.config.as_bytes()).unwrap();
         assert_eq!(again.remotes, s.remotes);
     }
@@ -480,7 +446,6 @@ mod tests {
     fn hostile_profiles_are_refused_or_defused() {
         let base =
             |extra: &str| format!("client\ndev tun\nremote vpn.example 1194 udp\n{CA}{extra}");
-        // Code execution is removed, not executed.
         for (evil, directive) in [
             ("plugin /tmp/evil.so", "plugin"),
             ("tls-verify /tmp/x.sh", "tls-verify"),
@@ -504,12 +469,10 @@ mod tests {
                 "{evil}: payload survived"
             );
         }
-        // Values with spaces survive a round trip, re-quoted.
         let s = sanitize(base("verify-x509-name \"CN=vpn example\" name").as_bytes()).unwrap();
         assert!(s
             .config
             .contains("verify-x509-name \"CN=vpn example\" name"));
-        // Files are refused.
         assert!(matches!(
             sanitize(base("ca /etc/ssl/x.crt").as_bytes()),
             Err(OvpnError::FileReference { .. })
@@ -518,10 +481,8 @@ mod tests {
             sanitize(base("config other.ovpn").as_bytes()),
             Err(OvpnError::FileReference { .. })
         ));
-        // Credentials file is dropped, never read.
         let s = sanitize(base("auth-user-pass C:\\secrets.txt").as_bytes()).unwrap();
         assert!(s.needs_credentials && !s.config.contains("secrets"));
-        // Unknown options and odd values are refused.
         assert!(matches!(
             sanitize(base("tun-mtu 1500; rm -rf /").as_bytes()),
             Err(OvpnError::BadValue { .. })
@@ -538,7 +499,6 @@ mod tests {
             sanitize(base("<connection>\nremote x\n</connection>").as_bytes()),
             Err(OvpnError::UnsupportedBlock(_))
         ));
-        // Structure checks.
         assert_eq!(
             sanitize(b"client\ndev tun\n").unwrap_err(),
             OvpnError::NoRemote

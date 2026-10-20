@@ -1,5 +1,3 @@
-//! Owns provider configuration, installed plugins, and running searches.
-
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,13 +27,12 @@ pub struct TorznabEndpoint {
     pub url: String,
 }
 
-/// Persisted in `search/config.json`. API keys are *not* stored here.
+/// API keys are not stored here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SearchConfig {
     pub torznab: Vec<TorznabEndpoint>,
     pub disabled: BTreeSet<String>,
-    /// Ask trackers for seed/peer counts that providers didn't send.
     pub scrape: bool,
 }
 
@@ -59,17 +56,14 @@ pub struct PythonStatus {
     pub available: bool,
     pub version: Option<String>,
     pub sandboxed: bool,
-    /// The interpreter in use is the one Riptor set up.
+    /// The Python in use is ours.
     pub bundled: bool,
-    /// Riptor's own Python is present (whether or not it is the one in use).
     pub bundled_installed: bool,
-    /// Riptor can set up Python by itself on this platform.
     pub can_bundle: bool,
     pub bundle_version: &'static str,
     pub bundle_size: Option<u64>,
 }
 
-/// How long a fetched plugin catalog is reused.
 const CATALOG_TTL: Duration = Duration::from_secs(60 * 60);
 
 pub struct SearchManager {
@@ -84,10 +78,8 @@ pub struct SearchManager {
     catalog: tokio::sync::Mutex<Option<(Instant, Catalog)>>,
     active: Mutex<HashMap<u64, CancellationToken>>,
     next_id: AtomicU64,
-    /// Set while Riptor's VPN or kill switch is in charge: tracker lookups
-    /// would go out on the normal connection, so they are skipped.
+    /// Set while the VPN or kill switch is on; lookups would bypass the tunnel.
     lookups_held: std::sync::atomic::AtomicBool,
-    /// The Python that ships inside Riptor's install folder (Windows setup).
     shipped_python: RwLock<Option<PathBuf>>,
 }
 
@@ -139,7 +131,6 @@ impl SearchManager {
         }
     }
 
-    /// Hold tracker lookups (seed/peer counts) regardless of the user setting.
     pub fn hold_lookups(&self, held: bool) {
         self.lookups_held.store(held, Ordering::SeqCst);
     }
@@ -161,9 +152,7 @@ impl SearchManager {
         Ok(())
     }
 
-    /// Use the Python in Riptor's install folder (`<dir>/python.exe`). It is
-    /// preferred over any other: it's the pinned, verified copy the setup
-    /// installed where only administrators can change it.
+    /// Preferred over any other Python: pinned, and only admins can change it.
     pub fn set_shipped_python(&self, dir: PathBuf) {
         *self.shipped_python.write() = Some(dir);
     }
@@ -218,8 +207,6 @@ impl SearchManager {
         }
     }
 
-    /// Download and set up Riptor's own Python (Windows), then use it if no
-    /// system Python is found.
     pub async fn install_python(&self) -> anyhow::Result<PythonStatus> {
         let _one_at_a_time = self
             .python_setup
@@ -242,7 +229,6 @@ impl SearchManager {
         Ok(status)
     }
 
-    /// Plugins available from GitHub, marked with which are installed.
     pub async fn catalog(&self, refresh: bool) -> Catalog {
         let mut cache = self.catalog.lock().await;
         let fresh = cache
@@ -259,7 +245,6 @@ impl SearchManager {
         c
     }
 
-    /// Re-read installed plugins' names and categories.
     pub async fn refresh_plugins(&self) {
         let has_files = std::fs::read_dir(self.engines_dir())
             .map(|d| {
@@ -399,7 +384,7 @@ impl SearchManager {
 
     // ------------------------------------------------------------ plugins
 
-    /// Fetch or read a plugin and describe it. Nothing is installed or run.
+    /// Nothing is installed or run.
     pub async fn preview_plugin(&self, source: &str) -> anyhow::Result<PluginPreview> {
         let (file_name, bytes) = if source.starts_with("https://") {
             let u = url::Url::parse(source)?;
@@ -451,7 +436,7 @@ impl SearchManager {
         };
         let preview = nova::inspect(&file_name, &bytes, source, &self.engines_dir())?;
         let mut pending = self.pending.lock();
-        // Room for a reviewed batch from the catalog (the UI allows 20).
+        // The UI allows batches of 20.
         if pending.len() >= 64 {
             pending.clear();
         }
@@ -459,7 +444,7 @@ impl SearchManager {
         Ok(preview)
     }
 
-    /// Install exactly the bytes the user reviewed (identified by hash).
+    /// Installs exactly the bytes the user reviewed.
     pub async fn install_plugin(&self, sha256: &str) -> anyhow::Result<()> {
         let (preview, bytes) = self
             .pending
@@ -490,7 +475,6 @@ impl SearchManager {
         Ok(())
     }
 
-    /// For plugin results that must be fetched through the plugin (cookies etc).
     pub async fn plugin_download(&self, provider: &str, url: &str) -> anyhow::Result<PathBuf> {
         let short = provider
             .strip_prefix("plugin:")
@@ -507,8 +491,7 @@ impl SearchManager {
         }
     }
 
-    /// Start a search over the given providers (or every enabled one).
-    /// Events are delivered through `sink` until `LookupsDone`.
+    /// Events go to `sink` until `LookupsDone`.
     pub async fn start(
         self: &Arc<Self>,
         query: &str,
@@ -539,8 +522,6 @@ impl SearchManager {
         let seen: Arc<Mutex<HashSet<String>>> = Arc::default();
         let category = category.to_string();
 
-        // Results without counts are queued for tracker lookups, which run
-        // alongside the providers and may finish after them.
         let (lookup_tx, lookup_rx) = tokio::sync::mpsc::unbounded_channel::<scrape::Job>();
         let lookups_on = self.config.read().scrape && !self.lookups_held.load(Ordering::SeqCst);
 
@@ -651,7 +632,6 @@ mod tests {
         m.set_enabled("archive", false).unwrap();
         assert!(!m.providers()[0].enabled);
         assert!(m.set_enabled("nope", false).is_err());
-        // Reload from disk.
         let m2 = SearchManager::new(d.path(), reqwest::Client::new()).unwrap();
         assert!(!m2.providers()[0].enabled);
         // Plain-http remote indexers are refused before any key is stored.

@@ -1,20 +1,12 @@
-//! Turning untrusted torrent path components into safe on-disk paths.
-//!
-//! Torrent metadata comes from strangers. librqbit rejects `..` and embedded
-//! separators, but that is not enough on Windows: a component such as `C:x`
-//! carries a drive prefix, and `PathBuf::push` *replaces* the whole path with
-//! it. Reserved device names (`CON`, `NUL`, …), alternate data streams
-//! (`a:b`), and trailing dots/spaces (silently stripped by Win32, so two
-//! "different" names alias the same file) are also dangerous. Every component
-//! is therefore rebuilt here, on every platform, so a torrent lands the same
-//! way on Windows and Linux.
+//! Safe on-disk paths from untrusted torrent metadata. On Windows a component
+//! like `C:x` makes `PathBuf::push` replace the whole path, so every component
+//! is rebuilt here, the same way on every platform.
 
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, ensure};
 
-/// Maximum bytes per component (NTFS and ext4 both cap names at 255).
 pub const MAX_COMPONENT_BYTES: usize = 255;
 
 const RESERVED: &[&str] = &[
@@ -26,7 +18,7 @@ const RESERVED: &[&str] = &[
 fn is_forbidden_char(c: char) -> bool {
     c.is_control()
         || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
-        // Bidi controls let a name like "photo\u{202E}gnp.exe" display as "photoexe.png".
+        // "photo\u{202E}gnp.exe" displays as "photoexe.png".
         || matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
@@ -44,7 +36,6 @@ fn truncate_component(s: String) -> String {
     if s.len() <= MAX_COMPONENT_BYTES {
         return s;
     }
-    // Keep a short extension so the file type survives.
     let (stem, ext) = match s.rfind('.') {
         Some(i) if s.len() - i <= 16 && i > 0 => (&s[..i], &s[i..]),
         _ => (s.as_str(), ""),
@@ -56,17 +47,15 @@ fn truncate_component(s: String) -> String {
     format!("{}{}", &stem[..budget], ext)
 }
 
-/// Sanitize one path component. Never returns an empty string, `.` or `..`.
+/// Never empty, `.` or `..`.
 pub fn sanitize_component(raw: &str) -> String {
     let replaced: String = raw
         .chars()
         .map(|c| if is_forbidden_char(c) { '_' } else { c })
         .collect();
-    // Truncation can expose a trailing dot/space or a bare reserved name
-    // ("CON" + 300 spaces + "x"), so trim and check again afterwards.
+    // Truncating can expose a trailing dot or a bare reserved name.
     let fit = |s: String| {
         let t = trim_win32(&truncate_component(s)).to_string();
-        // All-dot names ("." / ".." / "...") trim to empty.
         if t.is_empty() {
             "_".to_string()
         } else {
@@ -81,8 +70,6 @@ pub fn sanitize_component(raw: &str) -> String {
     s
 }
 
-/// Build a relative path from raw components, sanitizing each one, and prove
-/// the result cannot escape whatever it is joined onto.
 pub fn sanitize_relative<'a>(
     components: impl IntoIterator<Item = &'a str>,
 ) -> anyhow::Result<PathBuf> {
@@ -107,8 +94,6 @@ pub fn sanitize_relative<'a>(
     Ok(rel)
 }
 
-/// Join a sanitized relative path onto `root`, refusing anything that would
-/// not stay underneath it.
 pub fn safe_join(root: &Path, rel: &Path) -> anyhow::Result<PathBuf> {
     ensure!(root.is_absolute(), "save folder must be absolute: {root:?}");
     ensure!(
@@ -120,10 +105,7 @@ pub fn safe_join(root: &Path, rel: &Path) -> anyhow::Result<PathBuf> {
     Ok(full)
 }
 
-/// Make every path in `paths` unique, case-insensitively (two names that
-/// differ only in case are the same file on Windows/macOS), by appending
-/// " (n)" before the extension. Different raw names can also collide after
-/// sanitizing ("a:b" and "a_b").
+/// Case-insensitive, and names can collide after sanitizing ("a:b", "a_b").
 pub fn dedupe(paths: &mut [PathBuf]) {
     let key = |p: &Path| p.to_string_lossy().to_lowercase();
     let mut taken: HashSet<String> = HashSet::with_capacity(paths.len());

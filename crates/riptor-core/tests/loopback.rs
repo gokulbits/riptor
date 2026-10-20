@@ -1,5 +1,4 @@
-//! End-to-end tests over loopback: real librqbit sessions talking the
-//! BitTorrent protocol, with Riptor's storage layer on both sides.
+//! Real sessions talking to each other over loopback.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -16,7 +15,7 @@ use riptor_core::{AddParams, Engine, EngineConfig, Event, Settings, Source, Torr
 use riptor_storage::{CachedStorageFactory, Shared, StorageConfig, TorrentRoot};
 use sha2::{Digest, Sha256};
 
-/// A few files of odd sizes so pieces straddle file boundaries.
+/// Odd sizes so pieces straddle files.
 fn make_content(dir: &Path) -> Vec<(PathBuf, usize)> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(42);
     let files = [
@@ -64,7 +63,7 @@ async fn session(out: &Path, factory: &CachedStorageFactory) -> Arc<Session> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn transfer_between_two_sessions_with_cached_storage() {
-    // Second run squeezes the write buffer so pieces spill to disk mid-download.
+    // A tiny write buffer forces spills.
     for (label, write_buffer) in [("normal", 64usize << 20), ("spilling", 64 * 1024)] {
         let tmp = tempfile::tempdir().unwrap();
         let content = tmp.path().join("seed").join("content");
@@ -83,7 +82,6 @@ async fn transfer_between_two_sessions_with_cached_storage() {
         let hash = created.info_hash();
         let bytes = created.as_bytes().unwrap();
 
-        // Seeder: data already in place.
         let seed_factory = CachedStorageFactory::new(Shared::new(StorageConfig::default()));
         seed_factory.register(
             hash,
@@ -113,7 +111,6 @@ async fn transfer_between_two_sessions_with_cached_storage() {
         let seed_addr: SocketAddr = seeder.listen_addr().unwrap();
         let seed_addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), seed_addr.port());
 
-        // Leecher: empty folder.
         let leech_root = tmp.path().join("leech").join("content");
         let leech_factory = CachedStorageFactory::new(Shared::new(StorageConfig {
             write_buffer_bytes: write_buffer,
@@ -146,7 +143,6 @@ async fn transfer_between_two_sessions_with_cached_storage() {
             .unwrap_or_else(|_| panic!("[{label}] download timed out: {}", l.stats()))
             .unwrap();
 
-        // Pause flushes and releases files; then compare byte-for-byte.
         leecher.pause(&l).await.unwrap();
         for (rel, len) in &files {
             let got = leech_root.join(rel);
@@ -193,11 +189,10 @@ async fn engine_seeds_then_stops_at_ratio_limit() {
         dht: false,
         lsd: false,
         upnp: false,
-        // Loopback only: tests must never trigger a firewall prompt.
+        // No firewall prompt.
         listen_address: Some(Ipv4Addr::LOCALHOST.into()),
         ..Settings::default()
     };
-    // Ratio 0 is reached as soon as the torrent is complete.
     settings.seeding.max_ratio = Some(0.0);
     riptor_core::state_file::save(&data_dir.join("settings.json"), &settings).unwrap();
 
@@ -244,7 +239,6 @@ async fn engine_seeds_then_stops_at_ratio_limit() {
     assert!(seen_complete, "data on disk should verify as complete");
     assert_eq!(stopped.progress, 1.0);
     assert!(stopped.completed_on.is_some());
-    // Existing files sit in the user's folder, so Riptor must not claim it.
     assert_eq!(PathBuf::from(&stopped.save_path), content);
 
     engine.shutdown().await.unwrap();
@@ -284,10 +278,21 @@ async fn backup_roundtrip_into_fresh_install() {
     let torrent_file = tmp.path().join("content.torrent");
     std::fs::write(&torrent_file, created.as_bytes().unwrap()).unwrap();
 
-    // Install A: add a torrent, make a backup.
     let a_dir = tmp.path().join("install-a");
     let mut settings = quiet_settings(&downloads);
     settings.peer_limit = Some(77); // something recognisable
+    settings.columns = vec![
+        riptor_core::ColumnPref {
+            key: "size".into(),
+            visible: true,
+            width: Some(120),
+        },
+        riptor_core::ColumnPref {
+            key: "name".into(),
+            visible: false,
+            width: None,
+        },
+    ];
     riptor_core::state_file::save(&a_dir.join("settings.json"), &settings).unwrap();
     let a = Engine::start(EngineConfig { data_dir: a_dir })
         .await
@@ -323,7 +328,6 @@ async fn backup_roundtrip_into_fresh_install() {
     let tampered = tmp.path().join("tampered.riptorbackup");
     std::fs::write(&tampered, &bytes).unwrap();
 
-    // Install B: fresh, restore everything.
     let b_dir = tmp.path().join("install-b");
     riptor_core::state_file::save(&b_dir.join("settings.json"), &quiet_settings(&downloads))
         .unwrap();
@@ -341,6 +345,7 @@ async fn backup_roundtrip_into_fresh_install() {
     assert_eq!(report.added, 1, "{:?}", report.skipped);
     assert!(report.settings_restored && report.statistics_restored);
     assert_eq!(b.settings().peer_limit, Some(77));
+    assert_eq!(b.settings().columns, settings.columns);
     assert!(b.categories().contains_key("linux"));
     assert_eq!(b.statistics().all_time.torrents_added, 1);
     // Restored stopped (password-less backup), with its files present.
@@ -467,7 +472,6 @@ async fn kill_switch_blocks_everything_until_lifted() {
         .await
         .unwrap();
 
-    // Several ticks: the torrent wants to run but must never start, and nothing listens.
     let mut ticks = 0;
     while ticks < 4 {
         if let Ok(Event::Tick { torrents, global }) = events.recv().await {
@@ -509,7 +513,7 @@ async fn kill_switch_blocks_everything_until_lifted() {
         "torrent did not start after the block was lifted"
     );
 
-    // Binding to an adapter that doesn't exist must fail, never fall back to the normal network.
+    // Must fail rather than fall back to the normal network.
     let bad = NetworkMode::Vpn(riptor_core::VpnBinding {
         adapter: "#999999".into(),
         local_ip: Ipv4Addr::new(10, 255, 255, 1),

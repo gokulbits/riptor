@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { GlobalStats, Source, TorrentState, TorrentSummary } from "../lib/types";
+import type { ColumnPref, GlobalStats, Source, TorrentState, TorrentSummary } from "../lib/types";
 
 export type StatusFilter =
   | "all"
@@ -12,19 +12,18 @@ export type StatusFilter =
   | "queued"
   | "errored";
 
-export type SortKey =
-  | "name"
-  | "size"
-  | "progress"
-  | "state"
-  | "peers"
-  | "dl_rate"
-  | "ul_rate"
-  | "eta"
-  | "ratio"
-  | "added_on"
-  | "queue_pos"
-  | "category";
+const SORT_KEYS = ["name", "size", "progress", "state", "peers", "dl_rate", "ul_rate", "eta", "ratio", "added_on", "queue_pos", "category"] as const;
+export type SortKey = (typeof SORT_KEYS)[number];
+
+function loadSort(): { key: SortKey; desc: boolean } {
+  try {
+    const v = JSON.parse(loadPref("riptor.sort", ""));
+    if (SORT_KEYS.includes(v?.key) && typeof v.desc === "boolean") return { key: v.key, desc: v.desc };
+  } catch {
+    // nothing saved yet
+  }
+  return { key: "added_on", desc: true };
+}
 
 export interface Toast {
   id: number;
@@ -57,10 +56,9 @@ export function matchesStatus(t: TorrentSummary, f: StatusFilter): boolean {
   }
 }
 
-/** A theme id from lib/themes.ts, or "system" to follow the OS. */
 export type Theme = string;
 
-function loadPref(key: string, fallback: string): string {
+export function loadPref(key: string, fallback: string): string {
   try {
     return localStorage.getItem(key) ?? fallback;
   } catch {
@@ -68,7 +66,7 @@ function loadPref(key: string, fallback: string): string {
   }
 }
 
-function savePref(key: string, value: string) {
+export function savePref(key: string, value: string) {
   try {
     localStorage.setItem(key, value);
   } catch {
@@ -82,7 +80,7 @@ interface AppState {
   torrents: Map<string, TorrentSummary>;
   order: string[];
   global: GlobalStats | null;
-  /** Recent total speeds for the speed graph, newest last. */
+  /** Newest last. */
   history: { dl: number; ul: number }[];
 
   selection: Set<string>;
@@ -96,6 +94,9 @@ interface AppState {
   sort: { key: SortKey; desc: boolean };
 
   view: "transfers" | "search" | "vpn";
+  /** From settings; null until loaded. */
+  columnPrefs: ColumnPref[] | null;
+  setColumnPrefs: (c: ColumnPref[]) => void;
   theme: Theme;
   accent: string;
   pendingAdds: Source[];
@@ -137,8 +138,10 @@ export const useApp = create<AppState>()((set, get) => ({
   category: undefined,
   tag: null,
   search: "",
-  sort: { key: "added_on", desc: true },
+  sort: loadSort(),
   view: "transfers",
+  columnPrefs: null,
+  setColumnPrefs: (columnPrefs) => set({ columnPrefs }),
   theme: loadPref("riptor.theme", "system"),
   accent: loadPref("riptor.accent", "theme"),
   pendingAdds: [],
@@ -180,7 +183,7 @@ export const useApp = create<AppState>()((set, get) => ({
         else selection.add(id);
         return { selection, anchor: id, focused: id };
       }
-      // range: resolved by the table, which knows the visible order
+      // range: the table knows the visible order
       return { focused: id };
     }),
 
@@ -191,7 +194,11 @@ export const useApp = create<AppState>()((set, get) => ({
   setTag: (tag) => set({ tag }),
   setSearch: (search) => set({ search }),
   setSort: (key) =>
-    set((s) => ({ sort: { key, desc: s.sort.key === key ? !s.sort.desc : key !== "name" && key !== "queue_pos" } })),
+    set((s) => {
+      const sort = { key, desc: s.sort.key === key ? !s.sort.desc : key !== "name" && key !== "queue_pos" };
+      savePref("riptor.sort", JSON.stringify(sort));
+      return { sort };
+    }),
   setView: (view) => set({ view }),
   setTheme: (theme) => {
     savePref("riptor.theme", theme);

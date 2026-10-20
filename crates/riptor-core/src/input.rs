@@ -1,6 +1,4 @@
-//! Untrusted torrent input: magnet links, URLs, local `.torrent` files and
-//! raw bytes. Everything is size-capped and scheme-checked before the engine
-//! sees it.
+//! Torrent input from untrusted sources, size-capped and scheme-checked.
 
 use std::path::Path;
 use std::time::Duration;
@@ -10,7 +8,6 @@ use bytes::Bytes;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
-/// Real `.torrent` files are rarely over a few MB; 16 MB covers huge ones.
 pub const MAX_TORRENT_BYTES: usize = 16 * 1024 * 1024;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -19,8 +16,6 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 pub enum Source {
     Magnet(String),
     Url(String),
-    /// A `.torrent` path from the native file dialog, the OS file association
-    /// or the watched folder.
     File(std::path::PathBuf),
 }
 
@@ -34,7 +29,6 @@ pub fn http_client() -> anyhow::Result<reqwest::Client> {
         .timeout(FETCH_TIMEOUT)
         .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            // Never follow a redirect off http(s) (e.g. to file:// or a custom scheme).
             if attempt.previous().len() >= 5 {
                 attempt.error("too many redirects")
             } else if matches!(attempt.url().scheme(), "http" | "https") {
@@ -115,7 +109,6 @@ pub fn read_torrent_file(p: &Path) -> anyhow::Result<Bytes> {
     Ok(std::fs::read(p)?.into())
 }
 
-/// Extensions that run code when opened. Shown as a warning before adding.
 const EXECUTABLE_EXTS: &[&str] = &[
     "exe", "scr", "com", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh",
     "msi", "msp", "lnk", "pif", "cpl", "hta", "jar", "reg", "dll", "sys", "appimage", "sh", "run",
@@ -130,8 +123,42 @@ pub fn is_executable_name(name: &str) -> bool {
     }
 }
 
+pub fn magnet_link(info_hash: &str, name: &str, trackers: &[String]) -> String {
+    let enc = |s: &str| url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
+    let mut m = format!("magnet:?xt=urn:btih:{info_hash}");
+    if !name.is_empty() {
+        m.push_str("&dn=");
+        m.push_str(&enc(name));
+    }
+    for t in trackers {
+        m.push_str("&tr=");
+        m.push_str(&enc(t));
+    }
+    m
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn magnet_links_round_trip() {
+        let hash = "0123456789abcdef0123456789abcdef01234567";
+        let m = super::magnet_link(
+            hash,
+            "Tom & Jerry?.mkv",
+            &["udp://tracker.example:1337/announce".into()],
+        );
+        assert_eq!(
+            m,
+            "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567\
+             &dn=Tom+%26+Jerry%3F.mkv&tr=udp%3A%2F%2Ftracker.example%3A1337%2Fannounce"
+        );
+        assert!(super::validate_magnet(&m).is_ok());
+        assert_eq!(
+            super::magnet_link(hash, "", &[]),
+            format!("magnet:?xt=urn:btih:{hash}")
+        );
+    }
+
     use super::*;
 
     #[test]

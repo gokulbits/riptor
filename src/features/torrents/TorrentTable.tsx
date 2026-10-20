@@ -1,12 +1,14 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
-import { AlertTriangle, ArrowDown, ArrowUp } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Check, RotateCcw } from "lucide-react";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { formatBytes, formatDate, formatDuration, formatPercent, formatRate, formatRatio } from "../../lib/format";
-import type { TorrentSummary } from "../../lib/types";
+import { api, errorText } from "../../lib/ipc";
+import type { ColumnPref, TorrentSummary } from "../../lib/types";
 import { ProgressBar, StateLabel } from "../../components/ui";
 import { useApp, visibleTorrents, type SortKey } from "../../stores/app";
 import { useShallow } from "zustand/react/shallow";
+import { ContextMenu, type MenuItem } from "./ContextMenu";
 
 interface Column {
   key: SortKey;
@@ -54,10 +56,65 @@ const COLUMNS: Column[] = [
 ];
 
 const ROW_HEIGHT = 30;
+const BY_KEY = new Map<string, Column>(COLUMNS.map((c) => [c.key, c]));
+const clampWidth = (w: number) => Math.min(2000, Math.max(40, Math.round(w)));
 
-export function TorrentTable({ onContextMenu }: { onContextMenu: (e: React.MouseEvent, id: string) => void }) {
+interface Slot {
+  col: Column;
+  visible: boolean;
+  width: number;
+}
+
+/** Saved order first, then any columns added since. Name can't be hidden. */
+function layout(prefs: ColumnPref[]): Slot[] {
+  const out: Slot[] = [];
+  const seen = new Set<string>();
+  for (const p of prefs) {
+    const col = BY_KEY.get(p.key);
+    if (!col || seen.has(p.key)) continue;
+    seen.add(p.key);
+    out.push({ col, visible: p.visible || col.key === "name", width: p.width ?? col.width });
+  }
+  for (const col of COLUMNS) if (!seen.has(col.key)) out.push({ col, visible: true, width: col.width });
+  return out;
+}
+
+const toPrefs = (slots: Slot[]): ColumnPref[] =>
+  slots.map(({ col, visible, width }) => ({ key: col.key, visible, width: width === col.width ? null : clampWidth(width) }));
+
+export async function loadColumnPrefs() {
+  const s = await api.settings();
+  let cols = s.columns;
+  if (!cols.length) {
+    // Widths used to live in localStorage.
+    try {
+      const old: Record<string, number> = JSON.parse(localStorage.getItem("riptor.columns") ?? "{}");
+      if (Object.keys(old).length) cols = toPrefs(COLUMNS.map((col) => ({ col, visible: true, width: old[col.key] ?? col.width })));
+    } catch {
+      // nothing to migrate
+    }
+  }
+  useApp.getState().setColumnPrefs(cols);
+}
+
+function saveColumnPrefs(columns: ColumnPref[]) {
+  const { setColumnPrefs, toast } = useApp.getState();
+  setColumnPrefs(columns);
+  api
+    .settings()
+    .then((s) => api.updateSettings({ ...s, columns }))
+    .catch((e) => toast("error", errorText(e)));
+}
+
+export function TorrentTable({
+  onContextMenu,
+  onOpen,
+}: {
+  onContextMenu: (e: React.MouseEvent, id: string) => void;
+  onOpen: (id: string) => void;
+}) {
   const rows = useApp(useShallow(visibleTorrents));
-  const { selection, sort, setSort, select, selectAll, anchor } = useApp(
+  const { selection, sort, setSort, select, selectAll, anchor, prefs } = useApp(
     useShallow((s) => ({
       selection: s.selection,
       sort: s.sort,
@@ -65,15 +122,20 @@ export function TorrentTable({ onContextMenu }: { onContextMenu: (e: React.Mouse
       select: s.select,
       selectAll: s.selectAll,
       anchor: s.anchor,
+      prefs: s.columnPrefs,
     })),
   );
-  const [widths, setWidths] = useState<Record<string, number>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("riptor.columns") ?? "{}");
-    } catch {
-      return {};
-    }
-  });
+  const slots = useMemo(() => layout(prefs ?? []), [prefs]);
+  const [resizing, setResizing] = useState<{ key: string; width: number } | null>(null);
+  const [drag, setDrag] = useState<{ key: string; target: number } | null>(null);
+  const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number } | null>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const justDragged = useRef(false);
+
+  const shown = slots
+    .filter((s) => s.visible)
+    .map((s) => (resizing?.key === s.col.key ? { ...s, width: resizing.width } : s));
+
   const parent = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -82,8 +144,8 @@ export function TorrentTable({ onContextMenu }: { onContextMenu: (e: React.Mouse
     overscan: 12,
   });
   const ids = useMemo(() => rows.map((r) => r.id), [rows]);
-  const template = COLUMNS.map((c) => `${widths[c.key] ?? c.width}px`).join(" ");
-  const totalWidth = COLUMNS.reduce((n, c) => n + (widths[c.key] ?? c.width), 0);
+  const template = shown.map((s) => `${s.width}px`).join(" ");
+  const totalWidth = shown.reduce((n, s) => n + s.width, 0);
 
   const onRowClick = (e: React.MouseEvent, id: string) => {
     if (e.shiftKey && anchor) {
@@ -103,51 +165,119 @@ export function TorrentTable({ onContextMenu }: { onContextMenu: (e: React.Mouse
     e.preventDefault();
     e.stopPropagation();
     const x0 = e.clientX;
-    const move = (ev: MouseEvent) => setWidths((w) => ({ ...w, [key]: Math.max(40, start + ev.clientX - x0) }));
+    let width = start;
+    const move = (ev: MouseEvent) => {
+      width = clampWidth(start + ev.clientX - x0);
+      setResizing({ key, width });
+    };
     const up = () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
-      setWidths((w) => {
-        try {
-          localStorage.setItem("riptor.columns", JSON.stringify(w));
-        } catch {
-          /* ignore */
-        }
-        return w;
-      });
+      setResizing(null);
+      if (width !== start) saveColumnPrefs(toPrefs(slots.map((s) => (s.col.key === key ? { ...s, width } : s))));
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
   };
 
+  // Native HTML5 drag-and-drop is taken over by the window's file drop on
+  // Windows, so headers are dragged with plain mouse events.
+  const startDrag = (e: React.MouseEvent, key: string) => {
+    if (e.button !== 0) return;
+    const x0 = e.clientX;
+    let target: number | null = null;
+    const targetAt = (x: number) => {
+      const cells = [...(headerRef.current?.querySelectorAll<HTMLElement>("[role=columnheader]") ?? [])];
+      const i = cells.findIndex((c) => {
+        const r = c.getBoundingClientRect();
+        return x < r.left + r.width / 2;
+      });
+      return i < 0 ? cells.length : i;
+    };
+    const move = (ev: MouseEvent) => {
+      if (target == null && Math.abs(ev.clientX - x0) < 6) return;
+      target = targetAt(ev.clientX);
+      setDrag({ key, target });
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      setDrag(null);
+      if (target == null) return;
+      justDragged.current = true;
+      const from = shown.findIndex((s) => s.col.key === key);
+      if (target === from || target === from + 1) return;
+      // Place before the visible column now at `target`; hidden ones keep their spots.
+      const moving = slots.find((s) => s.col.key === key)!;
+      const rest = slots.filter((s) => s.col.key !== key);
+      const before = shown[target]?.col.key;
+      const at = before ? rest.findIndex((s) => s.col.key === before) : rest.length;
+      rest.splice(at, 0, moving);
+      saveColumnPrefs(toPrefs(rest));
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
+  const headerItems = (): (MenuItem | "sep")[] => [
+    ...slots.map((s) => ({
+      label: s.col.label === "#" ? "Queue position" : s.col.label,
+      icon: s.visible ? <Check size={14} /> : undefined,
+      disabled: s.col.key === "name",
+      keepOpen: true,
+      onClick: () => saveColumnPrefs(toPrefs(slots.map((x) => (x === s ? { ...x, visible: !x.visible } : x)))),
+    })),
+    "sep",
+    { label: "Reset columns", icon: <RotateCcw size={14} />, onClick: () => saveColumnPrefs([]) },
+  ];
+
   return (
     <div ref={parent} className="relative h-full overflow-auto" tabIndex={0} aria-label="Torrents" role="grid">
       <div style={{ minWidth: totalWidth }}>
         <div
+          ref={headerRef}
           role="row"
           className="sticky top-0 z-10 grid border-b border-border bg-panel text-xs font-medium text-muted"
           style={{ gridTemplateColumns: template }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setHeaderMenu({ x: e.clientX, y: e.clientY });
+          }}
+          title="Drag to reorder. Right-click to show or hide columns."
         >
-          {COLUMNS.map((c) => (
-            <div
-              key={c.key}
-              role="columnheader"
-              aria-sort={sort.key === c.key ? (sort.desc ? "descending" : "ascending") : "none"}
-              onClick={() => setSort(c.key)}
-              className={clsx(
-                "relative flex cursor-pointer select-none items-center gap-1 px-2 py-2 hover:text-fg",
-                c.align === "right" && "justify-end",
-              )}
-            >
-              <span className="truncate">{c.label}</span>
-              {sort.key === c.key && (sort.desc ? <ArrowDown size={12} /> : <ArrowUp size={12} />)}
-              <span
-                className="absolute right-0 top-1 h-[calc(100%-8px)] w-1.5 cursor-col-resize border-r border-border hover:border-accent"
-                onMouseDown={(e) => startResize(e, c.key, widths[c.key] ?? c.width)}
-                onClick={(e) => e.stopPropagation()}
-              />
-            </div>
-          ))}
+          {shown.map((s, i) => {
+            const c = s.col;
+            return (
+              <div
+                key={c.key}
+                role="columnheader"
+                aria-sort={sort.key === c.key ? (sort.desc ? "descending" : "ascending") : "none"}
+                onMouseDown={(e) => startDrag(e, c.key)}
+                onClick={() => {
+                  if (justDragged.current) {
+                    justDragged.current = false;
+                    return;
+                  }
+                  setSort(c.key);
+                }}
+                className={clsx(
+                  "relative flex cursor-pointer select-none items-center gap-1 px-2 py-2 hover:text-fg",
+                  c.align === "right" && "justify-end",
+                  drag?.key === c.key && "opacity-50",
+                  drag && drag.target === i && "shadow-[inset_2px_0_0_rgb(var(--accent))]",
+                  drag && drag.target === shown.length && i === shown.length - 1 && "shadow-[inset_-2px_0_0_rgb(var(--accent))]",
+                )}
+              >
+                <span className="truncate">{c.label}</span>
+                {sort.key === c.key && (sort.desc ? <ArrowDown size={12} /> : <ArrowUp size={12} />)}
+                <span
+                  className="absolute right-0 top-1 h-[calc(100%-8px)] w-1.5 cursor-col-resize border-r border-border hover:border-accent"
+                  onMouseDown={(e) => startResize(e, c.key, s.width)}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </div>
+            );
+          })}
         </div>
 
         {rows.length === 0 ? (
@@ -166,6 +296,7 @@ export function TorrentTable({ onContextMenu }: { onContextMenu: (e: React.Mouse
                   role="row"
                   aria-selected={selected}
                   onMouseDown={(e) => e.button === 0 && onRowClick(e, t.id)}
+                  onDoubleClick={() => onOpen(t.id)}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     if (!selected) select(t.id, "single");
@@ -178,7 +309,7 @@ export function TorrentTable({ onContextMenu }: { onContextMenu: (e: React.Mouse
                   )}
                   style={{ top: v.start, height: ROW_HEIGHT, gridTemplateColumns: template }}
                 >
-                  {COLUMNS.map((c) => (
+                  {shown.map(({ col: c }) => (
                     <div
                       key={c.key}
                       role="gridcell"
@@ -193,6 +324,7 @@ export function TorrentTable({ onContextMenu }: { onContextMenu: (e: React.Mouse
           </div>
         )}
       </div>
+      {headerMenu && <ContextMenu x={headerMenu.x} y={headerMenu.y} items={headerItems()} onClose={() => setHeaderMenu(null)} />}
     </div>
   );
 }

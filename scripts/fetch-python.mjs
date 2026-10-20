@@ -1,9 +1,5 @@
-// Download the official embeddable Python that the Windows setup ships for
-// search plugins, verify it against the SHA-256 pinned in
-// crates/riptor-search/src/pyembed.rs (the single source of truth), and unpack
-// it to src-tauri/python/ for the bundler.
-//
-//   node scripts/fetch-python.mjs
+// Fetches the embeddable Python the Windows setup ships and unpacks it into
+// src-tauri/python. The pin lives in crates/riptor-search/src/pyembed.rs.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -13,7 +9,6 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pin = await readFile(join(root, "crates", "riptor-search", "src", "pyembed.rs"), "utf8");
-// The x86_64 Windows release block.
 const block = pin.match(/target_arch = "x86_64"\)\)\]\s*pub const RELEASE[^}]*\}/);
 if (!block) throw new Error("x86_64 release pin not found in pyembed.rs");
 const url = block[0].match(/url:\s*"([^"]+)"/)?.[1];
@@ -40,8 +35,7 @@ await mkdir(outDir, { recursive: true });
 const zip = join(root, "src-tauri", "python-embed.zip");
 await writeFile(zip, buf);
 try {
-  // Windows 10+ ships bsdtar, which unpacks zip files. Call it by full path:
-  // a GNU tar earlier on PATH (Git Bash) can't read zips.
+  // Windows' bsdtar reads zips; Git Bash's GNU tar doesn't.
   const tar = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "bsdtar";
   execFileSync(tar, ["-xf", zip, "-C", outDir], { stdio: "inherit" });
 } finally {

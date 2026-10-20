@@ -4784,7 +4784,7 @@ dependencies = [
 
 [[package]]
 name = "riptor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -4802,6 +4802,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "tauri-plugin-window-state",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4812,7 +4813,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4843,7 +4844,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-search"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4867,7 +4868,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-seeding"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4875,7 +4876,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "criterion",
@@ -4894,7 +4895,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-vpn"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -4909,7 +4910,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-vpn-helper"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "riptor-vpn",
@@ -6026,6 +6027,21 @@ dependencies = [
  "tracing",
  "windows-sys 0.61.2",
  "zbus 5.19.0",
+]
+
+[[package]]
+name = "tauri-plugin-window-state"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d6815cab7b212f9cfe16a9d79d8d22f9e14159e4a9460f7dec1467167a008e3"
+dependencies = [
+ "bitflags 2.13.2",
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

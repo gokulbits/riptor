@@ -1,10 +1,5 @@
-//! Saved VPN profiles.
-//!
-//! A profile is stored as its *sanitized* config (see [`crate::ovpn`] and
-//! [`crate::wg`]) in `<data>/vpn/profiles/<id>.json`. Secrets never go in that
-//! file: OpenVPN usernames/passwords and WireGuard private/preshared keys live
-//! in the OS credential store and are only put together with the config in
-//! [`ProfileStore::materialize`], right before connecting.
+//! Saved profiles: sanitized config on disk, secrets in the OS credential store.
+//! They only meet in [`ProfileStore::materialize`], right before connecting.
 
 use std::path::{Path, PathBuf};
 
@@ -28,20 +23,18 @@ pub struct Profile {
     pub id: String,
     pub name: String,
     pub kind: Kind,
-    /// Sanitized config with secrets replaced by slots.
+    /// Secrets replaced by slots.
     pub config: String,
     pub needs_credentials: bool,
     pub servers: Vec<String>,
-    /// Options removed on import (shown to the user).
     pub removed: Vec<String>,
-    /// DNS servers from the profile (WireGuard), used only for Riptor's own lookups.
+    /// From WireGuard profiles; never applied to the system.
     #[serde(default)]
     pub dns: Vec<std::net::IpAddr>,
     pub created: u64,
 }
 
 impl Profile {
-    /// Whether this profile can run app-only on this platform.
     pub fn app_only_supported(&self) -> bool {
         match self.kind {
             Kind::OpenVpn => true,
@@ -114,7 +107,6 @@ impl ProfileStore {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
-    /// Import an untrusted profile file. The kind is detected from the content.
     pub fn import(&self, name: &str, bytes: &[u8]) -> anyhow::Result<Profile> {
         let name: String = name
             .chars()
@@ -135,7 +127,6 @@ impl ProfileStore {
             .any(|l| l.trim().eq_ignore_ascii_case("[interface]"))
         {
             let s = wg::sanitize(bytes)?;
-            // Move keys to the credential store; keep slots in the saved config.
             let mut config = String::new();
             let mut psk = 0;
             for line in s.config.lines() {
@@ -228,12 +219,12 @@ impl ProfileStore {
         Ok(())
     }
 
-    /// The full config to hand to the helper, secrets included. Never stored.
+    /// Includes secrets. Never stored.
     pub fn materialize(&self, id: &str) -> anyhow::Result<String> {
         let p = self.get(id)?;
         match p.kind {
             Kind::OpenVpn => {
-                // Re-validate: the saved file could have been edited.
+                // The saved file could have been edited.
                 let s = ovpn::sanitize(p.config.as_bytes())?;
                 Ok(s.config)
             }

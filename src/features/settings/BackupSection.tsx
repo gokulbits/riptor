@@ -17,13 +17,11 @@ export function BackupSection({ onSettingsRestored }: { onSettingsRestored: () =
   const toast = useApp((s) => s.toast);
   const [busy, setBusy] = useState<"backup" | "inspect" | "restore" | null>(null);
 
-  // Create
   const [usePassword, setUsePassword] = useState(false);
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const pwOk = !usePassword || (pw.length >= 8 && pw === pw2);
 
-  // Restore
   const [file, setFile] = useState<string | null>(null);
   const [needsPw, setNeedsPw] = useState(false);
   const [restorePw, setRestorePw] = useState("");
@@ -55,7 +53,7 @@ export function BackupSection({ onSettingsRestored }: { onSettingsRestored: () =
       const s = await api.inspectBackup(path, password);
       setSummary(s);
       setNeedsPw(s.password_protected);
-      // A password proves the backup is yours, so its torrents can resume as they were.
+      // With a password we know the backup is theirs, so torrents can resume.
       setOpts((o) => ({ ...o, resume_torrents: s.password_protected }));
     } catch (e) {
       const msg = errorText(e);

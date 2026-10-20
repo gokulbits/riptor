@@ -1,5 +1,4 @@
-//! Minimal date parsing for search results (ISO 8601 and RFC 2822), so the
-//! crate needs no date library.
+//! Just enough ISO 8601 and RFC 2822 parsing for search results.
 
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };

@@ -1,19 +1,15 @@
-//! Types exchanged with the UI and persisted between runs.
-
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use riptor_seeding::{Intent, ShareLimitAction, ShareLimits};
 use serde::{Deserialize, Serialize};
 
-/// Per-torrent state Riptor keeps on top of librqbit's own persistence.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Record {
     pub info_hash: String,
     pub name: String,
-    /// Folder the torrent's files live under (see `owned_root`).
     pub root: PathBuf,
-    /// `root` was created by Riptor for this torrent (multi-file subfolder).
+    /// We created `root`, so we may remove it.
     pub owned_root: bool,
     #[serde(default)]
     pub category: Option<String>,
@@ -49,7 +45,6 @@ pub struct Record {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PersistedState {
     pub torrents: Vec<Record>,
-    /// Category name -> optional default save folder.
     #[serde(default)]
     pub categories: BTreeMap<String, Option<PathBuf>>,
 }
@@ -74,9 +69,7 @@ pub struct TorrentSummary {
     pub name: String,
     pub state: TorrentState,
     pub forced: bool,
-    /// 0.0 ..= 1.0 of the selected files.
     pub progress: f64,
-    /// Bytes of the selected files.
     pub size: u64,
     pub done: u64,
     pub total_size: u64,
@@ -103,7 +96,7 @@ pub struct TorrentSummary {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct GlobalStats {
-    /// "normal", "vpn" or "blocked" (kill switch engaged).
+    /// "normal", "vpn" or "blocked".
     pub network: String,
     pub dl_rate: u64,
     pub ul_rate: u64,
@@ -117,7 +110,7 @@ pub struct GlobalStats {
 #[derive(Clone, Debug, Serialize)]
 pub struct FileEntry {
     pub index: usize,
-    /// Path relative to the torrent root, as it will appear on disk (sanitized).
+    /// Relative to the torrent root, sanitized.
     pub path: String,
     pub size: u64,
     pub done: u64,
@@ -125,7 +118,6 @@ pub struct FileEntry {
     pub executable: bool,
 }
 
-/// What the add dialog shows before the user commits.
 #[derive(Clone, Debug, Serialize)]
 pub struct Preview {
     pub info_hash: String,
@@ -144,14 +136,14 @@ pub struct Preview {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct AddParams {
     pub info_hash: String,
-    /// `None` = category folder or the default download folder.
+    /// `None`: category folder, else the default.
     pub save_path: Option<PathBuf>,
     pub category: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
     pub start_paused: bool,
-    /// File indices to download; `None` = all.
+    /// `None` = all.
     pub only_files: Option<Vec<usize>>,
     /// Overrides the global "create subfolder" setting.
     pub create_subfolder: Option<bool>,

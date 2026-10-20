@@ -1,5 +1,4 @@
-//! IPC surface. Every argument is validated again in `riptor-core`; nothing
-//! here trusts the webview. Errors are flattened to strings for the UI.
+//! IPC commands. Nothing here trusts the webview; riptor-core validates again.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -35,7 +34,6 @@ pub async fn engine_status(state: State<'_, AppState>) -> Res<()> {
     engine(&state).await.map(|_| ())
 }
 
-/// Magnet links / .torrent paths passed on the command line at launch.
 #[tauri::command]
 pub fn take_startup_items(state: State<'_, AppState>) -> Vec<Source> {
     std::mem::take(&mut *state.startup_items.lock())
@@ -96,6 +94,21 @@ pub async fn torrent_files(state: State<'_, AppState>, id: String) -> Res<Vec<Fi
 #[tauri::command]
 pub async fn torrent_trackers(state: State<'_, AppState>, id: String) -> Res<Vec<String>> {
     engine(&state).await?.trackers(&id).map_err(err)
+}
+
+#[tauri::command]
+pub async fn torrent_magnet(state: State<'_, AppState>, id: String) -> Res<String> {
+    engine(&state).await?.magnet_link(&id).map_err(err)
+}
+
+/// Free space only; nothing else about the path is read.
+#[tauri::command]
+pub async fn free_space(state: State<'_, AppState>, path: PathBuf) -> Res<u64> {
+    let e = engine(&state).await?;
+    tauri::async_runtime::spawn_blocking(move || e.free_space(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -182,21 +195,22 @@ pub async fn set_alt_speed(state: State<'_, AppState>, enabled: bool) -> Res<()>
     engine(&state).await?.set_alt_speed(enabled).map_err(err)
 }
 
-/// Reveal a torrent's folder. The path comes from the engine, never from the UI.
 #[tauri::command]
 pub async fn reveal_torrent(app: AppHandle, state: State<'_, AppState>, id: String) -> Res<()> {
-    let path = engine(&state).await?.content_path(&id).map_err(err)?;
-    if path.exists() {
-        app.opener()
-            .reveal_item_in_dir(&path)
-            .map_err(|e| e.to_string())
-    } else {
-        Err("the download folder does not exist yet".into())
+    // Revealing a folder opens its parent, so folders are opened directly.
+    match engine(&state).await?.reveal_target(&id).map_err(err)? {
+        riptor_core::RevealTarget::Folder(dir) => app
+            .opener()
+            .open_path(dir.to_string_lossy(), None::<&str>)
+            .map_err(|e| e.to_string()),
+        riptor_core::RevealTarget::File(file) => app
+            .opener()
+            .reveal_item_in_dir(&file)
+            .map_err(|e| e.to_string()),
     }
 }
 
-/// Open a web page (tracker or search result description) in the browser.
-/// Only plain http(s) URLs are allowed.
+/// http(s) only.
 #[tauri::command]
 pub fn open_web_url(app: AppHandle, url: String) -> Res<()> {
     let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
@@ -238,7 +252,7 @@ pub async fn inspect_backup(
     password: Option<String>,
 ) -> Res<riptor_core::BackupSummary> {
     let e = engine(&state).await?;
-    // Argon2 key derivation is deliberately slow; keep it off the async runtime.
+    // Argon2 is slow on purpose.
     tauri::async_runtime::spawn_blocking(move || e.inspect_backup(&path, password))
         .await
         .map_err(|e| e.to_string())?
@@ -316,8 +330,7 @@ pub async fn search_start(
         let _ = app.emit("riptor://search", ev);
     });
     let s = search(&state)?;
-    // Tracker lookups don't go through the VPN, so skip them unless the
-    // engine is on the normal connection.
+    // Tracker lookups would bypass the VPN.
     if let Some(e) = state.engine.get() {
         s.hold_lookups(e.network() != riptor_core::NetworkMode::Normal);
     }
@@ -372,7 +385,6 @@ pub async fn search_uninstall_plugin(state: State<'_, AppState>, id: String) -> 
     search(&state)?.uninstall_plugin(&id).await.map_err(err)
 }
 
-/// Search plugins available from GitHub (official and community lists).
 #[tauri::command]
 pub async fn search_catalog(
     state: State<'_, AppState>,
@@ -381,7 +393,6 @@ pub async fn search_catalog(
     Ok(search(&state)?.catalog(refresh).await)
 }
 
-/// Download python.org's embeddable Python (hash-pinned) for plugins.
 #[tauri::command]
 pub async fn search_install_python(
     state: State<'_, AppState>,
@@ -406,8 +417,7 @@ pub fn search_set_scrape(state: State<'_, AppState>, enabled: bool) -> Res<()> {
     search(&state)?.set_scrape(enabled).map_err(err)
 }
 
-/// Fetch a plugin result's .torrent through the plugin; returns a temp file
-/// path for the add dialog.
+/// Returns a temp .torrent path for the add dialog.
 #[tauri::command]
 pub async fn search_plugin_download(
     state: State<'_, AppState>,
@@ -431,7 +441,7 @@ fn vpn(state: &State<'_, AppState>) -> Res<Arc<crate::vpn::VpnManager>> {
         .ok_or_else(|| "the VPN is still starting".to_string())
 }
 
-/// A profile as the UI sees it: no config text, no secrets.
+/// No config text, no secrets.
 #[derive(serde::Serialize)]
 pub struct VpnProfileView {
     id: String,
@@ -473,8 +483,7 @@ pub fn vpn_profiles(state: State<'_, AppState>) -> Res<Vec<VpnProfileView>> {
         .collect())
 }
 
-/// Import a profile. The file is picked in a native dialog opened here, so
-/// the webview never gets to name a path.
+/// The file picker is opened here so the webview never names a path.
 #[tauri::command]
 pub async fn vpn_import(app: AppHandle, state: State<'_, AppState>) -> Res<Option<VpnProfileView>> {
     use std::io::Read;
@@ -500,7 +509,7 @@ pub async fn vpn_import(app: AppHandle, state: State<'_, AppState>) -> Res<Optio
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("not a file".into());
     }
-    // Read one byte past the largest allowed profile so the parser can refuse it.
+    // One byte over the limit so the parser rejects it.
     let mut bytes = Vec::new();
     file.take(riptor_vpn::ovpn::MAX_PROFILE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)

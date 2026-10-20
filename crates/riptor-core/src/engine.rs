@@ -1,6 +1,4 @@
-//! The engine: one librqbit session plus everything Riptor adds on top —
-//! hardened storage, persistent all-time counters, and share-limit
-//! seeding/queueing applied once a second.
+//! One librqbit session plus Riptor's storage, counters and queueing.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::Ipv6Addr;
@@ -32,6 +30,7 @@ use tracing::{info, warn};
 use crate::input::{self, Resolved, Source};
 use crate::model::*;
 use crate::network::NetworkMode;
+use crate::reveal::{reveal_target, RevealTarget};
 use crate::settings::{Settings, Transport};
 use crate::stats::{self, Statistics, StatsReport};
 use crate::{backup, motw, paths, state_file};
@@ -42,7 +41,6 @@ const METADATA_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_PENDING_PREVIEWS: usize = 32;
 
 pub struct EngineConfig {
-    /// App data folder: settings, Riptor state, librqbit session and DHT files.
     pub data_dir: PathBuf,
 }
 
@@ -61,7 +59,7 @@ struct Pending {
 struct Runtime {
     last_fetched: u64,
     last_uploaded: u64,
-    /// fetched - verified for this live session, last seen (finished torrents only).
+    /// fetched - verified, last seen (finished torrents only).
     last_waste: u64,
     dl_rate: f64,
     ul_rate: f64,
@@ -71,7 +69,6 @@ struct Runtime {
 pub struct Engine {
     data_dir: PathBuf,
     session: RwLock<Arc<Session>>,
-    /// Normal / app-only VPN / blocked (kill switch); see `network.rs`.
     network: RwLock<NetworkMode>,
     factory: CachedStorageFactory,
     storage: Arc<riptor_storage::Shared>,
@@ -171,8 +168,6 @@ impl Engine {
             }
         }
 
-        // If torrents may only use the VPN, start blocked: nothing touches the
-        // network until the VPN is up.
         let network = if settings.vpn_required {
             NetworkMode::Blocked
         } else {
@@ -233,8 +228,8 @@ impl Engine {
         });
     }
 
-    /// Torrents librqbit restored but Riptor has no record of (e.g. state file
-    /// lost) cannot be placed safely; drop them without touching files.
+    /// Without our record we don't know where its files are safe to go, so
+    /// drop it (files untouched).
     async fn forget_orphans(&self) {
         let session = self.session();
         let known: HashSet<Id20> = self.records.read().keys().copied().collect();
@@ -251,8 +246,7 @@ impl Engine {
 
     // ---------------------------------------------------------------- adding
 
-    /// Resolve a source and describe it for the add dialog. Magnet links fetch
-    /// metadata from peers, which can take a while.
+    /// Magnets can take a while: metadata comes from peers.
     pub async fn preview(&self, src: Source) -> anyhow::Result<Preview> {
         let (add, mut trackers) = match input::resolve(&src, &self.http).await? {
             Resolved::Magnet(m) => {
@@ -379,7 +373,6 @@ impl Engine {
         Ok(preview)
     }
 
-    /// Commit a previewed torrent.
     pub async fn add(&self, params: AddParams) -> anyhow::Result<String> {
         let hash = parse_hash(&params.info_hash)?;
         ensure!(
@@ -506,7 +499,6 @@ impl Engine {
         Ok(hash.as_string())
     }
 
-    /// Preview then add with defaults (watched folder, tests).
     pub async fn add_direct(&self, src: Source, mut params: AddParams) -> anyhow::Result<String> {
         let preview = self.preview(src).await?;
         if preview.already_added {
@@ -545,7 +537,6 @@ impl Engine {
         Ok(())
     }
 
-    /// Back into the queue; the scheduler starts them when a slot is free.
     pub fn resume(&self, ids: &[String]) -> anyhow::Result<()> {
         self.set_intent(ids, Intent::Started).map(|_| ())
     }
@@ -669,7 +660,6 @@ impl Engine {
         Ok(())
     }
 
-    /// Ids of every torrent in the list (for "pause all" / "resume all").
     pub fn torrent_ids(&self) -> Vec<String> {
         self.records
             .read()
@@ -746,6 +736,32 @@ impl Engine {
         Ok(v)
     }
 
+    pub fn magnet_link(&self, id: &str) -> anyhow::Result<String> {
+        let hash = parse_hash(id)?;
+        let name = self
+            .records
+            .read()
+            .get(&hash)
+            .map(|r| r.name.clone())
+            .context("unknown torrent")?;
+        let trackers = self.trackers(id).unwrap_or_default();
+        Ok(crate::input::magnet_link(
+            &hash.as_string(),
+            &name,
+            &trackers,
+        ))
+    }
+
+    /// Free space where `folder` would be created; it may not exist yet.
+    pub fn free_space(&self, folder: &Path) -> anyhow::Result<u64> {
+        anyhow::ensure!(folder.is_absolute(), "not an absolute path");
+        let existing = folder
+            .ancestors()
+            .find(|p| p.is_dir())
+            .context("no such drive")?;
+        Ok(riptor_storage::free_space(existing)?)
+    }
+
     pub fn peers(&self, id: &str) -> anyhow::Result<serde_json::Value> {
         let t = self.handle(&parse_hash(id)?)?;
         match t.live() {
@@ -756,10 +772,26 @@ impl Engine {
         }
     }
 
-    /// Folder to reveal in the file manager for this torrent.
-    pub fn content_path(&self, id: &str) -> anyhow::Result<PathBuf> {
+    pub fn reveal_target(&self, id: &str) -> anyhow::Result<RevealTarget> {
         let hash = parse_hash(id)?;
-        Ok(self.factory.root_of(&hash).context("unknown torrent")?.path)
+        let root = self.factory.root_of(&hash).context("unknown torrent")?;
+        // No metadata yet for an unresolved magnet.
+        let files: Vec<PathBuf> = match self.handle(&hash) {
+            Ok(t) => t
+                .with_metadata(|m| -> anyhow::Result<Vec<PathBuf>> {
+                    Ok(layout_for(&root, m)?
+                        .files
+                        .iter()
+                        .filter(|f| !f.padding)
+                        .map(|f| f.path.clone())
+                        .collect())
+                })
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        reveal_target(&root.path, &files)
     }
 
     // ------------------------------------------------------------ settings
@@ -776,8 +808,6 @@ impl Engine {
         *self.settings.write() = new.clone();
         self.storage.reconfigure(new.storage.clone());
         self.apply_limits();
-        // Turning the kill switch on without a VPN blocks immediately; turning
-        // it off lifts the block.
         let current = self.network();
         if new.vpn_required && current == NetworkMode::Normal {
             return self.set_network(NetworkMode::Blocked).await;
@@ -811,8 +841,7 @@ impl Engine {
         self.network.read().clone()
     }
 
-    /// Switch between normal, app-only VPN and blocked (kill switch). The
-    /// session is rebuilt so every socket picks up the new binding.
+    /// Rebuilds the session so every socket gets the new binding.
     pub async fn set_network(&self, mode: NetworkMode) -> anyhow::Result<()> {
         if *self.network.read() == mode {
             return Ok(());
@@ -869,14 +898,12 @@ impl Engine {
         Ok(())
     }
 
-    /// Write an encrypted backup of settings, torrents, categories and statistics.
     pub fn create_backup(
         &self,
         path: &Path,
         password: Option<String>,
     ) -> anyhow::Result<BackupSummary> {
         Self::check_backup_path(path)?;
-        // Never overwrite something that is not itself a Riptor backup.
         if let Ok(existing) = std::fs::read(path) {
             ensure!(
                 existing.starts_with(b"RIPTRBK\0"),
@@ -940,9 +967,7 @@ impl Engine {
         Ok(summarize_backup(&payload, protected))
     }
 
-    /// Restore from a backup. Its contents are treated as untrusted input:
-    /// a password-less backup can be forged by anyone who extracts the
-    /// built-in key, so every value is validated again before use.
+    /// Backups are untrusted: a password-less one can be forged.
     pub async fn restore_backup(
         &self,
         path: &Path,
@@ -952,7 +977,6 @@ impl Engine {
         let (payload, _) = Self::read_backup(path, password.as_deref())?;
         let mut report = RestoreReport::default();
 
-        // Categories first (torrents may refer to them).
         for (name, folder) in &payload.categories {
             let valid = validate_label(name).is_ok()
                 && folder.as_deref().is_none_or(|f| self.check_root(f).is_ok());
@@ -1084,7 +1108,6 @@ impl Engine {
         Ok(true)
     }
 
-    /// Everything for the statistics page.
     pub fn statistics(&self) -> StatsReport {
         let (torrents, global) = self.last_tick_data.lock().clone();
         let all_time = self.statistics.lock().clone();
@@ -1192,7 +1215,7 @@ impl Engine {
                         )
                     })
                     .unwrap_or_default();
-                // Waste is only exact once nothing is in flight, i.e. the torrent is finished.
+                // Only exact once nothing is in flight.
                 if running && stats.finished {
                     let w = fetched.saturating_sub(checked);
                     sum_waste += w.saturating_sub(r.last_waste);
@@ -1246,7 +1269,7 @@ impl Engine {
                 {
                     rec.completed_on = Some(now_unix);
                     rec.queue_pos = None;
-                    // Only tag files we actually downloaded, not a user's own data being seeded.
+                    // Not the user's own data being seeded.
                     finished.push((hash, rec.name.clone(), rec.all_time_download > 0));
                 } else if !stats.finished && rec.completed_on.is_some() && running {
                     // More files were selected after completion.
@@ -1322,7 +1345,6 @@ impl Engine {
         }
 
         let actions = self.scheduler.lock().tick(&views, &prefs, now);
-        // Kill switch: while blocked, nothing may start and anything running is paused.
         let blocked = matches!(*self.network.read(), NetworkMode::Blocked);
         for a in actions {
             if blocked && matches!(a, Action::Start { .. }) {
@@ -1417,7 +1439,7 @@ pub enum QueueMove {
     Bottom,
 }
 
-/// Categories and tags are shown in the UI and used in paths; keep them tame.
+/// Shown in the UI and used in paths.
 fn validate_label(s: &str) -> anyhow::Result<()> {
     ensure!(
         !s.trim().is_empty() && s.len() <= 64,
@@ -1430,7 +1452,6 @@ fn validate_label(s: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Keep queue positions dense (0..n) over unfinished torrents.
 fn normalize_queue(records: &mut HashMap<Id20, Record>) {
     let mut q: Vec<(u32, u64, Id20)> = records
         .iter()
@@ -1526,7 +1547,6 @@ async fn build_session(
         NetworkMode::Vpn(v) => Some(v),
         _ => None,
     };
-    // On the VPN everything binds to the tunnel address; otherwise the user's choice.
     let listen_ip = vpn
         .map(|v| std::net::IpAddr::V4(v.local_ip))
         .or(s.listen_address);
@@ -1548,7 +1568,7 @@ async fn build_session(
         )
             .into(),
         ipv4_only: listen_ip.is_some_and(|a| a.is_ipv4()),
-        // UPnP would open a port on the *home router*, outside the VPN.
+        // UPnP would open a port on the home router.
         enable_upnp_port_forwarding: s.upnp && !anon && vpn.is_none(),
         announce_port: vpn.and_then(|v| v.forwarded_port),
         ..Default::default()
@@ -1567,8 +1587,7 @@ async fn build_session(
             peer_opts: None,
         }),
         disable_trackers: blocked,
-        // Blocked: pin every socket to the loopback adapter, so anything that
-        // tries to reach the internet fails at the OS level, whatever runs.
+        // Pinned to loopback, so anything that slips through fails in the OS.
         bind_device_name: match net {
             NetworkMode::Vpn(v) => Some(v.adapter.clone()),
             NetworkMode::Blocked => crate::network::loopback_adapter(),
@@ -1583,7 +1602,6 @@ async fn build_session(
         },
         blocklist_url: s.blocklist_url.clone(),
         peer_limit: s.peer_limit,
-        // Local discovery multicasts on the LAN, outside the VPN.
         disable_local_service_discovery: !s.lsd || anon || vpn.is_some() || blocked,
         client_name_and_version: anon.then(|| "BitTorrent".to_string()),
         ..Default::default()
@@ -1613,8 +1631,7 @@ pub struct RestoreOptions {
     pub settings: bool,
     pub torrents: bool,
     pub statistics: bool,
-    /// Keep each torrent's running/stopped state. When false every restored
-    /// torrent starts stopped so the user can review its save folder first.
+    /// Otherwise everything comes back stopped.
     pub resume_torrents: bool,
 }
 

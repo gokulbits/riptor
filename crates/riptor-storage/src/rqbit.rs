@@ -1,9 +1,5 @@
-//! librqbit glue: [`CachedStorageFactory`] is installed as the session's
-//! default storage factory, so torrents restored from session persistence use
-//! it too. librqbit does not expose a torrent's output folder to storage
-//! factories, so Riptor registers each torrent's folder by info hash before
-//! adding or restoring it; an unregistered torrent is refused rather than
-//! written to a guessed location.
+//! librqbit glue. Factories never see a torrent's output folder, so the engine
+//! registers each root by info hash first; unregistered torrents are refused.
 
 use std::collections::HashMap;
 use std::io::IoSlice;
@@ -23,7 +19,7 @@ use crate::store::{Shared, Store};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TorrentRoot {
     pub path: PathBuf,
-    /// Riptor created this folder for the torrent and may remove it when empty.
+    /// We created it, so it may be removed when empty.
     pub owned: bool,
 }
 
@@ -62,8 +58,6 @@ impl CachedStorageFactory {
     }
 }
 
-/// Build the sanitized layout for a torrent. Also used by riptor-core to show
-/// and open the real on-disk paths.
 pub fn layout_for(root: &TorrentRoot, metadata: &TorrentMetadata) -> anyhow::Result<Layout> {
     let raw = metadata.info.iter_file_details().map(|fd| RawFile {
         components: fd.filename.iter_components().collect(),
@@ -77,7 +71,6 @@ pub fn layout_for(root: &TorrentRoot, metadata: &TorrentMetadata) -> anyhow::Res
         raw,
     )?;
 
-    // Our flat-offset maths must agree with the engine's exactly.
     ensure!(
         layout.total_len == metadata.lengths().total_length(),
         "length mismatch with engine"
@@ -136,7 +129,7 @@ impl TorrentStorage for CachedStorage {
         _shared: &ManagedTorrentShared,
         _metadata: &TorrentMetadata,
     ) -> anyhow::Result<()> {
-        // Files are created lazily on first write, so deselected files never appear.
+        // Created on first write, so deselected files never appear.
         Ok(())
     }
 

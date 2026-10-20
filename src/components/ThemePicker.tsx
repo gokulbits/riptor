@@ -18,7 +18,6 @@ function Swatch({ t }: { t: ThemeDef }) {
   );
 }
 
-/** Toolbar dropdown: pick a theme (or follow the OS) and an accent colour. */
 export function ThemePicker() {
   const { theme, accent, setTheme, setAccent } = useApp(
     useShallow((s) => ({ theme: s.theme, accent: s.accent, setTheme: s.setTheme, setAccent: s.setAccent })),

@@ -1,24 +1,12 @@
-//! Make `.torrent` files and `magnet:` links open in Riptor.
-//!
-//! * [`register`] is non-invasive: Riptor appears in "Open with" and in the
-//!   OS default-apps list, but no existing default is changed. Installed
-//!   builds run it at startup so a moved/updated exe keeps working.
-//! * [`make_default`] is an explicit user action. On Windows it claims the
-//!   `magnet:` scheme for the current user and opens Settings > Default apps,
-//!   because Windows (by design) does not let apps silently become the
-//!   default handler for a file type. On Linux it runs `xdg-mime default`.
-//!
-//! Everything is per-user (HKCU / ~/.local), so no admin rights are needed.
+//! `.torrent` and `magnet:` handling. [`register`] only adds Riptor to
+//! "Open with"; [`make_default`] is the user's explicit choice. Per-user only.
 
 use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
 pub struct AssociationStatus {
-    /// Riptor is listed as a handler (Open with / default-apps list).
     pub registered: bool,
-    /// Riptor is the current default for `.torrent` files.
     pub torrent_default: bool,
-    /// Riptor is the current default for `magnet:` links.
     pub magnet_default: bool,
 }
 
@@ -27,7 +15,7 @@ fn exe() -> anyhow::Result<std::path::PathBuf> {
     Ok(dunce_canonical(&p))
 }
 
-/// `current_exe` can return a `\\?\` path on Windows, which shells reject.
+/// Shells reject `\\?\` paths.
 fn dunce_canonical(p: &std::path::Path) -> std::path::PathBuf {
     let s = p.to_string_lossy();
     std::path::PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string())
@@ -72,7 +60,6 @@ mod imp {
         let (classes, _) = hkcu.create_subkey(r"Software\Classes")?;
         write_progid(&classes, PROG_TORRENT, "BitTorrent file", &exe, false)?;
         write_progid(&classes, PROG_MAGNET, "Magnet link", &exe, true)?;
-        // "Open with" list for .torrent, without touching the default.
         let (owp, _) = classes.create_subkey(r".torrent\OpenWithProgids")?;
         owp.set_raw_value(
             PROG_TORRENT,
@@ -81,7 +68,6 @@ mod imp {
                 vtype: REG_NONE,
             },
         )?;
-        // Default-apps capabilities.
         let (caps, _) = hkcu.create_subkey(CAPS)?;
         caps.set_value("ApplicationName", &"Riptor")?;
         caps.set_value("ApplicationDescription", &"Lightweight BitTorrent client")?;
@@ -121,7 +107,6 @@ mod imp {
         );
         let magnet_default = match magnet_user_choice {
             Some(p) => p == PROG_MAGNET,
-            // No user choice: the HKCU scheme key decides.
             None => hkcu
                 .open_subkey(r"Software\Classes\magnet\shell\open\command")
                 .and_then(|k| k.get_value::<String, _>(""))
@@ -139,10 +124,10 @@ mod imp {
         let exe = exe()?;
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let (classes, _) = hkcu.create_subkey(r"Software\Classes")?;
-        // The magnet: scheme key itself. Windows may still ask the user once.
+        // Windows may still ask the user once.
         write_progid(&classes, "magnet", "URL:Magnet link", &exe, true)?;
         notify_shell();
-        // .torrent defaults can only be chosen by the user in Settings.
+        // Windows only lets the user pick the .torrent default.
         open_default_apps();
         Ok(())
     }
@@ -156,7 +141,7 @@ mod imp {
     #[allow(unsafe_code)]
     fn notify_shell() {
         use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
-        // SAFETY: documented call with null item pointers for SHCNE_ASSOCCHANGED.
+        // SAFETY: null items are documented for SHCNE_ASSOCCHANGED.
         unsafe {
             SHChangeNotify(
                 SHCNE_ASSOCCHANGED as i32,
@@ -186,7 +171,6 @@ mod imp {
         Ok(base.join("applications"))
     }
 
-    /// AppImages are launched through $APPIMAGE, not the extracted binary.
     fn launcher() -> anyhow::Result<std::path::PathBuf> {
         std::env::var_os("APPIMAGE")
             .map(std::path::PathBuf::from)

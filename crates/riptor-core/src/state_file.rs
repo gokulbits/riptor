@@ -1,5 +1,4 @@
-//! Crash-safe JSON files: write to a temp file, fsync, then atomically rename.
-//! Files are created readable by the owner only.
+//! Crash-safe, owner-only JSON files (temp file, fsync, rename).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -16,7 +15,6 @@ pub fn load<T: DeserializeOwned + Default>(path: &Path) -> anyhow::Result<T> {
     }
 }
 
-/// Atomically write raw bytes (owner-only permissions).
 pub fn save_bytes(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     let dir = path.parent().context("file has no parent folder")?;
     fs::create_dir_all(dir)?;

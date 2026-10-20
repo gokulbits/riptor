@@ -32,7 +32,6 @@ const COLUMNS: { key: ResultSort; label: string; width: string; align?: "right" 
 ];
 const ROW = 32;
 
-/** Subscribe once to search events for the life of the app. */
 export function useSearchEvents() {
   useEffect(() => {
     const un = events.search((e) => useSearch.getState().onEvent(e));

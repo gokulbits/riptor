@@ -1,4 +1,4 @@
-//! Mapping between the torrent's flat byte space, pieces, and files.
+//! Flat torrent offsets to pieces and files.
 
 use std::path::{Path, PathBuf};
 
@@ -8,16 +8,13 @@ use crate::sanitize::{dedupe, safe_join, sanitize_relative};
 
 #[derive(Debug, Clone)]
 pub struct FileSlot {
-    /// Absolute, sanitized on-disk path.
     pub path: PathBuf,
-    /// Offset of this file in the torrent's flat byte space.
     pub offset: u64,
     pub len: u64,
-    /// BEP 47 padding files are never written to disk.
+    /// BEP 47; never written.
     pub padding: bool,
 }
 
-/// Input describing one file of the torrent, straight from the metainfo.
 pub struct RawFile<'a> {
     pub components: Vec<std::borrow::Cow<'a, str>>,
     pub len: u64,
@@ -27,8 +24,7 @@ pub struct RawFile<'a> {
 #[derive(Debug, Clone)]
 pub struct Layout {
     pub root: PathBuf,
-    /// Riptor created `root` for this torrent (multi-file torrent folder), so it
-    /// may be removed when empty. A user-chosen save folder never is.
+    /// We created `root`, so it may be removed when empty.
     pub owns_root: bool,
     pub files: Vec<FileSlot>,
     pub piece_len: u64,
@@ -41,7 +37,7 @@ pub struct Span {
     pub file_id: usize,
     pub file_offset: u64,
     pub len: u64,
-    /// Offset of this span relative to the start of the requested range.
+    /// Relative to the requested range.
     pub rel: u64,
 }
 
@@ -88,7 +84,6 @@ impl Layout {
         (abs / self.piece_len) as u32
     }
 
-    /// (start, len) of a piece in the flat byte space.
     pub fn piece_bounds(&self, piece: u32) -> (u64, u64) {
         let start = piece as u64 * self.piece_len;
         (
@@ -97,7 +92,6 @@ impl Layout {
         )
     }
 
-    /// Split a flat range into per-file spans (zero-length files are skipped).
     pub fn spans(&self, abs: u64, len: u64) -> impl Iterator<Item = Span> + '_ {
         let end = abs + len;
         let first = self.files.partition_point(|f| f.offset + f.len <= abs);
@@ -118,7 +112,7 @@ impl Layout {
             })
     }
 
-    /// Parent folders of all files that lie strictly below `root`, deepest first.
+    /// Deepest first.
     pub fn subdirs_deepest_first(&self) -> Vec<PathBuf> {
         let mut dirs: Vec<PathBuf> = Vec::new();
         for f in &self.files {

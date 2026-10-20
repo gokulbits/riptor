@@ -1,9 +1,5 @@
-//! Byte ranges written into one piece but not yet flushed to disk.
-//!
-//! Memory grows with the data actually received, not with the piece size, so
-//! a torrent with 16 MiB pieces and many half-downloaded pieces stays cheap.
-//! Newer writes win where ranges overlap (a piece re-downloaded after a
-//! failed hash check overwrites the bad bytes).
+//! Unflushed byte ranges of one piece. Memory follows what was received, not
+//! the piece size. Newer writes win on overlap.
 
 use std::collections::BTreeMap;
 
@@ -22,8 +18,7 @@ impl Segments {
         self.map.is_empty()
     }
 
-    /// Insert `data` at `start`, trimming anything it overlaps. Returns the
-    /// change in buffered bytes.
+    /// Returns the change in buffered bytes.
     pub fn insert(&mut self, start: u64, data: Vec<u8>) -> isize {
         let before = self.bytes as isize;
         let end = start + data.len() as u64;
@@ -57,7 +52,6 @@ impl Segments {
         self.bytes as isize - before
     }
 
-    /// Is every byte of `[start, start+len)` buffered?
     pub fn covers(&self, start: u64, len: u64) -> bool {
         let end = start + len;
         let mut pos = start;
@@ -75,7 +69,6 @@ impl Segments {
         true
     }
 
-    /// Copy buffered bytes over `buf`, which represents `[start, start+buf.len())`.
     pub fn overlay(&self, start: u64, buf: &mut [u8]) {
         let end = start + buf.len() as u64;
         let first = self
@@ -94,7 +87,7 @@ impl Segments {
         }
     }
 
-    /// Contiguous runs, merged, in order. Used to flush with as few writes as possible.
+    /// Merged, in order.
     pub fn runs(&self) -> Vec<(u64, Vec<u8>)> {
         let mut out: Vec<(u64, Vec<u8>)> = Vec::new();
         for (k, v) in &self.map {
@@ -146,7 +139,6 @@ mod tests {
     }
 
     proptest! {
-        /// The segment map behaves exactly like writing into a flat array.
         #[test]
         fn matches_flat_model(ops in proptest::collection::vec((0u64..200, 1usize..40, any::<u8>()), 1..60)) {
             const N: usize = 256;

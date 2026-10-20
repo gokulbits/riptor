@@ -1,8 +1,4 @@
-//! Lazily opened file handles with an LRU cap, plus positional I/O.
-//!
-//! Large multi-file torrents would otherwise hold thousands of handles (the
-//! default soft limit on Linux is 1024). Handles are `Arc<File>`, so evicting
-//! one never interrupts I/O already in progress on it.
+//! Lazily opened file handles with an LRU cap (Linux defaults to 1024 fds).
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -39,8 +35,7 @@ impl FilePool {
         &self.paths[id]
     }
 
-    /// Get a handle. `write` opens read-write and creates the file (and its
-    /// folders); otherwise an existing file is opened, read-only if need be.
+    /// `write` creates the file and its folders.
     pub fn get(&self, id: usize, write: bool) -> io::Result<Arc<File>> {
         {
             let slot = self.slots[id].lock();
@@ -68,7 +63,6 @@ impl FilePool {
         } else {
             match OpenOptions::new().read(true).write(true).open(path) {
                 Ok(f) => (f, true),
-                // Seeding from read-only media.
                 Err(e) if e.kind() == io::ErrorKind::PermissionDenied => (File::open(path)?, false),
                 Err(e) => return Err(e),
             }
@@ -107,7 +101,6 @@ impl FilePool {
         self.order.lock().clear();
     }
 
-    /// fsync every open writable handle.
     pub fn sync_all(&self) -> io::Result<()> {
         for s in &self.slots {
             let f = s
@@ -187,7 +180,6 @@ mod tests {
             write_all_at(&f, &[i as u8; 3], 10).unwrap();
         }
         assert_eq!(pool.open_count(), 2);
-        // Evicted handles reopen transparently and see the data.
         let f = pool.get(0, false).unwrap();
         let mut b = [0u8; 3];
         read_exact_at(&f, &mut b, 10).unwrap();
@@ -195,7 +187,6 @@ mod tests {
         let f = pool.get(4, false).unwrap();
         read_exact_at(&f, &mut b, 10).unwrap();
         assert_eq!(b, [4, 4, 4]);
-        // Reading a missing file never creates it.
         let pool = FilePool::new(vec![dir.path().join("missing")], 2);
         assert!(pool.get(0, false).is_err());
         assert!(!dir.path().join("missing").exists());

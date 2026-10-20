@@ -1,7 +1,4 @@
-//! Save-folder policy. Torrent data must never land somewhere that makes the
-//! OS run it or trust it: system folders, startup/autostart folders, shell
-//! and SSH configuration, or Riptor's own data folder. Applied to every save
-//! folder whether it comes from the UI, a category, settings, or a backup.
+//! Save folders must never be somewhere the OS would run or trust files from.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -17,8 +14,7 @@ fn home() -> Option<PathBuf> {
     env_path(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
 }
 
-/// Lexically normalise (resolve `.`/`..`) without touching the filesystem,
-/// so a path that does not exist yet can still be checked.
+/// Lexical, so paths that don't exist yet can be checked.
 fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
@@ -33,7 +29,6 @@ fn normalize(p: &Path) -> PathBuf {
     out
 }
 
-/// Case-insensitive on Windows, where the filesystem is.
 fn starts_with(p: &Path, base: &Path) -> bool {
     if cfg!(windows) {
         let p = p.to_string_lossy().to_lowercase().replace('/', "\\");
@@ -100,8 +95,6 @@ fn protected_roots(data_dir: Option<&Path>) -> Vec<PathBuf> {
     v
 }
 
-/// Refuse save folders that are relative, a filesystem root, or inside a
-/// protected location.
 pub fn check_save_root(p: &Path, data_dir: Option<&Path>) -> anyhow::Result<()> {
     ensure!(p.is_absolute(), "save folder must be an absolute path");
     let n = normalize(p);
@@ -134,7 +127,6 @@ mod tests {
             assert!(check_save_root(Path::new(r"C:\"), None).is_err());
             assert!(check_save_root(Path::new(r"c:\windows\system32"), None).is_err());
             assert!(check_save_root(Path::new(r"C:\Program Files\x"), None).is_err());
-            // Traversal out of an allowed folder into a protected one.
             assert!(
                 check_save_root(Path::new(r"C:\Users\x\Downloads\..\..\..\Windows"), None).is_err()
             );

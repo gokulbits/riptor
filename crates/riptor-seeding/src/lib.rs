@@ -1,14 +1,5 @@
-//! Seeding policy for Riptor: share ratios, share limits and queueing.
-//!
-//! Everything here is pure: callers pass a snapshot of every torrent plus the
-//! preferences, and get back a list of [`Action`]s to apply to the engine.
-//! The only state kept between ticks is the slow-torrent timer in [`Scheduler`].
-//!
-//! * [`ratio::real_ratio`] — the conventional "real ratio".
-//! * [`limits`] — max ratio / seeding time / inactive seeding time with
-//!   per-torrent overrides (`UseGlobal`, `Unlimited`, custom value).
-//! * [`queue`] — active download/upload/torrent limits with "don't count slow
-//!   torrents" and force-start, following libtorrent's auto-manage rules.
+//! Share ratios, share limits and queueing. Pure: a snapshot goes in, a list
+//! of [`Action`]s comes out. The slow-torrent timer is the only state.
 
 pub mod limits;
 pub mod queue;
@@ -23,42 +14,33 @@ pub use ratio::{real_ratio, MAX_RATIO};
 
 pub type TorrentId = usize;
 
-/// What the user asked for. The scheduler decides whether a `Started`
-/// torrent actually runs or waits in the queue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Intent {
-    /// Stopped by the user (or by a share-limit Stop). Never started by the queue.
+    /// Never started by the queue.
     Stopped,
-    /// Wants to run; subject to queueing.
     Started,
-    /// Force-started: always runs, ignores the queue, still uses up slots.
+    /// Ignores the queue but still uses a slot.
     Forced,
 }
 
-/// Snapshot of one torrent as the scheduler needs it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TorrentView {
     pub id: TorrentId,
     pub intent: Intent,
-    /// Is the engine currently running it (not paused)?
     pub running: bool,
-    /// All wanted pieces are downloaded.
     pub finished: bool,
-    /// Errored or still initialising/checking: left alone by the queue.
+    /// Errored or still checking.
     pub busy_or_error: bool,
-    /// Queue position for downloading torrents (0 = first). Finished torrents
-    /// have none.
+    /// Finished torrents have none.
     pub queue_pos: Option<u32>,
 
     pub total_done: u64,
     pub all_time_upload: u64,
     pub all_time_download: u64,
-    /// Seconds spent running while finished.
     pub seeding_time: u64,
-    /// Seconds since the last payload transfer in either direction.
     pub time_since_activity: u64,
-    /// Seconds since the engine last started it (for the slow-torrent grace period).
+    /// For the slow-torrent grace period.
     pub running_for: u64,
     pub dl_rate: u64,
     pub ul_rate: u64,
@@ -78,15 +60,13 @@ impl TorrentView {
     }
 }
 
-/// Global preferences, serialised into settings.json.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
-    /// Global max ratio; `None` = no limit.
     pub max_ratio: Option<f64>,
-    /// Global max seeding time in minutes; `None` = no limit.
+    /// Minutes.
     pub max_seeding_minutes: Option<u64>,
-    /// Global max inactive seeding time in minutes; `None` = no limit.
+    /// Minutes.
     pub max_inactive_seeding_minutes: Option<u64>,
     pub limit_action: ShareLimitAction,
     pub queue: QueuePrefs,
@@ -107,11 +87,13 @@ impl Default for Prefs {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
-    /// Resume in the engine (slot available or force-started).
-    Start { id: TorrentId },
-    /// Pause in the engine because the queue is full; intent stays `Started`.
-    Queue { id: TorrentId },
-    /// A share limit was reached: apply `action` (Stop also sets intent to Stopped).
+    Start {
+        id: TorrentId,
+    },
+    /// Queue full; intent stays `Started`.
+    Queue {
+        id: TorrentId,
+    },
     ShareLimit {
         id: TorrentId,
         action: ShareLimitAction,
@@ -119,8 +101,6 @@ pub enum Action {
     },
 }
 
-/// Holds the only cross-tick state: when each torrent first dropped below the
-/// slow-rate thresholds.
 #[derive(Default, Debug)]
 pub struct Scheduler {
     slow_since: HashMap<TorrentId, u64>,
@@ -131,10 +111,8 @@ impl Scheduler {
         Self::default()
     }
 
-    /// Run one scheduling pass. `now` is a monotonic seconds counter.
-    ///
-    /// Share limits are applied first; torrents hit by one are excluded from
-    /// the queue pass so a removed torrent never gets started in the same tick.
+    /// `now` is monotonic seconds. Limits run first so a removed torrent is
+    /// never started in the same tick.
     pub fn tick(&mut self, torrents: &[TorrentView], prefs: &Prefs, now: u64) -> Vec<Action> {
         let mut actions = limits::check_all(torrents, prefs);
         let limited: Vec<TorrentId> = actions
@@ -280,7 +258,6 @@ mod tests {
         };
         let s = serde_json::to_string(&p).unwrap();
         assert_eq!(serde_json::from_str::<Prefs>(&s).unwrap(), p);
-        // Missing fields fall back to defaults.
         assert_eq!(
             serde_json::from_str::<Prefs>("{}").unwrap(),
             Prefs::default()

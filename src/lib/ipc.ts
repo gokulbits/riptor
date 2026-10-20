@@ -39,6 +39,8 @@ export const api = {
   files: (id: string) => invoke<FileEntry[]>("torrent_files", { id }),
   trackers: (id: string) => invoke<string[]>("torrent_trackers", { id }),
   peers: (id: string) => invoke<unknown>("torrent_peers", { id }),
+  magnet: (id: string) => invoke<string>("torrent_magnet", { id }),
+  freeSpace: (path: string) => invoke<number>("free_space", { path }),
   setCategory: (ids: string[], category: string | null) => invoke<void>("set_category", { ids, category }),
   setTags: (ids: string[], tags: string[]) => invoke<void>("set_tags", { ids, tags }),
   setShareLimits: (ids: string[], limits: ShareLimits, action: ShareLimitAction | null) =>
@@ -79,7 +81,7 @@ export const api = {
   searchOptions: () => invoke<SearchOptions>("search_options"),
   searchSetScrape: (enabled: boolean) => invoke<void>("search_set_scrape", { enabled }),
   vpnProfiles: () => invoke<VpnProfile[]>("vpn_profiles"),
-  /** Opens the native file picker in Rust; null when cancelled. */
+  /** Picker runs in Rust; null if cancelled. */
   vpnImport: () => invoke<VpnProfile | null>("vpn_import"),
   vpnDelete: (id: string) => invoke<void>("vpn_delete", { id }),
   vpnSetCredentials: (id: string, username: string, password: string) =>

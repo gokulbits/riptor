@@ -10,7 +10,6 @@ function path(values: number[], max: number): string {
   return values.map((v, i) => `${i === 0 ? "M" : "L"}${(i * step).toFixed(1)},${(H - (v / max) * H).toFixed(1)}`).join(" ");
 }
 
-/** Total download/upload speed over the last five minutes. */
 export function SpeedGraph() {
   const history = useApp((s) => s.history);
   const dl = history.map((h) => h.dl);

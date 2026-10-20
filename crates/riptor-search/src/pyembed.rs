@@ -1,13 +1,8 @@
-//! Python for search plugins, set up by Riptor on Windows when the user asks:
-//! the official "embeddable package" from python.org, downloaded on demand,
-//! checked against a SHA-256 pinned in this file, and unpacked into
-//! `<data>/search/python`. Nothing is installed system-wide and nothing runs
-//! as administrator. Plugins run with it exactly as with a system Python
-//! (`-I`, cleared environment, time and output limits).
+//! python.org's embeddable Python, pinned by SHA-256. The Windows setup ships
+//! it; dev builds can download it into `<data>/search/python`.
 //!
-//! To update: change [`VERSION`] and the hashes, taking them from
-//! python.org's release API (`/api/v2/downloads/release_file/?release=<id>`)
-//! and checking them against a fresh download.
+//! To update, take the hashes from python.org's release API
+//! (`/api/v2/downloads/release_file/?release=<id>`) and check a fresh download.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -37,7 +32,6 @@ pub const RELEASE: Option<Release> = Some(Release {
     sha256: "155be84ccb57c6331cf0e39001c78a1dfac3be62f403f3ff5f2e29b80dda7ebe",
     size: 11_923_092,
 });
-/// Linux distributions ship Python; elsewhere the user installs it.
 #[cfg(not(all(windows, any(target_arch = "x86_64", target_arch = "aarch64"))))]
 pub const RELEASE: Option<Release> = None;
 
@@ -65,13 +59,11 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Download, verify and unpack the pinned release.
 pub async fn install(search_dir: &Path) -> anyhow::Result<()> {
     let rel = RELEASE
         .as_ref()
         .context("Riptor can only set up Python by itself on Windows")?;
-    // Its own client: the shared one gives up after 30 s, too soon for
-    // 12 MB on a slow line. The whole download is limited below instead.
+    // The shared client's 30 s timeout is too short for 12 MB on a slow line.
     let http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::custom(|a| {
@@ -131,9 +123,7 @@ pub fn remove(search_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Unpack a zip into `dest`, refusing paths that leave it, links, and
-/// archives that are too big. The pinned hash already vouches for the
-/// archive; these checks keep a mistake from becoming a disaster.
+/// The hash already vouches for the archive; this is belt and braces.
 pub fn extract(zip_bytes: &[u8], dest: &Path) -> anyhow::Result<()> {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes))?;
     ensure!(zip.len() <= MAX_FILES, "archive has too many files");

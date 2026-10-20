@@ -1,5 +1,4 @@
-// Theme registry. Each theme is a full set of colour tokens (RGB triplets so
-// Tailwind's `/alpha` modifiers work); applying one sets CSS variables on <html>.
+// RGB triplets so Tailwind's `/alpha` modifiers work.
 
 export type Tokens = {
   bg: string;
@@ -116,7 +115,6 @@ export const THEMES: ThemeDef[] = [
   },
 ];
 
-/** Optional accent override, applied on top of any theme. */
 export const ACCENTS: { id: string; label: string; rgb: string }[] = [
   { id: "theme", label: "Theme default", rgb: "" },
   { id: "indigo", label: "Indigo", rgb: "99 102 241" },
@@ -133,7 +131,6 @@ export function resolveTheme(id: string, prefersDark: boolean): ThemeDef {
   return THEMES.find((t) => t.id === id) ?? THEMES[1];
 }
 
-/** Pick black or white text for a given accent so buttons stay readable. */
 function contrastFg(rgb: string): string {
   const [r, g, b] = rgb.split(" ").map(Number);
   const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;

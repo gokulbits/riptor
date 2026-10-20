@@ -1,15 +1,6 @@
-//! nova3-compatible search plugins.
-//!
-//! Plugins are third-party Python code, so they are treated with suspicion:
-//! * installed only after the user confirms the source and SHA-256;
-//! * run with `python -I` (no user site-packages, no PYTHON* variables, no
-//!   current-directory imports), a cleared environment, a time limit, an
-//!   output cap, no console window, and killed when the search is cancelled;
-//! * on Linux, inside bubblewrap when available: read-only system, private
-//!   /tmp, and the home folder hidden.
-//!
-//! The runner (`nova2.py`) and helper modules are Riptor's own, API-compatible
-//! with the nova3 API; they print one JSON object per result.
+//! nova3 search plugins. They're third-party code: run with `python -I`, a
+//! cleared environment, time and output limits, and bubblewrap on Linux.
+//! The runner and helpers are our own and print one JSON object per result.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -32,7 +23,6 @@ const SHIM: [(&str, &str); 3] = [
     ),
     ("helpers.py", include_str!("../assets/nova/helpers.py")),
 ];
-/// Names that would collide with the shim or common modules.
 const RESERVED: [&str; 8] = [
     "nova2",
     "novaprinter",
@@ -67,7 +57,6 @@ pub struct PluginCaps {
     pub error: Option<String>,
 }
 
-/// Search PATH ourselves so the interpreter is pinned to an absolute path.
 pub fn find_in_path(name: &str) -> Option<PathBuf> {
     let exts: Vec<String> = if cfg!(windows) {
         std::env::var("PATHEXT")
@@ -94,8 +83,7 @@ fn quiet(cmd: &mut Command) {
     cmd.stdin(Stdio::null()).kill_on_drop(true);
 }
 
-/// Find Python 3.9+: on PATH first, then the given interpreters (Riptor's
-/// own copy). Returns the real interpreter path (not the `py` launcher).
+/// PATH first, then `extra`. Returns the real interpreter, not the `py` launcher.
 pub async fn detect(extra: &[PathBuf]) -> Option<Python> {
     let names: &[(&str, &[&str])] = if cfg!(windows) {
         &[("py", &["-3"]), ("python3", &[]), ("python", &[])]
@@ -119,7 +107,6 @@ pub async fn detect(extra: &[PathBuf]) -> Option<Python> {
     None
 }
 
-/// Check one interpreter: Python 3.9+ that runs with `-I`.
 pub async fn probe(exe: &Path, pre: &[&str]) -> Option<Python> {
     let mut cmd = Command::new(exe);
     cmd.args(pre).args([
@@ -152,7 +139,6 @@ pub async fn probe(exe: &Path, pre: &[&str]) -> Option<Python> {
     None
 }
 
-/// (Re)write the runner and helpers; create the engines folder.
 pub fn install_shim(dir: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir.join("engines"))?;
     for (name, body) in SHIM {
@@ -206,7 +192,6 @@ fn command(py: &Python, dir: &Path, args: &[&str]) -> Command {
 
 fn finish(c: &mut Command, dir: &Path) {
     c.current_dir(dir).env_clear();
-    // Only what Python and TLS need.
     for var in [
         "SYSTEMROOT",
         "WINDIR",
@@ -279,7 +264,6 @@ struct Line {
     pub_date: Option<u64>,
 }
 
-/// Run one plugin; `emit` is called with batches of results as they arrive.
 pub async fn search(
     py: &Python,
     dir: &Path,
@@ -344,7 +328,7 @@ pub async fn search(
     }
 }
 
-/// Let the plugin download a `.torrent` (for sites needing cookies). Returns the temp file path.
+/// For sites that need cookies. Returns a temp file path.
 pub async fn download(py: &Python, dir: &Path, engine: &str, url: &str) -> anyhow::Result<PathBuf> {
     validate_id(engine)?;
     let u = url::Url::parse(url)?;
@@ -406,7 +390,6 @@ pub fn declared(text: &str, attr: &str) -> Option<String> {
     })
 }
 
-/// Check a candidate plugin file without running it.
 pub fn inspect(
     file_name: &str,
     bytes: &[u8],
@@ -473,11 +456,9 @@ class demo(object):
         assert!(inspect("other.py", PLUGIN.as_bytes(), "", d.path()).is_err());
     }
 
-    /// Runs the real shim with a real interpreter when one is installed.
     #[tokio::test]
     async fn runs_a_plugin_end_to_end_if_python_present() {
-        // RIPTOR_TEST_PYTHON names an interpreter outside PATH (e.g. the
-        // embeddable package) so this also runs where there is no system Python.
+        // RIPTOR_TEST_PYTHON lets this run without a system Python.
         let extra: Vec<PathBuf> = std::env::var_os("RIPTOR_TEST_PYTHON")
             .map(PathBuf::from)
             .into_iter()
@@ -514,7 +495,6 @@ class demo(object):
         assert_eq!(n, 3);
         assert_eq!(got[1].name, "Result | 1 big+buck");
         assert_eq!(got[1].size, Some(1_610_612_736));
-        // The plugin's "seeds"/"leech" become seeders/leechers; -1 is unknown.
         assert_eq!(got[1].seeders, Some(1));
         assert_eq!(got[1].leechers, None);
         assert_eq!(got[2].seeders, Some(1234), "thousands separators");

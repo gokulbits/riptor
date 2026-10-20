@@ -1,4 +1,4 @@
-// Mirrors of the Rust types in crates/riptor-core (serde shapes).
+// Must match the serde shapes in Rust.
 
 export type Limit = { mode: "use_global" } | { mode: "unlimited" } | { mode: "value"; value: number };
 
@@ -59,7 +59,6 @@ export interface CacheStats {
 }
 
 export interface GlobalStats {
-  /** "vpn" when pinned to the tunnel, "blocked" when the kill switch holds everything. */
   network: "normal" | "vpn" | "blocked";
   dl_rate: number;
   ul_rate: number;
@@ -139,6 +138,12 @@ export interface StorageConfig {
   preallocation: "sparse" | "full";
 }
 
+export interface ColumnPref {
+  key: string;
+  visible: boolean;
+  width: number | null;
+}
+
 export interface Settings {
   download_dir: string;
   create_subfolder: boolean;
@@ -158,8 +163,10 @@ export interface Settings {
   blocklist_url: string | null;
   anonymous_mode: boolean;
   mark_of_the_web: boolean;
-  /** Kill switch: torrents only run through Riptor's VPN. */
+  /** Kill switch. */
   vpn_required: boolean;
+  close_to_tray: boolean;
+  columns: ColumnPref[];
   storage: StorageConfig;
   seeding: SeedingPrefs;
 }
@@ -272,7 +279,7 @@ export interface SearchResult {
   pub_date: number | null;
   engine: string;
   via_plugin: boolean;
-  /** UI only: seeders/leechers came from a tracker scrape. */
+  /** UI only. */
   scraped?: boolean;
 }
 
@@ -293,7 +300,6 @@ export type SearchEvent =
   | { type: "counts"; search_id: number; counts: ResultCounts[] }
   | { type: "lookups_done"; search_id: number };
 
-/** Seed/peer counts from a tracker scrape for the result with this link. */
 export interface ResultCounts {
   link: string;
   seeders: number;
@@ -328,10 +334,8 @@ export interface PythonStatus {
   available: boolean;
   version: string | null;
   sandboxed: boolean;
-  /** The interpreter in use is the one Riptor set up. */
   bundled: boolean;
   bundled_installed: boolean;
-  /** Riptor can download Python by itself on this platform (Windows). */
   can_bundle: boolean;
   bundle_version: string;
   bundle_size: number | null;

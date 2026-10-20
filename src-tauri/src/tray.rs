@@ -1,5 +1,3 @@
-//! System tray: left-click shows/hides the window, right-click opens the menu.
-
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -13,7 +11,6 @@ use crate::AppState;
 
 pub const TRAY_ID: &str = "riptor-tray";
 
-/// Menu items whose text or check state follows the app.
 pub struct TrayItems {
     toggle: MenuItem<Wry>,
     alt_speed: CheckMenuItem<Wry>,
@@ -96,7 +93,6 @@ fn engine(app: &AppHandle) -> Option<Arc<Engine>> {
     app.state::<AppState>().engine.get().cloned()
 }
 
-/// Ask the UI to do something that needs a dialog (it shows the window first).
 fn ui_action(app: &AppHandle, action: &str) {
     show_main(app);
     let _ = app.emit("riptor://tray-action", action);
@@ -147,7 +143,7 @@ fn on_menu(app: &AppHandle, id: &str) {
     }
 }
 
-fn show_main(app: &AppHandle) {
+pub fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
@@ -169,7 +165,7 @@ fn toggle_main(app: &AppHandle) {
     }
 }
 
-fn set_toggle_text(app: &AppHandle, visible: bool) {
+pub fn set_toggle_text(app: &AppHandle, visible: bool) {
     if let Some(items) = app.try_state::<TrayItems>() {
         let _ = items.toggle.set_text(if visible {
             "Hide Riptor"
@@ -204,7 +200,6 @@ fn rate(bps: u64) -> String {
     }
 }
 
-/// Called every engine tick: live speeds in the tooltip, alt-speed check mark.
 pub fn update(app: &AppHandle, g: &GlobalStats) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let vpn = match g.network.as_str() {

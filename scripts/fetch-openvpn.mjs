@@ -1,11 +1,5 @@
-// Download the official OpenVPN Community installer that the Windows setup
-// bundles, and refuse it unless its SHA-256 matches the pinned value.
-//
-// The hash was taken from a copy whose Authenticode signature verified as
-// "OpenVPN Inc." (DigiCert). To upgrade: download the new MSI, check its
-// signature (Get-AuthenticodeSignature), then update VERSION and SHA256.
-//
-//   node scripts/fetch-openvpn.mjs
+// Fetches the OpenVPN MSI the Windows setup bundles and checks its pinned hash.
+// When upgrading, check the new MSI is signed by "OpenVPN Inc." before pinning.
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -27,7 +21,6 @@ try {
     process.exit(0);
   }
 } catch {
-  // Not downloaded yet.
 }
 
 const res = await fetch(SOURCE, { redirect: "follow" });

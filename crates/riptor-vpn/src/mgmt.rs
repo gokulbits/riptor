@@ -1,9 +1,5 @@
-//! OpenVPN management-interface protocol.
-//!
-//! Riptor talks to OpenVPN over its management socket (localhost only,
-//! protected by a random per-connection password) to supply credentials from
-//! the OS keyring, so they are never written to a file, and to follow the
-//! connection state.
+//! OpenVPN's management protocol. Credentials go over it from the keyring, so
+//! they never touch a file.
 
 use std::net::Ipv4Addr;
 
@@ -23,7 +19,7 @@ pub enum Line {
     Hold,
     /// `>FATAL:...`
     Fatal(String),
-    /// `ENTER PASSWORD:` (the management password prompt)
+    /// `ENTER PASSWORD:`
     ManagementPassword,
     Other,
 }
@@ -58,8 +54,7 @@ pub fn parse(line: &str) -> Line {
     Line::Other
 }
 
-/// Quote a value for a management command (`"` and `\` escaped). Newlines are
-/// refused: they would end the command and let the value inject another one.
+/// Newlines are refused: they'd let a value inject another command.
 pub fn quote(v: &str) -> Option<String> {
     if v.contains(['\n', '\r', '\0']) {
         return None;
@@ -70,7 +65,6 @@ pub fn quote(v: &str) -> Option<String> {
     ))
 }
 
-/// The two commands that answer a credentials request.
 pub fn credentials(username: &str, password: &str) -> Option<[String; 2]> {
     Some([
         format!("username \"Auth\" {}\n", quote(username)?),

@@ -1,22 +1,6 @@
-//! `.riptorbackup` files: settings, torrents, statistics and categories in one
-//! encrypted, tamper-evident file.
-//!
-//! Layout (all integers little-endian):
-//!
-//! ```text
-//! "RIPTRBK\0" | version u8 | mode u8 | salt [16] | nonce [24] | ciphertext
-//! ```
-//!
-//! The ciphertext is XChaCha20-Poly1305 over deflate-compressed JSON, with the
-//! 50-byte header as associated data, so changing *any* byte (header or body)
-//! makes decryption fail.
-//!
-//! * mode 0: key built into Riptor. Any Riptor can open the file without a
-//!   password. This stops casual editing and detects corruption, but someone
-//!   who extracts the key from the app could forge a file, so restores still
-//!   treat the contents as untrusted.
-//! * mode 1: key derived from the user's password with Argon2id. Only someone
-//!   who knows the password can read or forge it.
+//! `.riptorbackup`: `"RIPTRBK\0" | version | mode | salt[16] | nonce[24] | ciphertext`.
+//! XChaCha20-Poly1305 over deflated JSON, header as AAD. Mode 0 uses a key
+//! built into the app (tamper-evident, not forgery-proof); mode 1 is Argon2id.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -41,8 +25,6 @@ pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PLAINTEXT_BYTES: u64 = 512 * 1024 * 1024;
 pub const MIN_PASSWORD_LEN: usize = 8;
 
-/// Built-in key for password-less backups. See the module docs for what this
-/// does and does not protect against.
 const APP_KEY: [u8; 32] = [
     0x05, 0x5d, 0x84, 0xcf, 0x72, 0x93, 0x56, 0x27, 0xda, 0xa5, 0x62, 0xe0, 0x19, 0x6d, 0x27, 0xf9,
     0xcf, 0x58, 0xe7, 0xcb, 0x80, 0xa2, 0x44, 0xb3, 0x59, 0xdf, 0x44, 0xe2, 0x8c, 0xe5, 0x84, 0xa8,
@@ -54,7 +36,6 @@ enum Mode {
     Password = 1,
 }
 
-/// Errors the UI distinguishes (it prompts for a password on the first).
 #[derive(Debug, thiserror::Error)]
 pub enum BackupError {
     #[error("password_required")]
@@ -90,7 +71,7 @@ pub struct BackupPayload {
 }
 
 fn derive_password_key(password: &str, salt: &[u8; 16]) -> anyhow::Result<[u8; 32]> {
-    // OWASP's Argon2id baseline: 64 MiB, 3 passes.
+    // OWASP baseline.
     let params = Params::new(64 * 1024, 3, 1, Some(32)).map_err(|e| anyhow::anyhow!("{e}"))?;
     let mut key = [0u8; 32];
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
@@ -191,7 +172,7 @@ pub fn open(bytes: &[u8], password: Option<&str>) -> anyhow::Result<BackupPayloa
         )
         .map_err(|_| BackupError::WrongPasswordOrTampered)?;
 
-    // Bounded inflate: a valid-but-hostile file cannot balloon memory.
+    // Bounded, so a hostile file can't balloon memory.
     let mut json = Vec::new();
     flate2::read::DeflateDecoder::new(&compressed[..])
         .take(MAX_PLAINTEXT_BYTES + 1)
@@ -229,14 +210,12 @@ mod tests {
         let p = open(&b, None).unwrap();
         assert_eq!(p.statistics.all_time_upload, 42);
         assert!(p.categories.contains_key("linux"));
-        // Not readable as plain text.
         assert!(!String::from_utf8_lossy(&b).contains("linux"));
     }
 
     #[test]
     fn any_modified_byte_is_detected() {
         let b = seal(&payload(), None).unwrap();
-        // Every header byte after the magic and a spread of body bytes.
         let positions: Vec<usize> = (8..HEADER_LEN)
             .chain((HEADER_LEN..b.len()).step_by(7))
             .collect();
@@ -245,7 +224,6 @@ mod tests {
             t[i] ^= 0x01;
             assert!(open(&t, None).is_err(), "flip at byte {i} went unnoticed");
         }
-        // Truncation and appended junk too.
         assert!(open(&b[..b.len() - 1], None).is_err());
         let mut longer = b.clone();
         longer.push(0);

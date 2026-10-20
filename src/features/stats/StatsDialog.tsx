@@ -42,7 +42,6 @@ function utcDay(offsetDays: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Last 30 days of upload/download as paired bars. */
 function DailyChart({ daily }: { daily: StatsReport["all_time"]["daily"] }) {
   const days = useMemo(() => Array.from({ length: 30 }, (_, i) => utcDay(29 - i)), []);
   const rows = days.map((d) => ({ day: d, ...(daily[d] ?? { uploaded: 0, downloaded: 0 }) }));

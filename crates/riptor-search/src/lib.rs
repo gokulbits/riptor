@@ -1,16 +1,5 @@
-//! Riptor's search engine: several providers queried in parallel, results
-//! streamed back as they arrive.
-//!
-//! * [`archive`]: Internet Archive (built in, needs no setup).
-//! * [`torznab`]: Torznab indexers.
-//! * [`nova`]: nova3-compatible Python plugins, offered from a
-//!   [`catalog`] fetched from GitHub, run by a system Python or one
-//!   [`pyembed`] sets up.
-//!
-//! Results without seed/peer counts get them from tracker [`scrape`]s.
-//!
-//! Every result is untrusted input from the network; [`clean`] normalises it
-//! before it reaches the UI.
+//! Search: providers queried in parallel, results streamed as they arrive.
+//! Results are untrusted; [`clean`] runs on each before the UI sees it.
 #![forbid(unsafe_code)]
 
 pub mod archive;
@@ -34,17 +23,13 @@ pub const CATEGORIES: [&str; 9] = [
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SearchResult {
     pub name: String,
-    /// `magnet:` link or http(s) URL of a `.torrent` file.
     pub link: String,
     pub size: Option<u64>,
     pub seeders: Option<u32>,
     pub leechers: Option<u32>,
-    /// Web page for the result, opened in the browser.
     pub desc_link: Option<String>,
     pub pub_date: Option<u64>,
-    /// Provider id that returned it.
     pub engine: String,
-    /// For plugin results whose link must be fetched through the plugin.
     #[serde(default)]
     pub via_plugin: bool,
 }
@@ -82,15 +67,17 @@ pub enum SearchEvent {
         count: usize,
         error: Option<String>,
     },
-    /// Every provider has answered (tracker lookups may still be running).
-    Finished { search_id: u64 },
-    /// Seed/peer counts from tracker scrapes, for results that had none.
+    /// Tracker lookups may still be running.
+    Finished {
+        search_id: u64,
+    },
     Counts {
         search_id: u64,
         counts: Vec<scrape::ResultCounts>,
     },
-    /// Tracker lookups for this search are over.
-    LookupsDone { search_id: u64 },
+    LookupsDone {
+        search_id: u64,
+    },
 }
 
 pub fn validate_query(q: &str) -> anyhow::Result<String> {
@@ -114,7 +101,6 @@ fn http_url(s: &str) -> Option<String> {
     (matches!(u.scheme(), "http" | "https") && u.host_str().is_some()).then(|| u.to_string())
 }
 
-/// Normalise one untrusted result; `None` drops it.
 pub fn clean(mut r: SearchResult) -> Option<SearchResult> {
     r.name = r
         .name
@@ -134,7 +120,6 @@ pub fn clean(mut r: SearchResult) -> Option<SearchResult> {
         http_url(link)?
     };
     r.desc_link = r.desc_link.as_deref().and_then(http_url);
-    // A year 2100+ "publish date" is junk.
     r.pub_date = r.pub_date.filter(|d| *d < 4_102_444_800);
     r.seeders = r.seeders.filter(|s| *s < 10_000_000);
     r.leechers = r.leechers.filter(|s| *s < 10_000_000);
@@ -142,7 +127,7 @@ pub fn clean(mut r: SearchResult) -> Option<SearchResult> {
     Some(r)
 }
 
-/// Dedupe key: the BitTorrent info hash when visible, else the link.
+/// The info hash when we can see it, else the link.
 pub fn dedupe_key(r: &SearchResult) -> String {
     if let Some(i) = r.link.to_ascii_lowercase().find("xt=urn:btih:") {
         let h: String = r.link[i + 12..]

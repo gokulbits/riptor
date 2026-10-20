@@ -6,6 +6,8 @@ export interface MenuItem {
   onClick?: () => void;
   danger?: boolean;
   disabled?: boolean;
+  /** For toggles, so several can be flipped in one go. */
+  keepOpen?: boolean;
   children?: MenuItem[];
 }
 
@@ -46,7 +48,7 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
             onClick={() => {
               if (it.children) return;
               it.onClick?.();
-              onClose();
+              if (!it.keepOpen) onClose();
             }}
             className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] hover:bg-raised disabled:opacity-40 ${it.danger ? "text-danger" : ""}`}
           >

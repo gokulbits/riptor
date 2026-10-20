@@ -1,11 +1,8 @@
-// Tauri isolation hook: every IPC message from the UI passes through here,
-// in a separate origin, before it reaches Rust. Anything that is not on the
-// allowlist is dropped, so a compromised UI dependency cannot reach other
-// commands or plugins.
+// Isolation hook: IPC calls not on this list never reach Rust.
 const APP_COMMANDS = new Set([
   "app_version", "engine_status", "take_startup_items", "preview_torrent", "add_torrent",
   "stop_torrents", "resume_torrents", "force_start_torrents", "remove_torrents", "set_files",
-  "torrent_files", "torrent_trackers", "torrent_peers", "set_category", "set_tags",
+  "torrent_files", "torrent_trackers", "torrent_peers", "torrent_magnet", "free_space", "set_category", "set_tags",
   "set_share_limits", "queue_move", "get_categories", "save_category", "delete_category",
   "get_settings", "update_settings", "set_alt_speed", "reveal_torrent", "open_web_url",
   "statistics", "create_backup", "inspect_backup", "restore_backup",

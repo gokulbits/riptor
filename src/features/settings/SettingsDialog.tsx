@@ -123,6 +123,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               />
             </Group>
           )}
+          {section === "downloads" && (
+            <Group title="Window">
+              <Toggle
+                checked={s.close_to_tray}
+                onChange={(v) => set({ close_to_tray: v })}
+                label="Keep running in the tray when the window is closed"
+                hint="Downloads and seeding carry on. Use Quit in the tray menu to exit."
+              />
+            </Group>
+          )}
 
           {section === "connection" && (
             <>

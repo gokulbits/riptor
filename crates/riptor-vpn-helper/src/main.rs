@@ -1,21 +1,11 @@
-//! Riptor's privileged VPN helper.
-//!
-//! Riptor runs unelevated. Creating a tunnel adapter needs administrator /
-//! root rights, so Riptor starts this helper through UAC (Windows) or pkexec
-//! (Linux). The helper is deliberately tiny and does exactly one thing:
+//! The elevated VPN helper. It does one thing:
 //!
 //! ```text
 //! riptor-vpn-helper openvpn <config-file> <management-port> <management-password-file>
 //! ```
 //!
-//! Its inputs come from a less-privileged process, so it trusts none of them:
-//! * the config is re-sanitized with the same allowlist Riptor uses (no
-//!   scripts, no plugins, no file references, app-only routing), then written
-//!   to a folder only administrators can write, so it can't be swapped
-//!   between the check and OpenVPN reading it;
-//! * OpenVPN is run from its installed location, never from PATH;
-//! * the management interface listens on 127.0.0.1 only and needs a password;
-//! * the helper starts OpenVPN and exits; it never runs anything else.
+//! Its caller is less privileged, so the config is sanitized again and copied
+//! to an admin-only folder before OpenVPN (from its installed path) reads it.
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
@@ -24,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure};
 
-/// Exit codes Riptor maps to messages (stderr is not visible through UAC).
+/// stderr isn't visible through UAC, so errors are exit codes.
 mod code {
     pub const USAGE: i32 = 2;
     pub const BAD_CONFIG: i32 = 3;
@@ -105,13 +95,13 @@ fn openvpn(config: &str, port: &str, pw_file: &str) -> Res {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW | DETACHED_PROCESS: no console, keeps running after we exit.
+        // CREATE_NO_WINDOW | DETACHED_PROCESS
         cmd.creation_flags(0x0800_0000 | 0x0000_0008);
     }
     cmd.spawn()
         .map_err(|e| (code::START_FAILED, anyhow::anyhow!("starting OpenVPN: {e}")))?;
 
-    // Wait for the management port, then remove the files: OpenVPN has read them.
+    // Once the port is up OpenVPN has read the files.
     let started = Instant::now();
     let ready = loop {
         if std::net::TcpStream::connect_timeout(
@@ -138,7 +128,7 @@ fn openvpn(config: &str, port: &str, pw_file: &str) -> Res {
     Ok(())
 }
 
-/// OpenVPN's installed location; never resolved through PATH.
+/// Never PATH.
 fn openvpn_exe() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
     {
@@ -172,7 +162,6 @@ fn openvpn_exe() -> anyhow::Result<PathBuf> {
     }
 }
 
-/// A folder only administrators / root can write.
 fn private_dir() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
     {
@@ -181,7 +170,7 @@ fn private_dir() -> anyhow::Result<PathBuf> {
             .unwrap_or_else(|| r"C:\ProgramData".into());
         let dir = base.join("Riptor").join("vpn");
         std::fs::create_dir_all(&dir)?;
-        // Replace inherited permissions: SYSTEM and Administrators only.
+        // SYSTEM and Administrators only.
         let icacls =
             Path::new(&std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()))
                 .join("System32")

@@ -1,9 +1,7 @@
-//! Run the VPN helper with administrator / root rights and wait for it.
-//! Windows: UAC prompt via ShellExecuteExW("runas"). Linux: pkexec.
+//! Run the VPN helper elevated: UAC on Windows, pkexec on Linux.
 
 use std::path::Path;
 
-/// Run `exe args...` elevated; returns its exit code.
 #[cfg(windows)]
 #[allow(unsafe_code)]
 pub fn run(exe: &Path, args: &[String]) -> anyhow::Result<i32> {
@@ -17,7 +15,6 @@ pub fn run(exe: &Path, args: &[String]) -> anyhow::Result<i32> {
     };
 
     let wide = |s: &std::ffi::OsStr| s.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
-    // Quote every argument for the Windows command line.
     let params: String = args
         .iter()
         .map(|a| {
@@ -38,12 +35,11 @@ pub fn run(exe: &Path, args: &[String]) -> anyhow::Result<i32> {
     info.lpParameters = params.as_ptr();
     info.nShow = 0; // SW_HIDE
 
-    // SAFETY: all string pointers live until the call returns; `info` is
-    // fully initialised; the returned process handle is closed below.
+    // SAFETY: the strings outlive the call; the handle is closed below.
     let ok = unsafe { ShellExecuteExW(&mut info) };
     if ok == 0 {
         let e = std::io::Error::last_os_error();
-        // ERROR_CANCELLED: the user said no to the UAC prompt.
+        // ERROR_CANCELLED
         if e.raw_os_error() == Some(1223) {
             anyhow::bail!("administrator permission was declined");
         }
@@ -51,7 +47,7 @@ pub fn run(exe: &Path, args: &[String]) -> anyhow::Result<i32> {
     }
     anyhow::ensure!(!info.hProcess.is_null(), "no process handle from UAC");
     let mut code = 1u32;
-    // SAFETY: hProcess is a valid handle owned by us until CloseHandle.
+    // SAFETY: we own hProcess until CloseHandle.
     unsafe {
         if WaitForSingleObject(info.hProcess, INFINITE) == WAIT_OBJECT_0 {
             GetExitCodeProcess(info.hProcess, &mut code);
@@ -67,7 +63,6 @@ pub fn run(exe: &Path, args: &[String]) -> anyhow::Result<i32> {
         .arg(exe)
         .args(args)
         .status()?;
-    // pkexec: 126 = not authorized / dismissed, 127 = not authenticated.
     match status.code() {
         Some(126) | Some(127) => anyhow::bail!("administrator permission was declined"),
         Some(c) => Ok(c),

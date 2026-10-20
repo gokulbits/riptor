@@ -1,13 +1,10 @@
-//! Adapter binding, the basis of the app-only VPN and its kill switch.
-//! Everything binds to loopback, so no firewall prompt is triggered.
+//! Adapter binding. Loopback only, so no firewall prompt.
 
 use std::net::{Ipv4Addr, SocketAddr};
 
 use librqbit_dualstack_sockets::{tcp_connect, BindDevice, ConnectOpts};
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 
-/// Name of the adapter that carries 127.0.0.1 ("Loopback Pseudo-Interface 1"
-/// on Windows, "lo" on Linux).
 fn loopback() -> NetworkInterface {
     NetworkInterface::show()
         .unwrap()
@@ -29,8 +26,7 @@ async fn binds_sockets_to_an_adapter() {
     let addr: SocketAddr = listener.local_addr().unwrap();
     let accept = tokio::spawn(async move { listener.accept().await.map(|_| ()) });
 
-    // "#<index>" is the Windows-only form (Riptor's socket patch); Linux
-    // binds by name only.
+    // "#<index>" is Windows-only.
     let mut names = vec![lo.name.clone()];
     if cfg!(windows) {
         names.push(format!("#{}", lo.index));

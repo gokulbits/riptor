@@ -24,7 +24,7 @@ fn cfg(read: usize, write: usize) -> StorageConfig {
     }
 }
 
-/// Write a flat range the way librqbit's `write_chunk` does: split per file.
+/// Like librqbit's `write_chunk`: split per file.
 fn write_abs(s: &Store, abs: u64, data: &[u8]) {
     let spans: Vec<_> = s.layout().spans(abs, data.len() as u64).collect();
     for sp in spans {
@@ -77,11 +77,9 @@ fn roundtrip_through_buffer_and_flush() {
     let s = Store::new(l.clone(), shared.clone());
     let data = pattern(48, 7);
 
-    // Write in 4-byte "blocks", out of order.
     for i in (0..12).rev() {
         write_abs(&s, i * 4, &data[i as usize * 4..i as usize * 4 + 4]);
     }
-    // Hash check reads come straight from memory; nothing on disk yet.
     assert_eq!(read_abs(&s, 0, 48), data);
     assert!(!l.files[0].path.exists());
     assert_eq!(s.buffered_pieces(), 3);
@@ -104,7 +102,6 @@ fn spills_under_memory_pressure_without_losing_data() {
     let data = pattern(48, 3);
     for i in 0..12u64 {
         write_abs(&s, i * 4, &data[i as usize * 4..i as usize * 4 + 4]);
-        // Budget is enforced by spilling everything but the piece being written.
         assert!(
             shared.write_budget.used() <= 20 + 16,
             "used {}",
@@ -167,7 +164,6 @@ fn read_cache_serves_seeding_and_invalidates_on_write() {
     let data = pattern(64 * 1024 * 4, 5);
     std::fs::write(&l.files[0].path, &data).unwrap();
 
-    // A peer reads the first extent as 16 KiB blocks: one miss, then hits.
     for i in 0..4u64 {
         let mut b = vec![0u8; 16 * 1024];
         s.read(0, i * 16 * 1024, &mut b).unwrap();
@@ -203,7 +199,6 @@ fn ensure_len_preallocates_sparse_and_full() {
             std::fs::metadata(&l.files[0].path).unwrap().len(),
             10 * 1024 * 1024
         );
-        // The engine may only ask for the length the metadata declares.
         assert!(s.ensure_len(0, 1).is_err());
     }
 }
@@ -230,7 +225,6 @@ fn folder_removal_never_touches_user_folders() {
     write_abs(&s, 0, &[1, 2, 3, 4]);
     s.remove_file(0).unwrap();
     s.remove_file(1).unwrap();
-    // The engine passes its own (untrusted) names; a non-empty path only clears subfolders.
     s.remove_empty_dirs(false).unwrap();
     assert!(root.exists() && !root.join("a").exists());
     s.remove_empty_dirs(true).unwrap();
@@ -302,21 +296,17 @@ fn op() -> impl Strategy<Value = Op> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
-    /// Any interleaving of writes, reads, completions and flushes behaves like
-    /// a flat byte array, whatever the cache and buffer sizes.
     #[test]
     fn behaves_like_flat_array(ops in proptest::collection::vec(op(), 1..80), read_cap in 0usize..200, write_cap in 0usize..40) {
         let dir = tempfile::tempdir().unwrap();
         let l = layout(dir.path(), true, 16, FILES);
         let s = Store::new(l.clone(), Shared::new(cfg(read_cap, write_cap)));
         let mut model = vec![0u8; 48];
-        // Files are created on first write, so give reads something to hit.
         write_abs(&s, 0, &model);
         s.flush_all().unwrap();
         for op in ops {
             match op {
                 Op::Write { abs, len, seed } => {
-                    // Like the engine, never cross a piece boundary in one write.
                     let len = len.min((16 - abs % 16) as usize).min(48 - abs as usize);
                     let d = pattern(len, seed);
                     write_abs(&s, abs, &d);

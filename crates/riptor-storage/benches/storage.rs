@@ -1,10 +1,4 @@
-//! Compares Riptor's cached store against plain positional file I/O (what
-//! librqbit's FilesystemStorage does) for the two hot paths:
-//!
-//! * download: 16 KiB blocks arrive, the piece is hash-read back, then committed
-//! * seeding: peers read pieces back as 16 KiB blocks
-//!
-//! Run with `cargo bench -p riptor-storage`.
+//! Cached store vs plain positional I/O, for downloading and seeding.
 
 use std::borrow::Cow;
 use std::fs::OpenOptions;
@@ -33,8 +27,7 @@ fn layout(root: &std::path::Path) -> Layout {
     .unwrap()
 }
 
-/// Blocks arrive shuffled within a window of in-flight pieces, roughly one
-/// piece per active peer, which is how librqbit requests them.
+/// Shuffled within a window of in-flight pieces, like librqbit requests them.
 const IN_FLIGHT: u64 = 16;
 
 fn block_order() -> Vec<(u64, u64)> {
@@ -73,7 +66,6 @@ fn download(c: &mut Criterion) {
                     write_all_at(&f, &block, p * PIECE + blk * BLOCK).unwrap();
                     left[p as usize] -= 1;
                     if left[p as usize] == 0 {
-                        // hash check reads the piece back from disk
                         for off in (0..PIECE).step_by(buf.len()) {
                             read_exact_at(&f, &mut buf, p * PIECE + off).unwrap();
                         }
@@ -110,7 +102,7 @@ fn download(c: &mut Criterion) {
                             s.piece_completed(p as u32).unwrap();
                         }
                     }
-                    // Returned so the final flush + fsync on drop is not timed; plain I/O never fsyncs here either.
+                    // Keep the final fsync out of the timing, as for plain I/O.
                     (dir, s)
                 },
                 BatchSize::PerIteration,
@@ -124,7 +116,6 @@ fn seeding(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();
     let l = layout(dir.path());
     std::fs::write(&l.files[0].path, vec![3u8; (PIECE * PIECES) as usize]).unwrap();
-    // Several peers interleave whole-piece requests.
     let mut pieces: Vec<u64> = (0..PIECES).collect();
     pieces.shuffle(&mut rand::rng());
 

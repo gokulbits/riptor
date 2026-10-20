@@ -1,11 +1,9 @@
-//! Platform-specific allocation hints. This is the only module in the crate
-//! allowed to use `unsafe` (one Win32 ioctl).
+//! Allocation hints. The only `unsafe` in this crate.
 
 use std::fs::File;
 use std::io;
 
-/// Mark a file sparse so unwritten regions take no disk space (NTFS needs an
-/// explicit flag; Linux/ext4 files are sparse by default).
+/// NTFS needs the flag; Linux files are sparse already.
 #[cfg(windows)]
 #[allow(unsafe_code)]
 pub fn mark_sparse(f: &File) -> io::Result<()> {
@@ -14,9 +12,7 @@ pub fn mark_sparse(f: &File) -> io::Result<()> {
     use windows_sys::Win32::System::IO::DeviceIoControl;
 
     let mut returned = 0u32;
-    // SAFETY: the handle is valid for the lifetime of `f`; FSCTL_SET_SPARSE
-    // takes no input/output buffers (null with zero length is documented as
-    // "set sparse"), and `returned` outlives the synchronous call.
+    // SAFETY: valid handle; FSCTL_SET_SPARSE takes no buffers.
     let ok = unsafe {
         DeviceIoControl(
             f.as_raw_handle() as _,
@@ -40,25 +36,22 @@ pub fn mark_sparse(_f: &File) -> io::Result<()> {
     Ok(())
 }
 
-/// Reserve real disk blocks for the whole file.
 #[cfg(target_os = "linux")]
 pub fn allocate(f: &File, len: u64) -> io::Result<()> {
     use rustix::fs::{fallocate, FallocateFlags};
     match fallocate(f, FallocateFlags::empty(), 0, len) {
         Ok(()) => Ok(()),
-        // Filesystems without fallocate (some FUSE/NFS): set_len already ran.
+        // No fallocate (some FUSE/NFS); set_len already ran.
         Err(e) if e == rustix::io::Errno::OPNOTSUPP => Ok(()),
         Err(e) => Err(e.into()),
     }
 }
 
-/// NTFS allocates clusters for a non-sparse file on `set_len`.
 #[cfg(not(target_os = "linux"))]
 pub fn allocate(_f: &File, _len: u64) -> io::Result<()> {
     Ok(())
 }
 
-/// Tell the kernel we are about to read this range (seeding read-ahead).
 #[cfg(target_os = "linux")]
 pub fn will_need(f: &File, offset: u64, len: u64) {
     use std::num::NonZeroU64;
@@ -72,3 +65,39 @@ pub fn will_need(f: &File, offset: u64, len: u64) {
 
 #[cfg(not(target_os = "linux"))]
 pub fn will_need(_f: &File, _offset: u64, _len: u64) {}
+
+/// Bytes the current user can still write on the volume holding `path`.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub fn free_space(path: &std::path::Path) -> io::Result<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut avail = 0u64;
+    // SAFETY: `wide` is NUL-terminated and outlives the call; the totals we
+    // don't need may be null.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut avail,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(avail)
+}
+
+#[cfg(target_os = "linux")]
+pub fn free_space(path: &std::path::Path) -> io::Result<u64> {
+    let s = rustix::fs::statvfs(path)?;
+    Ok(s.f_bavail.saturating_mul(s.f_frsize))
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn free_space(_path: &std::path::Path) -> io::Result<u64> {
+    Err(io::ErrorKind::Unsupported.into())
+}

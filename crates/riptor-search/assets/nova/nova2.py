@@ -1,13 +1,11 @@
-"""Riptor's search-plugin runner (nova3 plugin compatible).
+"""nova3 plugin runner.
 
   nova2.py capabilities              one JSON line per installed engine
   nova2.py search ENGINE CAT WORDS   one JSON line per result
   nova2.py download ENGINE URL       prints 'path url' for a .torrent file
 
-Riptor starts Python with -I (isolated mode), so this file adds only its own
-folder (which holds just the shim modules) to sys.path. Engines are loaded by
-file path and never put on sys.path, so an engine named e.g. "json.py" cannot
-shadow a standard-library module for other engines.
+Engines are loaded by file path, never via sys.path, so one named json.py
+can't shadow the standard library for the others.
 """
 
 import importlib.util

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Action, Intent, Prefs, TorrentView, MAX_RATIO};
 
-/// A per-torrent override, stored as -2 (use global) / -1 (no limit) / value.
+/// Stored as -2 (use global), -1 (no limit) or the value.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", content = "value", rename_all = "snake_case")]
 pub enum Limit<T> {
@@ -13,7 +13,6 @@ pub enum Limit<T> {
 }
 
 impl<T: Copy> Limit<T> {
-    /// Resolve against the global setting (`None` = no global limit).
     pub fn resolve(self, global: Option<T>) -> Option<T> {
         match self {
             Limit::UseGlobal => global,
@@ -49,11 +48,8 @@ pub enum LimitKind {
     InactiveSeedingTime,
 }
 
-/// Which limit (if any) a torrent has reached. Mirrors the order and
-/// usual share-limit conditions: only
-/// finished, non-forced torrents are checked, ratio first, then seeding
-/// time, then inactive seeding time. Stopped torrents are skipped so a
-/// Remove action never deletes something the user paused.
+/// Ratio, then seeding time, then inactive time. Stopped torrents are skipped
+/// so Remove never deletes something the user paused.
 pub fn reached(t: &TorrentView, prefs: &Prefs) -> Option<LimitKind> {
     if !t.finished || t.intent != Intent::Started || t.busy_or_error {
         return None;

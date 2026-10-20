@@ -1,5 +1,4 @@
-//! API keys live in the OS credential store (Windows Credential Manager,
-//! Secret Service on Linux), never in Riptor's config files or backups.
+//! API keys live in the OS credential store, never in files or backups.
 
 const SERVICE: &str = "Riptor";
 

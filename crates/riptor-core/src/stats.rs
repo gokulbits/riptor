@@ -1,12 +1,10 @@
-//! Client-wide statistics: persisted all-time tallies (survive restarts and
-//! removed torrents, included in backups) plus per-session figures.
+//! All-time and per-session statistics.
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-/// Days of per-day history kept.
 const HISTORY_DAYS: usize = 120;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,25 +13,22 @@ pub struct DayTotals {
     pub downloaded: u64,
 }
 
-/// Persisted in `statistics.json`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Statistics {
     pub all_time_upload: u64,
     pub all_time_download: u64,
-    /// Bytes received that did not end up in verified pieces (duplicates and
-    /// failed hash checks), measured on torrents once they finish.
+    /// Duplicates and failed hash checks, counted when a torrent finishes.
     pub all_time_wasted: u64,
     pub torrents_added: u64,
     pub torrents_completed: u64,
     pub torrents_removed: u64,
     pub total_uptime_secs: u64,
     pub sessions: u64,
-    /// Unix time Riptor first ran.
     pub first_started: u64,
     pub peak_download_rate: u64,
     pub peak_upload_rate: u64,
-    /// "YYYY-MM-DD" (UTC) -> totals.
+    /// Keyed by UTC "YYYY-MM-DD".
     pub daily: BTreeMap<String, DayTotals>,
 }
 
@@ -58,7 +53,6 @@ impl Statistics {
         self.peak_upload_rate = self.peak_upload_rate.max(ul);
     }
 
-    /// Sum of the last `days` days, including today.
     pub fn window(&self, now_unix: u64, days: u64) -> DayTotals {
         let from = day_key(now_unix.saturating_sub((days.saturating_sub(1)) * 86_400));
         self.daily
@@ -70,7 +64,7 @@ impl Statistics {
             })
     }
 
-    /// Reject obviously corrupt or hostile values (e.g. from a crafted backup).
+    /// Backups can be crafted.
     pub fn sanitize(&mut self) {
         self.daily.retain(|k, _| is_day_key(k));
         while self.daily.len() > HISTORY_DAYS {
@@ -87,7 +81,6 @@ pub fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
-/// UTC calendar date for a unix timestamp, without pulling in a date crate.
 pub fn day_key(unix: u64) -> String {
     let days = (unix / 86_400) as i64;
     // Howard Hinnant's civil_from_days.
@@ -114,7 +107,6 @@ fn is_day_key(k: &str) -> bool {
             .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
 }
 
-/// Everything the statistics page shows.
 #[derive(Clone, Debug, Serialize)]
 pub struct StatsReport {
     pub all_time: Statistics,

@@ -7,21 +7,30 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Transport {
-    /// librqbit marks uTP as not yet stable, so TCP is the default.
+    /// uTP is still experimental in librqbit.
     #[default]
     Tcp,
     TcpAndUtp,
 }
 
+/// One column of the torrent list, in display order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColumnPref {
+    pub key: String,
+    pub visible: bool,
+    #[serde(default)]
+    pub width: Option<u32>,
+}
+
+const MAX_COLUMNS: usize = 32;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub download_dir: PathBuf,
-    /// Put multi-file torrents in their own folder ("Create subfolder").
     pub create_subfolder: bool,
     /// 0 = random.
     pub listen_port: u16,
-    /// Accept peer connections only on this local address (e.g. a VPN adapter's IP).
     /// `None` = all interfaces.
     pub listen_address: Option<std::net::IpAddr>,
     pub transport: Transport,
@@ -38,12 +47,15 @@ pub struct Settings {
     /// `socks5://[user:pass@]host:port` for peer connections.
     pub proxy_url: Option<String>,
     pub blocklist_url: Option<String>,
-    /// Anonymous mode: no DHT/LSD/UPnP, generic client name.
+    /// No DHT/LSD/UPnP, generic client name.
     pub anonymous_mode: bool,
-    /// Windows: tag finished files with a Mark-of-the-Web.
     pub mark_of_the_web: bool,
-    /// Kill switch: torrents may only use the network through the app-only VPN.
+    /// Kill switch.
     pub vpn_required: bool,
+    /// Closing the window hides it; Quit is in the tray menu.
+    pub close_to_tray: bool,
+    /// Empty means the default layout.
+    pub columns: Vec<ColumnPref>,
     pub storage: StorageConfig,
     pub seeding: SeedingPrefs,
 }
@@ -70,6 +82,8 @@ impl Default for Settings {
             anonymous_mode: false,
             mark_of_the_web: true,
             vpn_required: false,
+            close_to_tray: true,
+            columns: Vec::new(),
             storage: StorageConfig::default(),
             seeding: SeedingPrefs::default(),
         }
@@ -77,7 +91,6 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Reject values that would be unsafe or nonsensical before they reach the engine.
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.download_dir.is_absolute(),
@@ -105,6 +118,20 @@ impl Settings {
             (16..=65536).contains(&self.storage.max_open_files),
             "open file limit out of range"
         );
+        anyhow::ensure!(self.columns.len() <= MAX_COLUMNS, "too many columns");
+        let mut seen = std::collections::HashSet::new();
+        for c in &self.columns {
+            anyhow::ensure!(
+                (1..=32).contains(&c.key.len())
+                    && c.key.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "invalid column"
+            );
+            anyhow::ensure!(seen.insert(c.key.as_str()), "duplicate column");
+            anyhow::ensure!(
+                c.width.is_none_or(|w| (40..=2000).contains(&w)),
+                "column width out of range"
+            );
+        }
         Ok(())
     }
 
@@ -116,7 +143,6 @@ impl Settings {
         }
     }
 
-    /// Settings whose change needs the session to be rebuilt.
     pub fn needs_restart(&self, other: &Settings) -> bool {
         self.listen_port != other.listen_port
             || self.listen_address != other.listen_address
@@ -161,9 +187,41 @@ mod tests {
     }
 
     #[test]
+    fn columns_are_validated() {
+        let col = |key: &str, width| ColumnPref {
+            key: key.into(),
+            visible: true,
+            width,
+        };
+        let mut s = Settings {
+            download_dir: std::env::temp_dir(),
+            columns: vec![col("name", Some(380)), col("size", None)],
+            ..Settings::default()
+        };
+        s.validate().unwrap();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.columns, s.columns);
+
+        for bad in [
+            vec![col("name", None), col("name", None)],
+            vec![col("<img onerror=x>", None)],
+            vec![col("", None)],
+            vec![col("name", Some(5))],
+            vec![col("name", Some(1_000_000))],
+            (0..40)
+                .map(|i| col(&"a".repeat(i % 30 + 1), None))
+                .collect(),
+        ] {
+            s.columns = bad;
+            assert!(s.validate().is_err(), "{:?}", s.columns);
+        }
+    }
+
+    #[test]
     fn partial_json_uses_defaults() {
         let s: Settings = serde_json::from_str(r#"{"listen_port": 6881}"#).unwrap();
         assert_eq!(s.listen_port, 6881);
         assert!(s.dht);
+        assert!(s.columns.is_empty());
     }
 }

@@ -1,15 +1,7 @@
-//! WireGuard profile sanitizing.
-//!
-//! `wg-quick` runs `PreUp`/`PostUp`/`PreDown`/`PostDown` as shell commands with
-//! root rights, and `SaveConfig` makes it write the file back, so those are
-//! refused. `DNS` is extracted (Riptor resolves through the tunnel itself and
-//! never changes the system's DNS) and `Table = off` is forced so the system's
-//! routes are untouched; only adapter-pinned sockets use the tunnel.
-//!
-//! App-only mode needs `Table = off`, which `wg-quick` (Linux) honours but the
-//! Windows WireGuard client does not: it always installs routes from
-//! `AllowedIPs`, which would send the whole computer through the VPN. See
-//! [`app_only_supported`].
+//! WireGuard sanitizing. `PreUp`/`PostUp`/... run shell commands as root and
+//! `SaveConfig` writes the file back, so they're refused. `DNS` is taken out
+//! so the system's DNS is never changed, and `Table = off` is forced. The
+//! Windows client ignores `Table = off`, hence [`app_only_supported`].
 
 use std::net::IpAddr;
 
@@ -19,7 +11,7 @@ pub const MAX_PROFILE_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sanitized {
-    /// Canonical config, including keys. Callers store the keys in the OS keyring.
+    /// Includes keys; callers move them to the keyring.
     pub config: String,
     pub addresses: Vec<String>,
     pub dns: Vec<IpAddr>,
@@ -42,7 +34,6 @@ pub enum WgError {
     Structure,
 }
 
-/// Whether WireGuard can run app-only on this platform.
 pub fn app_only_supported() -> bool {
     cfg!(target_os = "linux")
 }
@@ -149,7 +140,7 @@ pub fn sanitize(input: &[u8]) -> Result<Sanitized, WgError> {
                 addresses.extend(a);
             }
             ("interface", "dns") => {
-                // Kept for Riptor's own resolver; never applied to the system.
+                // Never applied to the system.
                 for d in list(v) {
                     dns.push(d.parse().map_err(|_| bad())?);
                 }
@@ -201,7 +192,6 @@ pub fn sanitize(input: &[u8]) -> Result<Sanitized, WgError> {
     if interfaces != 1 || peers == 0 || !has_private {
         return Err(WgError::Structure);
     }
-    // App-only: never touch the system routing table (wg-quick).
     let config = out.replacen("[Interface]\n", "[Interface]\nTable = off\n", 1);
     Ok(Sanitized {
         config,
@@ -231,7 +221,6 @@ mod tests {
         assert_eq!(s.dns, vec!["10.2.0.1".parse::<IpAddr>().unwrap()]);
         assert_eq!(s.addresses, vec!["10.2.0.2/32"]);
         assert_eq!(s.endpoints, vec!["185.159.157.1:51820"]);
-        // Stable on re-validation.
         assert!(sanitize(s.config.as_bytes()).is_ok());
     }
 

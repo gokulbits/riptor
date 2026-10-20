@@ -1,9 +1,5 @@
-//! App-only VPN: start OpenVPN through the privileged helper, drive it over
-//! the management interface, and switch the engine's network mode.
-//!
-//! Only Riptor's sockets use the tunnel (they're pinned to its adapter); the
-//! rest of the computer keeps its normal connection. A watchdog blocks the
-//! engine the moment the tunnel or its adapter goes away.
+//! App-only VPN: OpenVPN via the elevated helper, driven over its management
+//! interface. Only Riptor's sockets are pinned to the tunnel.
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
@@ -47,7 +43,7 @@ pub struct VpnStatus {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VpnPrefs {
-    /// Ask the VPN gateway to forward a port over NAT-PMP (if the provider offers it).
+    /// NAT-PMP, if the provider supports it.
     pub port_forwarding: bool,
 }
 
@@ -92,11 +88,10 @@ fn helper_path() -> anyhow::Result<PathBuf> {
     Ok(p)
 }
 
-/// Is OpenVPN installed where the helper looks for it?
 pub fn openvpn_installed() -> bool {
     #[cfg(windows)]
     {
-        // Same places the helper looks (it never uses PATH).
+        // Same lookup as the helper; never PATH.
         let hklm = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE);
         let from_registry = hklm.open_subkey(r"SOFTWARE\OpenVPN").ok().and_then(|k| {
             k.get_value::<String, _>("exe_path").ok().or_else(|| {
@@ -170,7 +165,6 @@ impl VpnManager {
         let _ = self.app.emit("riptor://vpn", s);
     }
 
-    /// Where the engine goes when the tunnel isn't usable.
     async fn fall_back(&self) {
         let mode = if self.engine.settings().vpn_required {
             NetworkMode::Blocked
@@ -225,7 +219,7 @@ impl VpnManager {
             .local_addr()?
             .port();
         let password = random_password()?;
-        // Hand-off files in our own folder; the helper copies them somewhere only admins can write.
+        // The helper copies these into an admin-only folder before use.
         let run = self.dir.join("run");
         std::fs::create_dir_all(&run)?;
         let cfg_path = run.join("connect.ovpn");
@@ -255,8 +249,7 @@ impl VpnManager {
             .await
             .context("connecting to OpenVPN")?;
         let (read, write) = stream.into_split();
-        // Store the writer before the reader starts: OpenVPN asks for the
-        // management password immediately, and `send` needs the writer.
+        // The password prompt arrives immediately, so the writer must exist first.
         let mut conn = self.conn.lock().await;
         *conn = Some(Conn {
             writer: tokio::sync::Mutex::new(write),
@@ -280,7 +273,6 @@ impl VpnManager {
         }
     }
 
-    /// Read management lines until OpenVPN goes away.
     async fn drive(
         self: Arc<Self>,
         mut r: BufReader<tokio::net::tcp::OwnedReadHalf>,
@@ -383,7 +375,6 @@ impl VpnManager {
         info!("VPN management connection closed");
     }
 
-    /// Tunnel is up: pin the engine to it, start port forwarding and the watchdog.
     async fn on_connected(
         self: &Arc<Self>,
         ip: Ipv4Addr,
@@ -420,7 +411,7 @@ impl VpnManager {
         });
         info!("VPN connected on {adapter} ({ip})");
 
-        // Watchdog: adapter gone => block at once. Also renews the port mapping.
+        // Watchdog. Also renews the port mapping.
         let me = self.clone();
         Ok(tokio::spawn(async move {
             let mut tick = 0u32;
@@ -455,7 +446,7 @@ impl VpnManager {
         }))
     }
 
-    /// On quit: stop OpenVPN without restarting the engine's session.
+    /// For quitting: no session restart.
     pub async fn shutdown(&self) {
         if let Some(c) = self.conn.lock().await.take() {
             let _ = c.writer.lock().await.write_all(b"signal SIGTERM\n").await;

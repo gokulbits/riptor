@@ -16,7 +16,6 @@ interface SearchState {
   selected: string[] | null;
   searchId: number | null;
   running: boolean;
-  /** Tracker lookups for results without seed/peer counts are still running. */
   lookups: boolean;
   results: SearchResult[];
   progress: Record<string, ProviderProgress>;
@@ -65,7 +64,6 @@ export const useSearch = create<SearchState>()((set) => ({
   stop: () => set({ running: false, lookups: false }),
   onEvent: (e) =>
     set((s) => {
-      // Ignore stragglers from a search the user has replaced.
       if (e.search_id !== s.searchId) return {};
       if (e.type === "results") {
         return { results: [...s.results, ...e.results].slice(0, MAX_RESULTS) };
@@ -81,7 +79,7 @@ export const useSearch = create<SearchState>()((set) => ({
   setFilter: (f) => set((s) => ({ filter: { ...s.filter, ...f } })),
 }));
 
-/** Fill in scraped counts; a provider's own counts are never overwritten. */
+/** Never overwrites a provider's own counts. */
 export function applyCounts(results: SearchResult[], counts: ResultCounts[]): SearchResult[] {
   const byLink = new Map(counts.map((c) => [c.link, c]));
   return results.map((r) => {

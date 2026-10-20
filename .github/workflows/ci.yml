@@ -3,17 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
-    # Version tags (e.g. v0.1.0) also build the installers.
     tags: ["v*"]
   pull_request:
-  # "Run workflow" button: runs the checks and builds the installers.
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Least privilege: jobs only read the repo.
 permissions:
   contents: read
 
@@ -68,8 +65,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
-  # Release builds (full LTO) are slow, so installers are only built for
-  # version tags and manual runs; every push still gets the checks above.
+  # Full-LTO builds are slow: tags and manual runs only.
   bundle:
     needs: check
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
@@ -92,9 +88,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # The VPN helper ships next to riptor.exe (Tauri externalBin wants a
-      # target-triple suffix). Kept out of tauri.conf.json so dev builds and
-      # cargo test don't need the file.
+      # externalBin wants a target-triple suffix.
       - name: Build VPN helper
         shell: bash
         run: |
@@ -103,8 +97,7 @@ jobs:
           ext=$([ "$RUNNER_OS" = Windows ] && echo .exe || true)
           mkdir -p src-tauri/binaries
           cp "target/release/riptor-vpn-helper$ext" "src-tauri/binaries/riptor-vpn-helper-$triple$ext"
-      # The Windows setup carries the official OpenVPN installer. The script
-      # pins its SHA-256; the signature check is a second, independent gate.
+      # Hash is pinned in the script; the signature check is a second gate.
       - name: Fetch OpenVPN installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -114,8 +107,6 @@ jobs:
           if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch '^CN=OpenVPN Inc\.,') {
             throw "OpenVPN installer signature check failed: $($sig.Status) $($sig.SignerCertificate.Subject)"
           }
-      # Search plugins need Python; the Windows setup ships the pinned
-      # embeddable Python (hash checked against crates/riptor-search/src/pyembed.rs).
       - name: Fetch embeddable Python
         if: runner.os == 'Windows'
         run: node scripts/fetch-python.mjs
@@ -139,10 +130,7 @@ jobs:
             target/release/bundle/rpm/*.rpm
             target/release/bundle/SHA256SUMS-*.txt
 
-  # Version tags turn the installers into a *draft* GitHub release. Nothing is
-  # public until someone reviews the draft and clicks Publish. Only this job
-  # can write to the repo, and it uses the preinstalled gh CLI (no extra
-  # third-party actions).
+  # Drafts only; a person publishes. The only job with write access.
   release:
     needs: bundle
     if: startsWith(github.ref, 'refs/tags/v')
@@ -162,7 +150,6 @@ jobs:
           mkdir dist
           find artifacts -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} dist/ \;
           ls -la dist
-          # One of each, and built from the version the tag names.
           version="${TAG#v}"
           for pattern in "*_${version}_x64-setup.exe" "*_${version}_amd64.deb" "*-${version}-*.x86_64.rpm"; do
             n=$(find dist -name "$pattern" | wc -l)
@@ -171,7 +158,6 @@ jobs:
           cd dist
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
-          # The files must be exactly what the build jobs hashed.
           for sums in ../artifacts/*/SHA256SUMS-*.txt; do
             while read -r sum path; do
               name=$(basename "${path#\*}")
@@ -197,7 +183,6 @@ jobs:
           pre=""
           case "$TAG" in *-*) pre="--prerelease" ;; esac
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            # Re-run: replace the files on the existing (draft) release.
             gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft $pre \

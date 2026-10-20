@@ -225,7 +225,6 @@ export function VpnView() {
       setKillSwitch(settings.vpn_required);
       setOpenvpn(ovpn);
     } catch {
-      // The engine may still be starting; the ready poll in App retries.
     }
   }, []);
 

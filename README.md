@@ -41,6 +41,9 @@ A lightweight, security-focused BitTorrent client for **Windows and Linux**, bui
 - Encrypted, tamper-evident backup and restore of torrents, settings, categories and statistics (`.riptorbackup`), with an optional password.
 - 9 themes plus "follow system", and accent colours.
 - System tray, desktop notifications, and "Open with" / default-app registration for `.torrent` and `magnet:`.
+- Closing the window keeps Riptor in the tray (optional). It remembers the window size and position, the sort order, and the detail panel's height and tab.
+- Torrent list columns can be shown, hidden, reordered (drag a header) and resized. Right-click a header to choose. The layout is part of the settings, so backups carry it.
+- Double-click a torrent to open its folder. Right-click to copy its magnet link. The add dialog shows free disk space and warns when a download won't fit.
 
 ## Security
 
@@ -176,6 +179,7 @@ Done: the Windows setup (per-machine, with OpenVPN bundled), `.deb`/`.rpm` packa
 - [ ] "Force recheck" for a torrent.
 - [ ] Profile the storage download path. It currently costs about 35% at very high throughput on a fast NVMe SSD (writes go through the OS page cache), even though the seeding cache measures faster.
 - [ ] Finish the real-network check: download and seed a public torrent such as Debian netinst end to end.
+- [ ] Torrents left in librqbit's session files without a Riptor record are refused on every start but never removed (logged as "no save folder registered"). Clean them out.
 
 ### Seeding and queueing extras (milestone 2 leftovers)
 - [ ] Weekly scheduler for alternative speed limits.
@@ -188,10 +192,6 @@ Done: the Windows setup (per-machine, with OpenVPN bundled), `.deb`/`.rpm` packa
 - [ ] Try the popular community plugins against Riptor's shim (the official ones work with Python 3.14 on Windows). Set `RIPTOR_TEST_PYTHON` to run the end-to-end plugin test without a system Python.
 - [ ] Bump the embedded Python pin (`riptor-search/src/pyembed.rs`) with each Python security release.
 - [ ] Route tracker lookups through the VPN once the kill switch exists (they go out directly today).
-
-### UI polish
-- [ ] Replace the `window.prompt` used for editing tags with a proper dialog.
-- [ ] Remember the detail-panel height and the selected tab between runs.
 
 ### Security and quality
 - [ ] Check for dependency updates regularly (`cargo update --dry-run`, `npm outdated`; security advisories already fail CI through cargo-deny and npm audit). Upgrade by hand, then build, test and run the app before committing. Dependabot is intentionally not used.

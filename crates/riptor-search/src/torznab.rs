@@ -1,5 +1,5 @@
-//! Torznab indexers. Parsed with quick-xml, which never resolves
-//! DTDs or external entities, so a hostile indexer cannot read local files.
+//! Torznab. quick-xml never resolves external entities, so a hostile indexer
+//! can't read local files.
 
 use std::net::IpAddr;
 
@@ -9,7 +9,6 @@ use quick_xml::{Reader, XmlVersion};
 
 use crate::{time, SearchResult};
 
-/// Newznab category ids per Riptor category.
 fn cat_ids(category: &str) -> Option<&'static str> {
     match category {
         "movies" => Some("2000"),
@@ -28,8 +27,7 @@ pub fn categories() -> Vec<String> {
     crate::CATEGORIES.iter().map(|c| c.to_string()).collect()
 }
 
-/// https anywhere; plain http only to this machine or a private network,
-/// since the API key travels in the URL.
+/// Plain http only locally: the API key is in the URL.
 pub fn validate_endpoint(raw: &str) -> anyhow::Result<url::Url> {
     let u = url::Url::parse(raw.trim())?;
     ensure!(
@@ -75,8 +73,7 @@ struct Item {
     enclosure: Option<String>,
 }
 
-/// Text for the five predefined XML entities and numeric character
-/// references. Anything else (DTD-declared entities) is dropped, never expanded.
+/// Predefined and numeric entities only; anything else is dropped.
 fn resolve_entity(name: &str) -> Option<char> {
     match name {
         "amp" => Some('&'),
@@ -103,13 +100,10 @@ fn attr_value(a: &quick_xml::events::attributes::Attribute) -> String {
 
 pub fn parse(xml: &str, engine: &str) -> anyhow::Result<Vec<SearchResult>> {
     let mut reader = Reader::from_str(xml);
-    // No per-event trimming: text is split around entity references, so trimming
-    // fragments would eat the spaces in "a &amp; b". Fields are trimmed once in set_field.
+    // Don't trim per event or "a &amp; b" loses its spaces.
     reader.config_mut().trim_text(false);
     let mut out = Vec::new();
     let mut item: Option<Item> = None;
-    // The element whose text we are collecting, and the text so far (text
-    // arrives in several events around entity references).
     let mut field = String::new();
     let mut text = String::new();
 

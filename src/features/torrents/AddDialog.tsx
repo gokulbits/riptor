@@ -16,7 +16,6 @@ function describe(src: Source): string {
   return src.value;
 }
 
-/** Shown for every add, including links from the browser: nothing is added silently. */
 export function AddDialog({
   source,
   categories,
@@ -64,6 +63,24 @@ export function AddDialog({
     [preview, selected],
   );
   const exeSelected = preview?.files.some((f) => f.executable && selected.has(f.index));
+
+  const [free, setFree] = useState<number | null>(null);
+  useEffect(() => {
+    setFree(null);
+    if (!effectivePath) return;
+    let alive = true;
+    const t = setTimeout(() => {
+      api
+        .freeSpace(effectivePath)
+        .then((n) => alive && setFree(n))
+        .catch(() => {});
+    }, 300);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [effectivePath]);
+  const tooBig = free != null && selectedSize > free;
 
   const pickFolder = async () => {
     const dir = await open({ directory: true, defaultPath: effectivePath || undefined, title: "Save to" });
@@ -149,7 +166,16 @@ export function AddDialog({
           {preview.comment && <p className="select-text whitespace-pre-wrap text-xs text-muted">{preview.comment}</p>}
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Save to">
+            <Field
+              label="Save to"
+              hint={
+                free == null ? undefined : (
+                  <span className={tooBig ? "text-danger" : undefined}>
+                    {formatBytes(free)} free{tooBig && ` · not enough space for ${formatBytes(selectedSize)}`}
+                  </span>
+                )
+              }
+            >
               <div className="flex gap-1">
                 <input className="input" value={effectivePath} onChange={(e) => setSavePath(e.target.value)} />
                 <button className="btn-ghost border border-border" onClick={pickFolder} title="Choose folder">

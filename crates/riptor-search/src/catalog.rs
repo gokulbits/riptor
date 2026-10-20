@@ -1,13 +1,5 @@
-//! A list of nova3 search plugins the user can install, fetched from
-//! GitHub when the Search engines dialog asks for it:
-//! * official: `nova3/engines` in the upstream search-plugins repository;
-//! * community: the "Unofficial search plugins" wiki page of that repository.
-//!
-//! No plugin code ships with Riptor. The catalog only offers download links;
-//! installing still goes through [`crate::SearchManager::preview_plugin`],
-//! where the user reviews the source and SHA-256 first. Everything fetched
-//! here is untrusted: text is stripped and capped, and a download link must
-//! be https and name a `.py` file.
+//! Installable plugins, from the official repo and the community wiki page.
+//! Only links are offered; installing still goes through the review dialog.
 
 use std::time::Duration;
 
@@ -28,8 +20,7 @@ pub const COMMUNITY_PAGE: &str =
 const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ENTRIES: usize = 400;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
-/// One official plugin is a Torznab bridge that needs a config file beside
-/// it. Riptor speaks Torznab itself, so it is left out.
+/// A Torznab bridge that needs a config file. We speak Torznab ourselves.
 const SKIP_OFFICIAL: [&str; 1] = ["jackett"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -39,8 +30,7 @@ pub enum Origin {
     Community,
 }
 
-/// The community list's own status marks: ✔ works, ❗ has problems,
-/// ✖ broken (and may slow other plugins down).
+/// ✔ works, ❗ has problems, ✖ broken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Health {
@@ -52,19 +42,16 @@ pub enum Health {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CatalogEntry {
-    /// Plugin file name without `.py`.
     pub id: String,
     pub name: String,
     pub site: Option<String>,
     pub download_url: String,
     pub origin: Origin,
-    /// Needs an account on the site (and usually editing the plugin).
     pub private: bool,
     pub version: Option<String>,
     pub author: Option<String>,
     pub health: Health,
     pub note: Option<String>,
-    /// Why it can't be installed, if it can't.
     pub problem: Option<String>,
     pub installed: bool,
 }
@@ -72,7 +59,6 @@ pub struct CatalogEntry {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Catalog {
     pub entries: Vec<CatalogEntry>,
-    /// Lists that could not be loaded.
     pub errors: Vec<String>,
 }
 
@@ -91,7 +77,6 @@ fn web_url(s: &str) -> Option<String> {
         .then(|| u.to_string())
 }
 
-/// An https link to a `.py` file, and the plugin id it names.
 fn plugin_link(s: &str) -> Option<(String, String)> {
     let u = url::Url::parse(s.trim()).ok()?;
     if u.scheme() != "https" || u.host_str().is_none() || s.len() > 500 {
@@ -123,7 +108,6 @@ async fn get_capped(http: &reqwest::Client, url: &str, cap: usize) -> anyhow::Re
         .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out")))
 }
 
-/// `versions.txt`: one `id: version` per line.
 pub fn parse_official_index(body: &str) -> Vec<(String, String)> {
     body.lines()
         .filter_map(|l| {
@@ -140,7 +124,7 @@ async fn official(http: &reqwest::Client) -> anyhow::Result<Vec<CatalogEntry>> {
     let index = get_capped(http, OFFICIAL_INDEX, 64 * 1024).await?;
     let ids = parse_official_index(&String::from_utf8_lossy(&index));
     ensure!(!ids.is_empty(), "the official list is empty");
-    // Names and sites are read from the plugin files themselves (never run).
+    // Read from the plugin files, never run.
     let entries = futures::stream::iter(ids)
         .map(|(id, version)| async move {
             let download_url = format!("{OFFICIAL_BASE}{id}.py");
@@ -179,9 +163,7 @@ async fn official(http: &reqwest::Client) -> anyhow::Result<Vec<CatalogEntry>> {
     Ok(entries)
 }
 
-/// `[url label]` external links in wiki markup, ignoring `[[image]]` links.
 fn ext_links(cell: &str) -> Vec<(String, String)> {
-    // Drop [[...]] (images) first; what's left are external links.
     let mut plain = String::with_capacity(cell.len());
     let mut rest = cell;
     while let Some(i) = rest.find("[[") {
@@ -273,7 +255,6 @@ fn community_entry(cells: &[String], private: bool) -> Option<CatalogEntry> {
     })
 }
 
-/// The wiki page's tables: one row per plugin, one `| cell` per line.
 pub fn parse_community(page: &str) -> Vec<CatalogEntry> {
     let mut out = Vec::new();
     let (mut private, mut in_table) = (false, false);
@@ -321,7 +302,6 @@ async fn community(http: &reqwest::Client) -> anyhow::Result<Vec<CatalogEntry>> 
     Ok(entries)
 }
 
-/// Fetch both lists; one failing still returns the other.
 pub async fn fetch(http: &reqwest::Client) -> Catalog {
     let (off, com) = futures::join!(official(http), community(http));
     let mut c = Catalog::default();
@@ -401,7 +381,6 @@ continued comment line
     fn parses_the_community_wiki_table() {
         let e = parse_community(PAGE);
         let ids: Vec<&str> = e.iter().map(|x| x.id.as_str()).collect();
-        // The plain-http download is dropped.
         assert_eq!(ids, ["academic", "Caps-Engine", "dee", "privsite"]);
         let a = &e[0];
         assert_eq!(a.name, "Academic Torrents");
@@ -414,7 +393,7 @@ continued comment line
             Some("qbt 4.3.x / Python 3.8.5 READ REPOSITORY NOTES")
         );
         assert!(!a.private && a.problem.is_none());
-        // Uppercase file names can't be loaded by the shim; listed, not installable.
+        // The shim can't load uppercase names.
         assert_eq!(e[1].health, Health::Issues);
         assert!(e[1].problem.is_some());
         assert!(e[1]
@@ -452,7 +431,6 @@ continued comment line
         let e = parse_community(&huge);
         assert_eq!(e.len(), 1);
         assert!(e[0].name.len() <= 80 * 4);
-        // Control characters never reach the UI.
         let e = parse_community("{|\n|-\n| [https://s.example Na\u{0007}me]\n|a\n|b\n|c\n| [https://e.example/e.py]\n|}");
         assert_eq!(e[0].name, "Name");
     }

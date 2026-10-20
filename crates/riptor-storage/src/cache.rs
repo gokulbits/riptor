@@ -1,6 +1,4 @@
-//! Shared memory accounting: a byte-weighted LRU read cache for seeding, and
-//! a byte budget for not-yet-flushed downloaded data. Both are shared by every
-//! torrent so one global "disk cache" setting bounds total memory.
+//! The seeding read cache and the write buffer budget, shared by all torrents.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -132,7 +130,6 @@ pub struct CacheStats {
     pub misses: usize,
 }
 
-/// Bytes of downloaded data held in memory and not yet on disk.
 pub struct WriteBudget {
     used: AtomicUsize,
     capacity: AtomicUsize,
@@ -191,7 +188,6 @@ mod tests {
         assert_eq!(c.stats().bytes, 100);
         assert!(c.get(&k(1)).is_none());
         assert!(c.get(&k(0)).is_some());
-        // Too-large values are ignored.
         c.insert(k(9), vec![0; 60].into());
         assert!(c.get(&k(9)).is_none());
         c.invalidate(1, 0, 0..=3);

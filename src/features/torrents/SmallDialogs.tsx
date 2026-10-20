@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, X } from "lucide-react";
 import { useState } from "react";
 import { Dialog, Field, OptionalNumber, Toggle } from "../../components/ui";
 import { api, errorText } from "../../lib/ipc";
@@ -46,7 +46,7 @@ export function MagnetDialog({ onSubmit, onClose }: { onSubmit: (items: Source[]
 
 export function RemoveDialog({ ids, onClose }: { ids: string[]; onClose: () => void }) {
   const toast = useApp((s) => s.toast);
-  // useShallow: the selector builds a new array, which would otherwise re-render forever.
+  // The selector returns a new array each time.
   const names = useApp(useShallow((s) => ids.map((id) => s.torrents.get(id)?.name).filter(Boolean) as string[]));
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -221,6 +221,85 @@ export function ShareLimitsDialog({ torrents, onClose }: { torrents: TorrentSumm
             <option value="remove_with_files">Remove torrent and its files</option>
           </select>
         </div>
+      </div>
+    </Dialog>
+  );
+}
+
+export function TagsDialog({ torrents, onClose }: { torrents: TorrentSummary[]; onClose: () => void }) {
+  const toast = useApp((s) => s.toast);
+  const known = useApp(useShallow((s) => [...new Set([...s.torrents.values()].flatMap((t) => t.tags))].sort()));
+  const [tags, setTags] = useState<string[]>(() => [...new Set(torrents.flatMap((t) => t.tags))]);
+  const [draft, setDraft] = useState("");
+  const add = (raw: string) => {
+    const t = raw.trim();
+    if (t && !tags.includes(t)) setTags([...tags, t]);
+    setDraft("");
+  };
+  const save = async () => {
+    const all = draft.trim() && !tags.includes(draft.trim()) ? [...tags, draft.trim()] : tags;
+    try {
+      await api.setTags(
+        torrents.map((t) => t.id),
+        all,
+      );
+      onClose();
+    } catch (e) {
+      toast("error", errorText(e));
+    }
+  };
+  const suggestions = known.filter((k) => !tags.includes(k));
+  return (
+    <Dialog
+      title={torrents.length === 1 ? `Tags for ${torrents[0].name}` : `Tags for ${torrents.length} torrents`}
+      onClose={onClose}
+      width="max-w-md"
+      footer={
+        <>
+          <button className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={save}>
+            Save
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div className="flex min-h-9 flex-wrap gap-1.5 rounded-md border border-border p-1.5">
+          {tags.map((t) => (
+            <span key={t} className="flex items-center gap-1 rounded bg-accent/15 px-2 py-0.5 text-xs">
+              {t}
+              <button className="text-muted hover:text-fg" onClick={() => setTags(tags.filter((x) => x !== t))} aria-label={`Remove ${t}`}>
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+          <input
+            className="min-w-24 flex-1 bg-transparent px-1 text-sm outline-none"
+            value={draft}
+            maxLength={64}
+            placeholder={tags.length ? "" : "Type a tag and press Enter"}
+            onChange={(e) => setDraft(e.target.value.replace(",", ""))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === ",") {
+                e.preventDefault();
+                add(draft);
+              } else if (e.key === "Backspace" && !draft && tags.length) {
+                setTags(tags.slice(0, -1));
+              }
+            }}
+          />
+        </div>
+        {suggestions.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {suggestions.map((s) => (
+              <button key={s} className="rounded border border-border px-2 py-0.5 text-xs text-muted hover:text-fg" onClick={() => add(s)}>
+                + {s}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </Dialog>
   );

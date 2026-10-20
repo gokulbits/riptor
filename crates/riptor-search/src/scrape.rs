@@ -1,19 +1,6 @@
-//! Seed and peer counts for results that arrive without them (the Internet
-//! Archive never sends any), from tracker scrapes: the HTTP `scrape`
-//! convention and UDP (BEP 15).
-//!
-//! Search results are hostile: they choose which trackers and `.torrent`
-//! URLs Riptor contacts. So:
-//! * only public addresses are contacted. Loopback, LAN, link-local and
-//!   similar addresses are refused after DNS resolution and on every
-//!   redirect, so a result cannot point Riptor at the user's router;
-//! * every response is size-capped and time-limited, and bencode is parsed
-//!   strictly by librqbit's parser;
-//! * the work per search is bounded: at most [`MAX_RESULTS`] results, a few
-//!   trackers each, and a small number in flight at once.
-//!
-//! Scraping tells those trackers which torrents this computer looked at, so
-//! it can be turned off in the Search engines dialog.
+//! Seed/peer counts from tracker scrapes (HTTP and BEP 15) for results that
+//! have none. Results pick the trackers we contact, so only public addresses
+//! are allowed (checked after DNS and on redirects) and the work is bounded.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -30,18 +17,13 @@ use url::{Host, Url};
 
 use crate::SearchResult;
 
-/// Results scraped per search (the rest keep "–").
 pub const MAX_RESULTS: usize = 60;
-/// Trackers asked per result; the highest counts win.
 const MAX_TRACKERS: usize = 3;
-/// Results being resolved and scraped at once.
 const CONCURRENCY: usize = 6;
 const TRACKER_TIMEOUT: Duration = Duration::from_secs(6);
 const UDP_ATTEMPT: Duration = Duration::from_secs(3);
 const MAX_SCRAPE_BYTES: usize = 64 * 1024;
-/// Same limit as torrents added through the engine (`riptor_core::input`).
 pub const MAX_TORRENT_BYTES: usize = 16 * 1024 * 1024;
-/// Counts above this are junk (matches [`crate::clean`]).
 const MAX_COUNT: u32 = 10_000_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,7 +38,6 @@ pub struct Counts {
     pub leechers: u32,
 }
 
-/// Counts found for the result with this `link`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ResultCounts {
     pub link: String,
@@ -70,8 +51,6 @@ pub enum Job {
     Torrent { link: String, url: Url },
 }
 
-/// What (if anything) to scrape for a cleaned result. Results that already
-/// have counts, and plugin links that only the plugin can fetch, are skipped.
 pub fn job_for(r: &SearchResult) -> Option<Job> {
     if r.seeders.is_some() || r.leechers.is_some() || r.via_plugin {
         return None;
@@ -105,7 +84,6 @@ fn push_tracker(list: &mut Vec<Url>, u: Url) {
     }
 }
 
-/// 40 hex digits or 32 base32 characters.
 pub fn parse_btih(s: &str) -> Option<[u8; 20]> {
     let mut out = [0u8; 20];
     match s.len() {
@@ -169,7 +147,6 @@ pub fn magnet_target(link: &str) -> Option<Target> {
     })
 }
 
-/// Info hash and trackers of a `.torrent` file.
 pub fn torrent_target(bytes: &[u8]) -> Option<Target> {
     if bytes.len() > MAX_TORRENT_BYTES {
         return None;
@@ -187,9 +164,7 @@ pub fn torrent_target(bytes: &[u8]) -> Option<Target> {
     })
 }
 
-/// The scrape URL for an HTTP announce URL: the last path segment must start
-/// with `announce`, which becomes `scrape` (the convention every HTTP tracker
-/// that supports scraping follows).
+/// `.../announce*` becomes `.../scrape*`.
 pub fn http_scrape_url(announce: &Url, info_hash: &[u8; 20]) -> Option<Url> {
     let mut u = announce.clone();
     let last = u.path_segments()?.next_back()?.to_string();
@@ -237,8 +212,7 @@ fn count(n: i64) -> u32 {
     n.clamp(0, i64::from(MAX_COUNT)) as u32
 }
 
-/// Parse an HTTP scrape reply. A valid reply that does not mention the hash
-/// means the tracker knows no peers for it: 0 and 0.
+/// A valid reply that doesn't mention the hash means 0 and 0.
 pub fn parse_http_reply(body: &[u8], info_hash: &[u8; 20]) -> anyhow::Result<Counts> {
     ensure!(body.len() <= MAX_SCRAPE_BYTES, "scrape reply too large");
     let reply: ScrapeReply = librqbit_bencode::from_bytes(body)
@@ -256,8 +230,6 @@ pub fn parse_http_reply(body: &[u8], info_hash: &[u8; 20]) -> anyhow::Result<Cou
         .unwrap_or_default())
 }
 
-/// Not loopback, private, link-local, CGNAT, multicast, documentation or
-/// otherwise special.
 pub fn is_public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -291,8 +263,7 @@ pub fn is_public(ip: IpAddr) -> bool {
     }
 }
 
-/// Network rules for one scrape run. `allow_local` exists for tests, which
-/// must talk to 127.0.0.1.
+/// `allow_local` is for tests.
 #[derive(Clone)]
 pub struct Net {
     pub http: reqwest::Client,
@@ -436,8 +407,7 @@ impl Net {
             .unwrap_or_else(|_| Err(anyhow::anyhow!("tracker timed out")))
     }
 
-    /// Ask a few of the target's trackers; the highest counts win. `None`
-    /// when no tracker answered.
+    /// The highest counts win.
     pub async fn scrape(&self, target: &Target) -> Option<Counts> {
         let asks = target
             .trackers
@@ -471,8 +441,6 @@ impl Net {
         })
     }
 
-    /// Scrape jobs as they arrive until the sender is dropped, reporting
-    /// counts in small batches. At most [`MAX_RESULTS`] jobs are taken.
     pub async fn run(self, rx: mpsc::UnboundedReceiver<Job>, emit: impl Fn(Vec<ResultCounts>)) {
         let jobs =
             futures::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|j| (j, rx)) })
@@ -506,7 +474,7 @@ pub fn parse_udp_scrape(resp: &[u8]) -> anyhow::Result<Counts> {
     }
 }
 
-/// Unpredictable enough to match replies to requests (not a secret).
+/// Not a secret.
 fn transaction_id() -> u32 {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
@@ -519,8 +487,6 @@ fn transaction_id() -> u32 {
     h.finish() as u32
 }
 
-/// Send `req` and wait for a reply carrying the same transaction id, with
-/// one retry. Stray datagrams are ignored.
 async fn udp_exchange(sock: &UdpSocket, req: &[u8], tx: u32) -> anyhow::Result<Vec<u8>> {
     let mut buf = [0u8; 2048];
     for _ in 0..2 {
@@ -630,12 +596,10 @@ mod tests {
                 leechers: 3
             }
         );
-        // A valid reply that doesn't list the torrent: nobody is sharing it.
         assert_eq!(
             parse_http_reply(b"d5:filesdee", &h).unwrap(),
             Counts::default()
         );
-        // Negative and absurd numbers are clamped, not trusted.
         let c = parse_http_reply(&reply_with(&h, -5, 99_999_999_999), &h).unwrap();
         assert_eq!((c.seeders, c.leechers), (0, MAX_COUNT));
         assert!(parse_http_reply(b"d14:failure reason6:nope!e", &h).is_err());
@@ -703,7 +667,6 @@ mod tests {
         assert_eq!(net.run_job(job).await, None);
     }
 
-    /// A one-shot HTTP server on 127.0.0.1 that answers every request with `body`.
     async fn http_server(body: Vec<u8>) -> SocketAddr {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = l.local_addr().unwrap();
@@ -725,7 +688,6 @@ mod tests {
         addr
     }
 
-    /// A BEP 15 tracker on 127.0.0.1 that reports 42 seeders and 9 leechers.
     async fn udp_tracker() -> SocketAddr {
         let s = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let addr = s.local_addr().unwrap();
@@ -764,7 +726,6 @@ mod tests {
                 Url::parse(&format!("udp://{udp}")).unwrap(),
             ],
         };
-        // Highest of each count across trackers.
         assert_eq!(
             net.scrape(&t).await,
             Some(Counts {
@@ -773,7 +734,6 @@ mod tests {
             })
         );
 
-        // End to end through a .torrent download and the job runner.
         let torrent = {
             let mut b = format!("d8:announce{}:", format!("udp://{udp}").len()).into_bytes();
             b.extend_from_slice(format!("udp://{udp}").as_bytes());
