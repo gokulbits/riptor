@@ -1,8 +1,8 @@
-import { AlertTriangle, ExternalLink, FolderOpen } from "lucide-react";
+import { AlertTriangle, ExternalLink, FileSymlink, FolderOpen } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, errorText } from "../../lib/ipc";
 import { formatBytes, formatDate, formatDuration, formatPercent, formatRatio } from "../../lib/format";
-import type { FileEntry, Limit, TorrentSummary } from "../../lib/types";
+import type { FileEntry, FilePriority, Limit, TorrentSummary } from "../../lib/types";
 import { ProgressBar, StateLabel, Tabs } from "../../components/ui";
 import { loadPref, savePref, useApp } from "../../stores/app";
 import { SpeedGraph } from "./SpeedGraph";
@@ -100,6 +100,11 @@ function Files({ t }: { t: TorrentSummary }) {
     setSelected(s);
     setDirty(true);
   };
+  const setPriority = (f: FileEntry, p: FilePriority) =>
+    api
+      .setFilePriority(t.id, [f.index], p)
+      .then(load)
+      .catch((e) => toast("error", errorText(e)));
   const apply = async () => {
     try {
       await api.setFiles(t.id, [...selected]);
@@ -130,11 +135,13 @@ function Files({ t }: { t: TorrentSummary }) {
               <th className="px-2 py-1.5 font-medium">Name</th>
               <th className="w-24 px-2 py-1.5 text-right font-medium">Size</th>
               <th className="w-40 px-2 py-1.5 font-medium">Progress</th>
+              <th className="w-28 px-2 py-1.5 font-medium">Priority</th>
+              <th className="w-16 px-2 py-1.5" />
             </tr>
           </thead>
           <tbody>
             {files.map((f) => (
-              <tr key={f.index} className="hover:bg-raised">
+              <tr key={f.index} className="hover:bg-raised" onDoubleClick={() => api.revealFile(t.id, f.index).catch((e) => toast("error", errorText(e)))}>
                 <td className="px-3">
                   <input type="checkbox" checked={selected.has(f.index)} onChange={() => toggle(f.index)} aria-label={`Download ${f.path}`} />
                 </td>
@@ -145,6 +152,32 @@ function Files({ t }: { t: TorrentSummary }) {
                 <td className="px-2 text-right tabular-nums">{formatBytes(f.size)}</td>
                 <td className="px-2">
                   <ProgressBar value={f.size ? f.done / f.size : 1} />
+                </td>
+                <td className="px-2">
+                  <select
+                    className="input py-0.5 text-xs"
+                    value={f.priority}
+                    disabled={!f.selected}
+                    onChange={(e) => setPriority(f, e.target.value as FilePriority)}
+                    aria-label={`Priority of ${f.path}`}
+                  >
+                    <option value="high">High</option>
+                    <option value="normal">Normal</option>
+                    <option value="low">Low</option>
+                  </select>
+                </td>
+                <td className="whitespace-nowrap px-2 text-right">
+                  <button
+                    className="btn-ghost p-1"
+                    title={f.executable ? "Programs are never opened from Riptor" : f.done < f.size ? "Not fully downloaded yet" : "Open"}
+                    disabled={f.executable || f.done < f.size}
+                    onClick={() => api.openFile(t.id, f.index).catch((e) => toast("error", errorText(e)))}
+                  >
+                    <FileSymlink size={13} />
+                  </button>
+                  <button className="btn-ghost p-1" title="Show in folder" onClick={() => api.revealFile(t.id, f.index).catch((e) => toast("error", errorText(e)))}>
+                    <FolderOpen size={13} />
+                  </button>
                 </td>
               </tr>
             ))}

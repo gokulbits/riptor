@@ -44,6 +44,7 @@ export function AddDialog({
       if (!alive) return;
       setDefaultPath(s.download_dir);
       setSubfolder(s.create_subfolder);
+      setStartPaused(s.add_stopped);
     });
     const cached = takePreview(source);
     (cached ? Promise.resolve(cached) : api.preview(source))

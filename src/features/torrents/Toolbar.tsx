@@ -9,6 +9,7 @@ import {
   Link2,
   MoreHorizontal,
   PackagePlus,
+  Rss,
   Pause,
   Play,
   ScrollText,
@@ -37,13 +38,15 @@ export function Toolbar(props: {
   onCreate: () => void;
   onLogs: () => void;
   onAbout: () => void;
+  onResumeAll: () => void;
+  onStopAll: () => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const { selection, search, setSearch, view, setView } = useApp(
     useShallow((s) => ({ selection: s.selection, search: s.search, setSearch: s.setSearch, view: s.view, setView: s.setView })),
   );
   const none = selection.size === 0;
-  const tab = (id: "transfers" | "search" | "vpn", label: string, icon: React.ReactNode) => (
+  const tab = (id: "transfers" | "search" | "rss" | "vpn", label: string, icon: React.ReactNode) => (
     <button
       role="tab"
       aria-selected={view === id}
@@ -62,6 +65,7 @@ export function Toolbar(props: {
       <div role="tablist" className="mr-2 flex gap-0.5 rounded-lg bg-raised p-0.5">
         {tab("transfers", "Transfers", <ArrowDownUp size={15} />)}
         {tab("search", "Search", <Search size={15} />)}
+        {tab("rss", "RSS", <Rss size={15} />)}
         {tab("vpn", "VPN", <ShieldCheck size={15} />)}
       </div>
       {view === "transfers" && (
@@ -103,7 +107,7 @@ export function Toolbar(props: {
         <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
         <input
           className="input pl-8"
-          placeholder="Filter torrents"
+          placeholder="Filter torrents (Ctrl+F)"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           aria-label="Filter torrents"
@@ -134,6 +138,9 @@ export function Toolbar(props: {
           y={menu.y}
           onClose={() => setMenu(null)}
           items={[
+            { label: "Resume all", icon: <Play size={14} />, onClick: props.onResumeAll },
+            { label: "Stop all", icon: <Pause size={14} />, onClick: props.onStopAll },
+            "sep",
             { label: "Logs", icon: <ScrollText size={14} />, onClick: props.onLogs },
             { label: "About Riptor", icon: <Info size={14} />, onClick: props.onAbout },
           ]}

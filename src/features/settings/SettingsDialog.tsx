@@ -49,6 +49,44 @@ function FolderInput({ value, onChange, placeholder }: { value: string; onChange
 
 const MiB = 1024 * 1024;
 
+function AutostartToggle() {
+  const toast = useApp((s) => s.toast);
+  const [on, setOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    api.autostartGet().then(setOn, () => setOn(false));
+  }, []);
+  return (
+    <Toggle
+      checked={!!on}
+      disabled={on === null}
+      onChange={(v) =>
+        api.autostartSet(v).then(
+          () => setOn(v),
+          (e) => toast("error", errorText(e)),
+        )
+      }
+      label="Start Riptor When I Sign In"
+      hint="Starts in the tray. Takes effect right away."
+    />
+  );
+}
+
+/** One URL per line; saved when the field loses focus so typing a new line works. */
+function LinesInput({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
+  const [text, setText] = useState(value.join("\n"));
+  useEffect(() => setText(value.join("\n")), [value]);
+  return (
+    <textarea
+      className="input h-24 font-mono text-xs"
+      value={text}
+      placeholder={placeholder}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => onChange(text.split(/\s+/).filter(Boolean))}
+      spellCheck={false}
+    />
+  );
+}
+
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <fieldset className="space-y-3">
@@ -125,10 +163,26 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <Field label="Default Download Folder">
                 <FolderInput value={s.download_dir} onChange={(v) => set({ download_dir: v })} />
               </Field>
+              <Field
+                label="Keep Incomplete Downloads In"
+                hint="Torrents download here and move to their save folder once complete. Leave empty to download in place."
+              >
+                <FolderInput
+                  value={s.incomplete_dir ?? ""}
+                  placeholder="Off"
+                  onChange={(v) => set({ incomplete_dir: v.trim() || null })}
+                />
+              </Field>
               <Toggle
                 checked={s.create_subfolder}
                 onChange={(v) => set({ create_subfolder: v })}
                 label="Put Multi-File Torrents In Their Own Folder"
+              />
+              <Toggle
+                checked={s.add_stopped}
+                onChange={(v) => set({ add_stopped: v })}
+                label="Add New Torrents Stopped"
+                hint="The add dialog starts with this ticked; the watched folder and RSS rules follow it too."
               />
               <Toggle
                 checked={s.move_on_category_change}
@@ -166,6 +220,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 label="Keep Running In The Tray When The Window Is Closed"
                 hint="Downloads and seeding carry on. Use Quit in the tray menu to exit."
               />
+              <AutostartToggle />
             </Group>
           )}
 
@@ -218,6 +273,18 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     value={s.proxy_url ?? ""}
                     onChange={(e) => set({ proxy_url: e.target.value.trim() || null })}
                     placeholder="socks5://127.0.0.1:1080"
+                  />
+                </Field>
+              </Group>
+              <Group title="Trackers">
+                <Field
+                  label="Add These Trackers To New Torrents"
+                  hint="One per line (http, https or udp). Never added to private torrents."
+                >
+                  <LinesInput
+                    value={s.extra_trackers}
+                    onChange={(v) => set({ extra_trackers: v })}
+                    placeholder="udp://tracker.example.org:1337/announce"
                   />
                 </Field>
               </Group>

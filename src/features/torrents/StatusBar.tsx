@@ -1,9 +1,87 @@
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, Database, Gauge, Loader2, Network, ShieldAlert, ShieldCheck, ShieldOff } from "lucide-react";
-import { useEffect } from "react";
+import { ArrowDown, ArrowUp, Check, Database, Gauge, HardDrive, Loader2, Network, ShieldAlert, ShieldCheck, ShieldOff } from "lucide-react";
+import { useEffect, useState } from "react";
 import { PublicIpView } from "../../components/PublicIp";
+import { api, errorText } from "../../lib/ipc";
 import { formatBytes, formatRate } from "../../lib/format";
+import type { Settings } from "../../lib/types";
 import { useApp } from "../../stores/app";
+import { ContextMenu } from "./ContextMenu";
+
+const PRESETS_KIB = [null, 128, 512, 1024, 2048, 5120, 10240, 25600];
+
+/** Free space where new downloads go, checked every 30 s. */
+function FreeSpace() {
+  const [info, setInfo] = useState<{ dir: string; free: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const s = await api.settings();
+        const dir = s.incomplete_dir ?? s.download_dir;
+        const free = await api.freeSpace(dir);
+        if (alive) setInfo({ dir, free });
+      } catch {
+        if (alive) setInfo(null);
+      }
+    };
+    load();
+    const iv = setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(iv);
+    };
+  }, []);
+  if (!info) return null;
+  return (
+    <span className={clsx("flex items-center gap-1", info.free < 5 * 1024 ** 3 && "text-warn")} title={`Free space in ${info.dir}`}>
+      <HardDrive size={12} /> {formatBytes(info.free)} free
+    </span>
+  );
+}
+
+/** Click a rate to pick a global limit. */
+function RateButton({ dir }: { dir: "down" | "up" }) {
+  const g = useApp((s) => s.global);
+  const toast = useApp((s) => s.toast);
+  const [menu, setMenu] = useState<{ x: number; y: number; s: Settings } | null>(null);
+  const alt = !!g?.alt_speed;
+  const key: keyof Settings = dir === "down" ? (alt ? "alt_dl_limit_kib" : "dl_limit_kib") : alt ? "alt_ul_limit_kib" : "ul_limit_kib";
+  const open = async (e: React.MouseEvent) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    try {
+      setMenu({ x: r.left, y: r.top - 8 - 32 * (PRESETS_KIB.length + 1), s: await api.settings() });
+    } catch (err) {
+      toast("error", errorText(err));
+    }
+  };
+  const apply = (s: Settings, kib: number | null) =>
+    api.updateSettings({ ...s, [key]: kib }).catch((err) => toast("error", errorText(err)));
+  const Icon = dir === "down" ? ArrowDown : ArrowUp;
+  return (
+    <>
+      <button
+        onClick={open}
+        className="flex w-28 items-center justify-end gap-1 rounded-sm px-1 tabular-nums text-fg hover:bg-raised"
+        title={`${dir === "down" ? "Download" : "Upload"} limit${alt ? " (alternative)" : ""}: click to change`}
+      >
+        <Icon size={12} className={dir === "down" ? "text-accent" : "text-ok"} /> {formatRate((dir === "down" ? g?.dl_rate : g?.ul_rate) ?? 0)}
+      </button>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={Math.max(8, menu.y)}
+          onClose={() => setMenu(null)}
+          items={PRESETS_KIB.map((kib) => ({
+            label: kib == null ? "Unlimited" : formatRate(kib * 1024),
+            icon: menu.s[key] === kib ? <Check size={14} /> : undefined,
+            onClick: () => apply(menu.s, kib),
+          }))}
+        />
+      )}
+    </>
+  );
+}
 
 function VpnIndicator() {
   const network = useApp((s) => s.global?.network);
@@ -59,6 +137,7 @@ export function StatusBar({ onToggleAlt }: { onToggleAlt: () => void }) {
       )}
       <VpnIndicator />
       <span className="flex-1" />
+      <FreeSpace />
       <button
         onClick={onToggleAlt}
         className={clsx("flex items-center gap-1 rounded-sm px-1.5 py-0.5 hover:bg-raised", g?.alt_speed && "text-warn")}
@@ -66,12 +145,8 @@ export function StatusBar({ onToggleAlt }: { onToggleAlt: () => void }) {
       >
         <Gauge size={12} /> {g?.alt_speed ? "Alt speed on" : "Alt speed"}
       </button>
-      <span className="flex w-28 items-center justify-end gap-1 tabular-nums text-fg">
-        <ArrowDown size={12} className="text-accent" /> {formatRate(g?.dl_rate ?? 0)}
-      </span>
-      <span className="flex w-28 items-center justify-end gap-1 tabular-nums text-fg">
-        <ArrowUp size={12} className="text-ok" /> {formatRate(g?.ul_rate ?? 0)}
-      </span>
+      <RateButton dir="down" />
+      <RateButton dir="up" />
     </footer>
   );
 }

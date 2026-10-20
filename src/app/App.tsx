@@ -1,12 +1,15 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ask, open } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import clsx from "clsx";
 import {
   ArrowDownToLine,
   ArrowUpToLine,
+  Check,
   ChevronDown,
   ChevronUp,
   Copy,
+  Type,
+  FileDown,
   Link2,
   Folder,
   FolderInput,
@@ -23,6 +26,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorText, events } from "../lib/ipc";
+import { parseLinks } from "../lib/links";
 import { applyTheme, resolveTheme } from "../lib/themes";
 import type { Source } from "../lib/types";
 import { loadPref, savePref, useApp, visibleTorrents } from "../stores/app";
@@ -41,6 +45,7 @@ import { LogsDialog } from "../features/about/LogsDialog";
 import { CreateTorrentDialog } from "../features/create/CreateTorrentDialog";
 import { SearchView, useSearchEvents } from "../features/search/SearchView";
 import { VpnView } from "../features/vpn/VpnView";
+import { RssView } from "../features/rss/RssView";
 
 type Modal =
   | { kind: "magnet" }
@@ -133,7 +138,7 @@ export default function App() {
         if (ev.payload.type !== "drop") return;
         const files = ev.payload.paths.filter((p) => p.toLowerCase().endsWith(".torrent"));
         if (files.length) queueAdds(files.map((value) => ({ kind: "file", value }) as Source));
-        else if (ev.payload.paths.length) toast("warning", "Only .torrent files can be dropped here");
+        else if (ev.payload.paths.length) toast("warning", "Only .torrent files and magnet links can be dropped here");
       }),
     ];
     // The ready event can fire before we listen.
@@ -191,10 +196,52 @@ export default function App() {
 
   useEffect(() => {
     const inField = (t: EventTarget | null) => t instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName);
+    const onButton = (t: EventTarget | null) => t instanceof HTMLElement && /^(BUTTON|A)$/.test(t.tagName);
+    const focusLater = (selector: string) =>
+      setTimeout(() => document.querySelector<HTMLInputElement>(selector)?.focus(), 0);
+    // Arrows, Space and Enter act on the torrent list.
+    const listKey = (e: KeyboardEvent): boolean => {
+      const st = useApp.getState();
+      if (st.view !== "transfers" || e.ctrlKey || e.metaKey || e.altKey) return false;
+      const ids = visibleTorrents(st).map((t) => t.id);
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+        if (!ids.length) return true;
+        const at = st.focused ? ids.indexOf(st.focused) : -1;
+        const next =
+          e.key === "Home" ? 0 : e.key === "End" ? ids.length - 1 : Math.min(ids.length - 1, Math.max(0, at + (e.key === "ArrowDown" ? 1 : -1)));
+        const anchor = st.anchor ? ids.indexOf(st.anchor) : -1;
+        if (e.shiftKey && anchor >= 0) {
+          const [lo, hi] = anchor < next ? [anchor, next] : [next, anchor];
+          actions.selectAll(ids.slice(lo, hi + 1));
+          actions.select(ids[next], "range");
+        } else {
+          actions.select(ids[next], "single");
+        }
+        return true;
+      }
+      if (onButton(e.target)) return false;
+      if (e.key === " " && st.selection.size) {
+        const sel = [...st.selection];
+        const allStopped = sel.every((id) => st.torrents.get(id)?.state === "stopped");
+        run(allStopped ? api.resume(sel) : api.stop(sel));
+        return true;
+      }
+      if (e.key === "Enter" && st.focused) {
+        run(api.reveal(st.focused));
+        return true;
+      }
+      return false;
+    };
     const onKey = (e: KeyboardEvent) => {
       if (inField(e.target) || modal) return;
       const ctrl = e.ctrlKey || e.metaKey;
-      if (e.key === "Delete" && useApp.getState().selection.size) {
+      if (listKey(e)) {
+        e.preventDefault();
+      } else if (ctrl && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        actions.setView("search");
+        focusLater('input[placeholder="Search torrents…"]');
+      } else if (e.key === "Delete" && useApp.getState().selection.size) {
         setModal({ kind: "remove", ids: [...useApp.getState().selection] });
       } else if (ctrl && e.key.toLowerCase() === "a") {
         e.preventDefault();
@@ -204,7 +251,8 @@ export default function App() {
         addFile();
       } else if (ctrl && e.key.toLowerCase() === "f") {
         e.preventDefault();
-        actions.setView("search");
+        actions.setView("transfers");
+        focusLater('input[aria-label="Filter torrents"]');
       } else if (ctrl && e.key.toLowerCase() === "u") {
         e.preventDefault();
         setModal({ kind: "magnet" });
@@ -212,15 +260,30 @@ export default function App() {
     };
     const onPaste = (e: ClipboardEvent) => {
       if (inField(e.target) || modal) return;
-      const text = e.clipboardData?.getData("text") ?? "";
-      const magnets = text.split(/\s+/).filter((t) => t.startsWith("magnet:?"));
-      if (magnets.length) actions.queueAdds(magnets.map((value) => ({ kind: "magnet", value }) as Source));
+      const links = parseLinks(e.clipboardData?.getData("text") ?? "");
+      if (links.length) actions.queueAdds(links);
+    };
+    // Links dragged in from a browser arrive as text, not files.
+    const textDrag = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].some((t) => t === "text/uri-list" || t === "text/plain");
+    const onDragOver = (e: DragEvent) => {
+      if (textDrag(e)) e.preventDefault();
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!textDrag(e) || inField(e.target) || modal) return;
+      e.preventDefault();
+      const links = parseLinks(e.dataTransfer?.getData("text/uri-list") || e.dataTransfer?.getData("text/plain") || "");
+      if (links.length) actions.queueAdds(links);
+      else actions.toast("warning", "Only .torrent files and magnet links can be dropped here");
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("paste", onPaste);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("paste", onPaste);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("drop", onDrop);
     };
   });
 
@@ -258,6 +321,23 @@ export default function App() {
     }
   };
 
+  const exportSelected = async (ids: string[]) => {
+    const fileName = (id: string) => `${(s.torrents.get(id)?.name ?? id).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")}.torrent`;
+    if (ids.length === 1) {
+      const path = await save({ defaultPath: fileName(ids[0]), filters: [{ name: "Torrent file", extensions: ["torrent"] }] });
+      if (path) run(api.exportTorrent(ids[0], path).then(() => actions.toast("success", "Torrent file saved")));
+      return;
+    }
+    const dir = await open({ directory: true, title: `Save ${ids.length} torrent files to` });
+    if (typeof dir !== "string") return;
+    const sep = dir.includes("\\") ? "\\" : "/";
+    run(
+      Promise.all(ids.map((id) => api.exportTorrent(id, `${dir}${sep}${fileName(id)}`))).then(() =>
+        actions.toast("success", `${ids.length} torrent files saved`),
+      ),
+    );
+  };
+
   const recheckSelected = async (ids: string[]) => {
     const ok = await ask(
       ids.length === 1
@@ -269,6 +349,7 @@ export default function App() {
   };
 
   const menuItems = (): (MenuItem | "sep")[] => {
+    const allHave = (c: string | null) => selected.every((id) => (s.torrents.get(id)?.category ?? null) === c);
     return [
       { label: "Resume", icon: <Play size={14} />, onClick: () => run(api.resume(selected)) },
       { label: "Stop", icon: <Pause size={14} />, onClick: () => run(api.stop(selected)) },
@@ -278,8 +359,12 @@ export default function App() {
         label: "Category",
         icon: <Folder size={14} />,
         children: [
-          { label: "None", onClick: () => run(api.setCategory(selected, null)) },
-          ...Object.keys(categories).map((c) => ({ label: c, onClick: () => run(api.setCategory(selected, c)) })),
+          { label: "None", icon: allHave(null) ? <Check size={14} /> : undefined, onClick: () => run(api.setCategory(selected, null)) },
+          ...Object.keys(categories).map((c) => ({
+            label: c,
+            icon: allHave(c) ? <Check size={14} /> : undefined,
+            onClick: () => run(api.setCategory(selected, c)),
+          })),
           { label: "New category…", onClick: () => setModal({ kind: "category" }) },
         ],
       },
@@ -312,6 +397,13 @@ export default function App() {
               navigator.clipboard.writeText(links.join("\n")),
             ),
           ),
+      },
+      { label: "Export .torrent…", icon: <FileDown size={14} />, onClick: () => exportSelected(selected) },
+      {
+        label: "Copy name",
+        icon: <Type size={14} />,
+        onClick: () =>
+          navigator.clipboard.writeText(selected.map((id) => s.torrents.get(id)?.name ?? id).join("\n")).catch(() => {}),
       },
       {
         label: "Copy info hash",
@@ -352,11 +444,17 @@ export default function App() {
         onStats={() => setModal({ kind: "stats" })}
         onCreate={() => setModal({ kind: "create" })}
         onLogs={() => setModal({ kind: "logs" })}
+        onResumeAll={() => run(api.resume([...s.torrents.keys()]))}
+        onStopAll={() => run(api.stop([...s.torrents.keys()]))}
         onAbout={() => setModal({ kind: "about" })}
       />
       {view === "search" ? (
         <div className="min-h-0 flex-1">
           <SearchView />
+        </div>
+      ) : view === "rss" ? (
+        <div className="min-h-0 flex-1">
+          <RssView categories={Object.keys(categories)} />
         </div>
       ) : view === "vpn" ? (
         <div className="min-h-0 flex-1">

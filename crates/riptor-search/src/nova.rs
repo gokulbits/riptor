@@ -150,7 +150,8 @@ pub fn install_shim(dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn command(py: &Python, dir: &Path, args: &[&str]) -> Command {
+/// `proxy` carries the plugin's web requests (the VPN tunnel).
+fn command(py: &Python, dir: &Path, args: &[&str], proxy: Option<&str>) -> Command {
     let script = dir.join("nova2.py");
     #[cfg(target_os = "linux")]
     if let Some(bwrap) = find_in_path("bwrap") {
@@ -181,16 +182,16 @@ fn command(py: &Python, dir: &Path, args: &[&str]) -> Command {
             .args(["-I", "-X", "utf8", "-B"])
             .arg(&script)
             .args(args);
-        finish(&mut c, dir);
+        finish(&mut c, dir, proxy);
         return c;
     }
     let mut c = Command::new(&py.exe);
     c.args(["-I", "-X", "utf8", "-B"]).arg(&script).args(args);
-    finish(&mut c, dir);
+    finish(&mut c, dir, proxy);
     c
 }
 
-fn finish(c: &mut Command, dir: &Path) {
+fn finish(c: &mut Command, dir: &Path, proxy: Option<&str>) {
     c.current_dir(dir).env_clear();
     for var in [
         "SYSTEMROOT",
@@ -211,6 +212,11 @@ fn finish(c: &mut Command, dir: &Path) {
     if !cfg!(windows) {
         c.env("HOME", "/tmp");
     }
+    if let Some(p) = proxy {
+        for var in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            c.env(var, p);
+        }
+    }
     quiet(c);
     c.stdout(Stdio::piped()).stderr(Stdio::piped());
 }
@@ -229,9 +235,12 @@ async fn tail(mut r: impl tokio::io::AsyncRead + Unpin) -> String {
 }
 
 pub async fn capabilities(py: &Python, dir: &Path) -> anyhow::Result<Vec<PluginCaps>> {
-    let out = tokio::time::timeout(CAPS_TIMEOUT, command(py, dir, &["capabilities"]).output())
-        .await
-        .context("reading plugins timed out")??;
+    let out = tokio::time::timeout(
+        CAPS_TIMEOUT,
+        command(py, dir, &["capabilities"], None).output(),
+    )
+    .await
+    .context("reading plugins timed out")??;
     ensure!(out.stdout.len() <= MAX_OUTPUT, "plugin output too large");
     Ok(String::from_utf8_lossy(&out.stdout)
         .lines()
@@ -264,19 +273,21 @@ struct Line {
     pub_date: Option<u64>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn search(
     py: &Python,
     dir: &Path,
     engine: &str,
     category: &str,
     query: &str,
+    proxy: Option<&str>,
     cancel: CancellationToken,
     mut emit: impl FnMut(Vec<SearchResult>),
 ) -> anyhow::Result<usize> {
     validate_id(engine)?;
     let mut args = vec!["search", engine, category];
     args.extend(query.split_whitespace());
-    let mut child = command(py, dir, &args)
+    let mut child = command(py, dir, &args, proxy)
         .spawn()
         .context("could not start Python")?;
     let stdout = child.stdout.take().context("no stdout")?;
@@ -329,7 +340,13 @@ pub async fn search(
 }
 
 /// For sites that need cookies. Returns a temp file path.
-pub async fn download(py: &Python, dir: &Path, engine: &str, url: &str) -> anyhow::Result<PathBuf> {
+pub async fn download(
+    py: &Python,
+    dir: &Path,
+    engine: &str,
+    url: &str,
+    proxy: Option<&str>,
+) -> anyhow::Result<PathBuf> {
     validate_id(engine)?;
     let u = url::Url::parse(url)?;
     ensure!(
@@ -338,7 +355,7 @@ pub async fn download(py: &Python, dir: &Path, engine: &str, url: &str) -> anyho
     );
     let out = tokio::time::timeout(
         Duration::from_secs(60),
-        command(py, dir, &["download", engine, url]).output(),
+        command(py, dir, &["download", engine, url], proxy).output(),
     )
     .await
     .context("download timed out")??;
@@ -487,6 +504,7 @@ class demo(object):
             "demo",
             "all",
             "big buck",
+            None,
             CancellationToken::new(),
             |b| got.extend(b),
         )
@@ -506,10 +524,68 @@ class demo(object):
             "../x",
             "all",
             "q",
+            None,
             CancellationToken::new(),
             |_| {}
         )
         .await
         .is_err());
+
+        // Web requests go through the proxy, which also does the DNS.
+        std::fs::write(d.path().join("engines/viaproxy.py"), VIA_PROXY).unwrap();
+        let l = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut buf = vec![0; 4096];
+            let _ = s.read(&mut buf).await;
+            let _ = s
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nvia the vpn!")
+                .await;
+        });
+        let tunnel = crate::scrape::Tunnel {
+            local: std::net::Ipv4Addr::LOCALHOST.into(),
+            lookup: std::sync::Arc::new(|_, port| {
+                Box::pin(async move {
+                    Ok(vec![std::net::SocketAddr::from((
+                        std::net::Ipv4Addr::LOCALHOST,
+                        port,
+                    ))])
+                })
+            }),
+        };
+        let proxy = crate::proxy::Proxy::start(tunnel, true).await.unwrap();
+        let mut got = Vec::new();
+        search(
+            &py,
+            d.path(),
+            "viaproxy",
+            "all",
+            &port.to_string(),
+            Some(&proxy.url()),
+            CancellationToken::new(),
+            |b| got.extend(b),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got[0].name, "via the vpn!");
     }
+
+    const VIA_PROXY: &str = r#"
+from novaprinter import prettyPrinter
+from helpers import retrieve_url
+
+class viaproxy(object):
+    url = "https://demo.example"
+    name = "Via proxy"
+    supported_categories = {"all": "0"}
+
+    def search(self, what, cat="all"):
+        body = retrieve_url("http://only-the-proxy-knows.test:%s/q" % what)
+        prettyPrinter({"link": "magnet:?xt=urn:btih:%040d" % 1, "name": body or "no reply", "size": "-1",
+                       "seeds": 0, "leech": 0, "engine_url": self.url})
+"#;
 }

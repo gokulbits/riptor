@@ -45,6 +45,31 @@ pub struct Record {
     pub dl_limit_kib: Option<u32>,
     #[serde(default)]
     pub ul_limit_kib: Option<u32>,
+    /// Where the files go once complete (downloads start in the incomplete folder).
+    #[serde(default)]
+    pub move_on_complete: Option<PathBuf>,
+    /// Files not listed are normal priority.
+    #[serde(default)]
+    pub file_priority: BTreeMap<usize, FilePriority>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilePriority {
+    Low,
+    #[default]
+    Normal,
+    High,
+}
+
+impl FilePriority {
+    pub fn level(self) -> u8 {
+        match self {
+            Self::Low => 0,
+            Self::Normal => 1,
+            Self::High => 2,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -89,6 +114,8 @@ pub struct TorrentSummary {
     pub category: Option<String>,
     pub tags: Vec<String>,
     pub save_path: String,
+    /// Host of the first tracker, alphabetically.
+    pub tracker: Option<String>,
     pub added_on: u64,
     pub completed_on: Option<u64>,
     pub seeding_time: u64,
@@ -123,6 +150,8 @@ pub struct FileEntry {
     pub done: u64,
     pub selected: bool,
     pub executable: bool,
+    #[serde(default)]
+    pub priority: FilePriority,
 }
 
 #[derive(Clone, Debug, Serialize)]

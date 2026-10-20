@@ -244,6 +244,48 @@ pub async fn reveal_torrent(app: AppHandle, state: State<'_, AppState>, id: Stri
     }
 }
 
+#[tauri::command]
+pub async fn reveal_torrent_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    index: usize,
+) -> Res<()> {
+    let (path, _) = engine(&state).await?.file_path(&id, index).map_err(err)?;
+    if !path.is_file() {
+        return Err("this file hasn't been created yet".into());
+    }
+    app.opener()
+        .reveal_item_in_dir(&path)
+        .map_err(|e| e.to_string())
+}
+
+/// Never anything that runs code; those are only shown in their folder.
+#[tauri::command]
+pub async fn open_torrent_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    index: usize,
+) -> Res<()> {
+    let (path, complete) = engine(&state).await?.file_path(&id, index).map_err(err)?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if !riptor_core::input::safe_to_open(&name) {
+        return Err(
+            "Riptor doesn't open programs or files that can run code; use Show in folder".into(),
+        );
+    }
+    if !complete || !path.is_file() {
+        return Err("this file isn't fully downloaded yet".into());
+    }
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// http(s) only.
 #[tauri::command]
 pub fn open_web_url(app: AppHandle, url: String) -> Res<()> {
@@ -396,29 +438,34 @@ pub async fn search_start(
         let _ = app.emit("riptor://search", ev);
     });
     let s = search(&state)?;
-    // Lookups follow the torrents' network.
-    if let Some(e) = state.engine.get() {
-        use riptor_core::NetworkMode;
-        use riptor_search::LookupRoute;
-        s.route_lookups(match e.network() {
-            NetworkMode::Normal => LookupRoute::Direct,
-            NetworkMode::Blocked => LookupRoute::Held,
-            // Never the system resolver while on the VPN.
-            NetworkMode::Vpn(b) => match riptor_core::dns::TunnelResolver::new(
-                b.local_ip.into(),
-                &riptor_core::dns::SERVERS,
-            ) {
-                Ok(r) => LookupRoute::Tunnel(riptor_search::scrape::Tunnel {
-                    local: b.local_ip.into(),
-                    lookup: r.hook(),
-                }),
-                Err(_) => LookupRoute::Held,
-            },
-        });
-    }
+    route_search(&state, &s);
     s.start(&query, &category, providers, sink)
         .await
         .map_err(err)
+}
+
+/// Search traffic follows the torrents' network.
+fn route_search(state: &State<'_, AppState>, s: &riptor_search::SearchManager) {
+    use riptor_core::NetworkMode;
+    use riptor_search::Route;
+    let Some(e) = state.engine.get() else {
+        return;
+    };
+    s.set_route(match e.network() {
+        NetworkMode::Normal => Route::Direct,
+        NetworkMode::Blocked => Route::Held,
+        // Never the system resolver while on the VPN.
+        NetworkMode::Vpn(b) => match riptor_core::dns::TunnelResolver::new(
+            b.local_ip.into(),
+            &riptor_core::dns::SERVERS,
+        ) {
+            Ok(r) => Route::Tunnel(riptor_search::scrape::Tunnel {
+                local: b.local_ip.into(),
+                lookup: r.hook(),
+            }),
+            Err(_) => Route::Held,
+        },
+    });
 }
 
 #[tauri::command]
@@ -506,10 +553,9 @@ pub async fn search_plugin_download(
     provider: String,
     url: String,
 ) -> Res<String> {
-    let p = search(&state)?
-        .plugin_download(&provider, &url)
-        .await
-        .map_err(err)?;
+    let s = search(&state)?;
+    route_search(&state, &s);
+    let p = s.plugin_download(&provider, &url).await.map_err(err)?;
     Ok(p.to_string_lossy().into_owned())
 }
 
@@ -652,4 +698,125 @@ pub fn vpn_set_prefs(state: State<'_, AppState>, prefs: crate::vpn::VpnPrefs) ->
 #[tauri::command]
 pub fn vpn_openvpn_installed() -> bool {
     crate::vpn::openvpn_installed()
+}
+
+#[tauri::command]
+pub async fn set_file_priority(
+    state: State<'_, AppState>,
+    id: String,
+    files: Vec<usize>,
+    priority: riptor_core::FilePriority,
+) -> Res<()> {
+    engine(&state)
+        .await?
+        .set_file_priority(&id, &files, priority)
+        .map_err(err)
+}
+
+/// `path` comes from the save dialog.
+#[tauri::command]
+pub async fn export_torrent(state: State<'_, AppState>, id: String, path: PathBuf) -> Res<()> {
+    engine(&state)
+        .await?
+        .export_torrent(&id, &path)
+        .map_err(err)
+}
+
+// ---------------------------------------------------------------- RSS
+
+fn rss(state: &State<'_, AppState>) -> Res<Arc<riptor_rss::Rss>> {
+    state
+        .rss
+        .get()
+        .cloned()
+        .ok_or_else(|| "RSS is still starting".to_string())
+}
+
+#[tauri::command]
+pub fn rss_view(state: State<'_, AppState>) -> Res<riptor_rss::View> {
+    Ok(rss(&state)?.view())
+}
+
+#[tauri::command]
+pub fn rss_articles(state: State<'_, AppState>, feed: u32) -> Res<Vec<riptor_rss::Article>> {
+    rss(&state)?.articles(feed).map_err(err)
+}
+
+#[tauri::command]
+pub async fn rss_add_feed(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+    name: Option<String>,
+) -> Res<u32> {
+    let r = rss(&state)?;
+    let id = r.add_feed(&url, name.as_deref()).map_err(err)?;
+    let e = engine(&state).await?;
+    crate::rss::refresh(&app, &e, &r, true, Some(vec![id])).await;
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn rss_remove_feed(state: State<'_, AppState>, feed: u32) -> Res<()> {
+    rss(&state)?.remove_feed(feed).map_err(err)
+}
+
+#[tauri::command]
+pub fn rss_rename_feed(state: State<'_, AppState>, feed: u32, name: String) -> Res<()> {
+    rss(&state)?.rename_feed(feed, &name).map_err(err)
+}
+
+#[tauri::command]
+pub fn rss_mark_read(state: State<'_, AppState>, feed: u32, article: Option<String>) -> Res<()> {
+    rss(&state)?
+        .mark_read(feed, article.as_deref())
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rss_refresh(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    feeds: Option<Vec<u32>>,
+) -> Res<()> {
+    let r = rss(&state)?;
+    let e = engine(&state).await?;
+    crate::rss::refresh(&app, &e, &r, true, feeds).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn rss_set_options(state: State<'_, AppState>, options: riptor_rss::Options) -> Res<()> {
+    rss(&state)?.set_options(options).map_err(err)
+}
+
+#[tauri::command]
+pub async fn rss_save_rule(state: State<'_, AppState>, rule: riptor_rss::Rule) -> Res<u32> {
+    if let Some(p) = &rule.save_path {
+        engine(&state).await?.check_root(p).map_err(err)?;
+    }
+    rss(&state)?.save_rule(rule).map_err(err)
+}
+
+#[tauri::command]
+pub fn rss_delete_rule(state: State<'_, AppState>, id: u32) -> Res<()> {
+    rss(&state)?.delete_rule(id).map_err(err)
+}
+
+#[tauri::command]
+pub fn rss_preview_rule(
+    state: State<'_, AppState>,
+    rule: riptor_rss::Rule,
+) -> Res<Vec<riptor_rss::RuleMatch>> {
+    rss(&state)?.preview_rule(&rule).map_err(err)
+}
+
+#[tauri::command]
+pub fn autostart_get() -> bool {
+    crate::autostart::enabled()
+}
+
+#[tauri::command]
+pub fn autostart_set(enabled: bool) -> Res<()> {
+    crate::autostart::set(enabled).map_err(err)
 }

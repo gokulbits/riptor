@@ -41,6 +41,7 @@ export interface TorrentSummary {
   category: string | null;
   tags: string[];
   save_path: string;
+  tracker: string | null;
   added_on: number;
   completed_on: number | null;
   seeding_time: number;
@@ -78,7 +79,10 @@ export interface FileEntry {
   done: number;
   selected: boolean;
   executable: boolean;
+  priority: FilePriority;
 }
+
+export type FilePriority = "low" | "normal" | "high";
 
 export interface Preview {
   info_hash: string;
@@ -190,6 +194,9 @@ export interface Settings {
   alt_speed_enabled: boolean;
   alt_schedule: AltSchedule;
   watched_folder: string | null;
+  incomplete_dir: string | null;
+  extra_trackers: string[];
+  add_stopped: boolean;
   proxy_url: string | null;
   blocklist_url: string | null;
   anonymous_mode: boolean;
@@ -413,4 +420,57 @@ export interface PublicIp {
 
 export interface VpnPrefs {
   port_forwarding: boolean;
+  auto_connect: boolean;
+  last_profile: string | null;
+}
+
+export interface RssOptions {
+  auto_download: boolean;
+  refresh_minutes: number;
+}
+
+export interface RssFeed {
+  id: number;
+  url: string;
+  name: string;
+  last_refresh: number | null;
+  error: string | null;
+  unread: number;
+  total: number;
+}
+
+export interface RssRule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  must_contain: string;
+  must_not_contain: string;
+  use_regex: boolean;
+  feeds: number[];
+  category: string | null;
+  save_path: string | null;
+  start_paused: boolean;
+  last_match: number | null;
+}
+
+export interface RssView {
+  options: RssOptions;
+  feeds: RssFeed[];
+  rules: RssRule[];
+}
+
+export interface RssArticle {
+  id: string;
+  title: string;
+  torrent: string;
+  page: string | null;
+  date: number | null;
+  size: number | null;
+  read: boolean;
+  downloaded: boolean;
+}
+
+export interface RssRuleMatch {
+  feed: string;
+  title: string;
 }

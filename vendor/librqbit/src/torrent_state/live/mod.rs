@@ -222,6 +222,19 @@ impl TorrentStateLive {
         &self.ratelimits
     }
 
+    // RIPTOR PATCH: file priorities. Higher levels download first; ties keep name order.
+    pub fn set_file_priority_levels(&self, levels: &[u8]) {
+        let infos = &self.metadata.file_infos;
+        let mut order: Vec<usize> = (0..infos.len()).collect();
+        order.sort_by(|a, b| {
+            let level = |i: &usize| levels.get(*i).copied().unwrap_or(1);
+            level(b)
+                .cmp(&level(a))
+                .then_with(|| infos[*a].relative_filename.cmp(&infos[*b].relative_filename))
+        });
+        self.lock_write("set_file_priority_levels").file_priorities = order;
+    }
+
     // RIPTOR PATCH: web seeds (BEP 19), as pseudo-peers.
 
     /// (piece, offset, length)

@@ -4899,6 +4899,7 @@ dependencies = [
  "getrandom 0.3.4",
  "parking_lot",
  "riptor-core",
+ "riptor-rss",
  "riptor-search",
  "riptor-vpn",
  "rust-ini",
@@ -4962,6 +4963,22 @@ dependencies = [
 name = "riptor-net"
 version = "0.1.2"
 dependencies = [
+ "url",
+]
+
+[[package]]
+name = "riptor-rss"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "parking_lot",
+ "quick-xml 0.42.0",
+ "regex",
+ "riptor-search",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
  "url",
 ]
 

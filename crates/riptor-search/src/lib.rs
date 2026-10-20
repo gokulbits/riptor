@@ -5,6 +5,7 @@ pub mod archive;
 pub mod catalog;
 pub mod manager;
 pub mod nova;
+pub mod proxy;
 pub mod pyembed;
 pub mod scrape;
 pub mod secrets;
@@ -13,7 +14,7 @@ pub mod torznab;
 
 use serde::{Deserialize, Serialize};
 
-pub use manager::{LookupRoute, SearchConfig, SearchManager, TorznabEndpoint};
+pub use manager::{Route, SearchConfig, SearchManager, TorznabEndpoint};
 
 pub const CATEGORIES: [&str; 9] = [
     "all", "anime", "books", "games", "movies", "music", "pictures", "software", "tv",

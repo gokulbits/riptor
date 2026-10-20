@@ -79,30 +79,33 @@ cargo bench -p riptor-storage
 - **Search plugins:** run through Riptor's own JSON-line shim in `crates/riptor-search/assets/nova`. Engines are loaded by file path and never put on `sys.path`. The catalog (`catalog.rs`) is fetched from GitHub at runtime; never vendor plugin code. Riptor's own Python (`pyembed.rs`, Windows) is python.org's embeddable zip, pinned by SHA-256. `RIPTOR_TEST_PYTHON=<python.exe>` lets the end-to-end plugin test run without a system Python.
 - **Seed/peer lookups** (`scrape.rs`): results without counts are scraped from their trackers (HTTP + UDP BEP 15). Only public addresses are contacted (`riptor-net`); tests use `Net::new(true)` to allow 127.0.0.1. `search_start` routes them through the tunnel on the VPN and holds them under the kill switch.
 - **Web seeds** (`webseed.rs`): workers per torrent, managed from `tick()`, fetch whole pieces over HTTP and hand them to the librqbit `webseed_*` patch. Tests call `Engine::allow_local_web_seeds()` to use a loopback server.
+- **RSS** (`crates/riptor-rss`, `src-tauri/src/rss.rs`): feeds are parsed with quick-xml (no entity expansion, size/depth/item caps) and stored in `<data>/rss.json` with seen-ids so a rule fires once per article. A minute ticker refreshes due feeds through `Engine::web_client` (VPN-aware) and adds picks via `preview` + `add`; anything with programs is added stopped.
+- **Incomplete folder / file priority:** `Record::move_on_complete` sends a finished download through `reattach` to its save folder (queued from `tick()`, run by the ticker). File priority reorders librqbit's file list (`set_file_priority_levels` patch), applied once per live state.
 - **Bencode:** `vendor/librqbit-bencode` caps nesting and uses checked integers. Never remove those patches; peers send bencode.
 
 ## What's left to do (priority order)
 
-1. **VPN (M4).** Everything is built: import, helper, management client (Unix socket on Linux), Windows binding, kill switch, watchdog, NAT-PMP, tracker/DHT DNS through the tunnel, WireGuard on Linux, the VPN page and the status-bar indicator. A security review was done.
+1. **VPN.** Everything is built: import, helper, management client (Unix socket on Linux), Windows binding, kill switch, watchdog, NAT-PMP, tracker/DHT DNS through the tunnel, WireGuard on Linux, the VPN page and the status-bar indicator. A security review was done.
    - End-to-end test with a provider OpenVPN profile: on Windows, connect, app-only public IP and untouched default route are verified (2026-10-20). Still to check: the tracker-seen IP and leaks when the tunnel dies (needs the user's account).
    - OpenVPN management quirks (handled in `src-tauri/src/vpn.rs`): `ENTER PASSWORD:` has no newline; 2.7 drops commands sent together, so send one per reply; a new tunnel address can't be bound until duplicate-address detection ends.
    - Test WireGuard and the management socket on real Linux (only type-checked and built in CI so far).
-2. **Dependencies:** there is no Dependabot; upgrades are done by hand. Check periodically (`cargo update --dry-run`, `npm outdated`), upgrade, then run the full gate and the app. cargo-deny and `npm audit --omit=dev` in CI catch advisories. Tailwind 3's build tooling has open advisories (dev only); moving to Tailwind 4 removes them. (CI is green on Windows and Linux; installers build only for `v*` tags and manual runs; a `v*` tag also makes a *draft* GitHub release via the `release` job, which only a human publishes.)
-3. **Packaging (M5):**
+2. **Dependencies:** there is no Dependabot; upgrades are done by hand. Check periodically (`cargo update --dry-run`, `npm outdated`), upgrade, then run the full gate and the app. cargo-deny and `npm audit --omit=dev` in CI catch advisories. (CI is green on Windows and Linux; installers build only for `v*` tags and manual runs; a `v*` tag also makes a *draft* GitHub release via the `release` job, which only a human publishes.)
+3. **Packaging:**
    - Done: per-machine NSIS setup bundling the OpenVPN MSI and embeddable Python, .deb/.rpm with `openvpn`/`python3`/`bubblewrap` + polkit policy, SHA-256 sums in CI, About page and log viewer.
    - Test the installers on clean machines (OpenVPN install, helper prompt, file/magnet registration).
    - Optional signing.
    - Keep the setup under 20 MB (19.3 MB for 0.1.2).
-4. **Engine:** web seeds, runtime per-torrent limits, force recheck, moving files and orphan cleanup are done.
+4. **Engine:** web seeds, runtime per-torrent limits, force recheck, moving files, orphan cleanup, RSS with rules, the incomplete folder, file priorities, extra trackers and `.torrent` export are done.
+   - Try RSS against real feeds.
    - A real-network download/seed check (e.g. Debian netinst). Needs the user's OK.
    - Storage download path: the benchmark now shows the store level with plain I/O (noisy; re-check on fast NVMe).
 5. **Search:**
    - Test the bubblewrap sandbox on Linux.
    - Try popular community plugins against the shim (official ones work on Windows with Python 3.14).
    - Bump the embedded Python pin in `pyembed.rs` with Python security releases (3.14.8 is current).
-   - Search provider requests (Internet Archive, Torznab, plugins) don't go through the VPN; scrapes do.
+   - On the VPN, searches, scrapes and URL adds go through the tunnel, and plugins through a loopback proxy (`proxy.rs`) bound to it; LAN/loopback hosts stay direct (`riptor_net::stays_local`). A plugin that ignores proxy settings and opens its own sockets would bypass it.
 6. **Security and quality:**
-   - A security review per milestone.
+   - A security review before each release.
    - Hostile-input tests exist for torrents, bencode, backups, search replies, plugin results, scrapes and VPN profiles (`tests/hostile_input.rs` in core, search and vpn). Extend them with new parsers.
    - Privately report librqbit's Windows path escape and the bencode crashes (now patched in `vendor/librqbit-bencode`) upstream. Needs the user's OK.
    - Test on real Linux.

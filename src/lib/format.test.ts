@@ -43,6 +43,7 @@ const t = (over: Partial<TorrentSummary>): TorrentSummary => ({
   category: null,
   tags: [],
   save_path: "/dl",
+  tracker: null,
   added_on: 1,
   completed_on: null,
   seeding_time: 0,

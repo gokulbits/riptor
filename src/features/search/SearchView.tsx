@@ -13,15 +13,17 @@ import {
   Info,
   Loader2,
   Search,
+  ShieldAlert,
   SlidersHorizontal,
   Square,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorText, events } from "../../lib/ipc";
 import { formatBytes } from "../../lib/format";
 import type { SearchResult, Source } from "../../lib/types";
-import { useApp } from "../../stores/app";
+import { loadPref, savePref, useApp } from "../../stores/app";
 import { useSearch, visibleResults, type ResultSort } from "../../stores/search";
 import { ContextMenu, type MenuItem } from "../torrents/ContextMenu";
 import { EnginesDialog } from "./EnginesDialog";
@@ -104,9 +106,28 @@ function EnginePicker() {
   );
 }
 
+const HISTORY_KEY = "riptor.searchHistory";
+const HISTORY_MAX = 20;
+const HELD = "waiting for the VPN";
+
+function loadHistory(): string[] {
+  try {
+    const v = JSON.parse(loadPref(HISTORY_KEY, "[]"));
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, HISTORY_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
+const resultKey = (r: SearchResult) => `${r.engine}|${r.link}`;
+
 export function SearchView() {
   const toast = useApp((s) => s.toast);
   const queueAdds = useApp((s) => s.queueAdds);
+  const blocked = useApp((s) => s.global?.network === "blocked");
+  const [history, setHistory] = useState(loadHistory);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [anchor, setAnchor] = useState<number | null>(null);
   const st = useSearch(
     useShallow((s) => ({
       query: s.query,
@@ -146,7 +167,20 @@ export function SearchView() {
 
   const names = useMemo(() => Object.fromEntries(st.providers.map((p) => [p.id, p.name])), [st.providers]);
 
+  const remember = (q: string) => {
+    const next = [q, ...history.filter((h) => h.toLowerCase() !== q.toLowerCase())].slice(0, HISTORY_MAX);
+    setHistory(next);
+    savePref(HISTORY_KEY, JSON.stringify(next));
+  };
+  const forget = () => {
+    setHistory([]);
+    savePref(HISTORY_KEY, "[]");
+  };
+
   const start = async () => {
+    remember(st.query.trim());
+    setPicked(new Set());
+    setAnchor(null);
     if (st.searchId != null && st.running) await api.searchCancel(st.searchId).catch(() => {});
     try {
       const id = await api.searchStart(st.query, st.category, st.selected);
@@ -211,7 +245,34 @@ export function SearchView() {
     }
   };
 
+  const pickedRows = rows.filter((r) => picked.has(resultKey(r)));
+  const downloadPicked = async () => {
+    const list = pickedRows;
+    setPicked(new Set());
+    for (const r of list) await download(r);
+  };
+  const onRowClick = (e: React.MouseEvent, index: number) => {
+    const key = resultKey(rows[index]);
+    if (e.shiftKey && anchor != null) {
+      const [lo, hi] = anchor < index ? [anchor, index] : [index, anchor];
+      setPicked(new Set(rows.slice(lo, hi + 1).map(resultKey)));
+      return;
+    }
+    setAnchor(index);
+    if (e.ctrlKey || e.metaKey) {
+      const next = new Set(picked);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      setPicked(next);
+    } else {
+      setPicked(new Set([key]));
+    }
+  };
+
   const menuItems = (r: SearchResult): (MenuItem | "sep")[] => [
+    ...(picked.size > 1 && picked.has(resultKey(r))
+      ? [{ label: `Download ${picked.size} selected…`, icon: <Download size={14} />, onClick: downloadPicked }, "sep" as const]
+      : []),
     { label: "Download…", icon: <Download size={14} />, onClick: () => download(r) },
     { label: "Download to folder…", icon: <FolderDown size={14} />, onClick: () => downloadTo(r) },
     "sep",
@@ -231,6 +292,8 @@ export function SearchView() {
   ];
 
   const progress = Object.entries(st.progress);
+  // The kill switch holds searches; one banner says so instead of an error per engine.
+  const held = blocked || (progress.length > 0 && progress.every(([, p]) => p.done && p.error?.startsWith(HELD)));
   const template = COLUMNS.map((c) => c.width).join(" ") + " 72px";
 
   return (
@@ -247,7 +310,19 @@ export function SearchView() {
             onChange={(e) => actions.setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && st.query.trim() && start()}
             aria-label="Search text"
+            list="riptor-search-history"
+            autoComplete="off"
           />
+          <datalist id="riptor-search-history">
+            {history.map((h) => (
+              <option key={h} value={h} />
+            ))}
+          </datalist>
+          {history.length > 0 && !st.query && (
+            <button className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted hover:text-fg" onClick={forget} title="Forget recent searches">
+              Clear history
+            </button>
+          )}
         </div>
         <select className="input w-40" value={st.category} onChange={(e) => actions.setCategory(e.target.value)} aria-label="Category">
           {Object.entries(CATEGORY_LABELS).map(([k, v]) => (
@@ -271,9 +346,31 @@ export function SearchView() {
         </button>
       </div>
 
+      {held && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-danger/10 px-3 py-2 text-sm">
+          <ShieldAlert size={15} className="shrink-0 text-danger" />
+          <span className="flex-1">Kill switch on: searches wait until the VPN connects. Indexers on your own machine or network still work.</span>
+          <button className="btn-ghost py-1 text-xs" onClick={() => useApp.getState().setView("vpn")}>
+            Open VPN
+          </button>
+        </div>
+      )}
+
+      {picked.size > 1 && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-accent/10 px-3 py-1.5 text-sm">
+          <span className="flex-1">{pickedRows.length} selected</span>
+          <button className="btn-primary py-1 text-xs" onClick={downloadPicked}>
+            <Download size={13} /> Download selected
+          </button>
+          <button className="btn-ghost p-1" onClick={() => setPicked(new Set())} aria-label="Clear selection">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {(progress.length > 0 || st.total > 0) && (
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-xs">
-          {progress.map(([id, p]) => (
+          {progress.filter(([, p]) => !(held && p.error?.startsWith(HELD))).map(([id, p]) => (
             <span
               key={id}
               title={p.error ?? undefined}
@@ -364,7 +461,7 @@ export function SearchView() {
             ) : (
               <>
                 <p className="text-sm">Search the Internet Archive, your Torznab indexers and installed plugins.</p>
-                <p className="text-xs">Double-click a result for its details, or right-click for more options.</p>
+                <p className="text-xs">Double-click a result for its details, or right-click for more options. Ctrl- or Shift-click to pick several.</p>
                 {st.providers.length > 0 && !st.providers.some((p) => p.kind !== "builtin") && (
                   <button className="btn-ghost mt-2 border border-border text-xs" onClick={() => setEngines(true)}>
                     Add search plugins…
@@ -381,6 +478,8 @@ export function SearchView() {
                 <div
                   key={`${r.engine}|${r.link}`}
                   role="row"
+                  aria-selected={picked.has(resultKey(r))}
+                  onClick={(e) => onRowClick(e, v.index)}
                   onDoubleClick={() => setDetails(r)}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -388,7 +487,7 @@ export function SearchView() {
                   }}
                   className={clsx(
                     "group absolute left-0 grid w-full items-center text-[13px] hover:bg-raised",
-                    menu?.r === r ? "bg-accent/15" : v.index % 2 && "bg-raised/40",
+                    menu?.r === r || picked.has(resultKey(r)) ? "bg-accent/15" : v.index % 2 && "bg-raised/40",
                   )}
                   style={{ top: v.start, height: ROW, gridTemplateColumns: template }}
                 >

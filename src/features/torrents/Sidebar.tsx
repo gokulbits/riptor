@@ -10,6 +10,7 @@ import {
   Layers,
   Moon,
   PauseCircle,
+  Radio,
   Plus,
   Tag,
 } from "lucide-react";
@@ -58,7 +59,7 @@ function Item({
 }
 
 export function Sidebar({ categories, onAddCategory }: { categories: string[]; onAddCategory: () => void }) {
-  const { torrents, status, category, tag, setStatus, setCategory, setTag } = useApp(
+  const { torrents, status, category, tag, tracker, setStatus, setCategory, setTag, setTracker } = useApp(
     useShallow((s) => ({
       torrents: s.torrents,
       status: s.status,
@@ -67,10 +68,13 @@ export function Sidebar({ categories, onAddCategory }: { categories: string[]; o
       setStatus: s.setStatus,
       setCategory: s.setCategory,
       setTag: s.setTag,
+      tracker: s.tracker,
+      setTracker: s.setTracker,
     })),
   );
   const list = useMemo(() => [...torrents.values()], [torrents]);
   const tags = useMemo(() => [...new Set(list.flatMap((t) => t.tags))].sort(), [list]);
+  const trackers = useMemo(() => [...new Set(list.map((t) => t.tracker ?? ""))].sort(), [list]);
 
   return (
     <nav className="flex h-full w-52 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border bg-panel p-2" aria-label="Filters">
@@ -127,6 +131,23 @@ export function Sidebar({ categories, onAddCategory }: { categories: string[]; o
               icon={<Tag size={15} />}
               label={t}
               count={list.filter((x) => x.tags.includes(t)).length}
+            />
+          ))}
+        </section>
+      )}
+
+      {trackers.some(Boolean) && (
+        <section>
+          <h3 className="px-2 pb-1 text-xxs font-semibold uppercase tracking-wider text-muted">Trackers</h3>
+          <Item active={tracker === null} onClick={() => setTracker(null)} icon={<Radio size={15} />} label="All" count={list.length} />
+          {trackers.map((h) => (
+            <Item
+              key={h || "-"}
+              active={tracker === h}
+              onClick={() => setTracker(h)}
+              icon={<Radio size={15} />}
+              label={h || "Trackerless"}
+              count={list.filter((x) => (x.tracker ?? "") === h).length}
             />
           ))}
         </section>

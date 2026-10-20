@@ -44,6 +44,9 @@ pub struct VpnStatus {
 pub struct VpnPrefs {
     /// NAT-PMP, if the provider supports it.
     pub port_forwarding: bool,
+    /// Reconnect `last_profile` when Riptor starts.
+    pub auto_connect: bool,
+    pub last_profile: Option<String>,
 }
 
 type Reader = BufReader<Box<dyn AsyncRead + Send + Unpin>>;
@@ -253,7 +256,13 @@ impl VpnManager {
         self.prefs.lock().clone()
     }
 
-    pub fn set_prefs(&self, p: VpnPrefs) -> anyhow::Result<()> {
+    /// The UI doesn't choose the profile; that's whichever connected last.
+    pub fn set_prefs(&self, mut p: VpnPrefs) -> anyhow::Result<()> {
+        p.last_profile = self.prefs.lock().last_profile.clone();
+        self.save_prefs(p)
+    }
+
+    fn save_prefs(&self, p: VpnPrefs) -> anyhow::Result<()> {
         std::fs::write(self.dir.join("prefs.json"), serde_json::to_vec_pretty(&p)?)?;
         *self.prefs.lock() = p;
         Ok(())
@@ -279,9 +288,31 @@ impl VpnManager {
         }
     }
 
+    pub fn auto_connect(self: &Arc<Self>) {
+        let p = self.prefs();
+        let Some(id) = p.last_profile.filter(|_| p.auto_connect) else {
+            return;
+        };
+        let me = self.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = me.connect(&id).await {
+                warn!("connecting the VPN at startup failed: {e:#}");
+            }
+        });
+    }
+
     pub async fn connect(self: &Arc<Self>, profile_id: &str) -> anyhow::Result<()> {
         self.disconnect().await;
         let profile: Profile = self.store.get(profile_id)?;
+        {
+            let mut p = self.prefs();
+            if p.last_profile.as_deref() != Some(profile_id) {
+                p.last_profile = Some(profile_id.to_string());
+                if let Err(e) = self.save_prefs(p) {
+                    warn!("saving VPN preferences failed: {e:#}");
+                }
+            }
+        }
         if !profile.app_only_supported() {
             bail!("This WireGuard profile can't run app-only on Windows yet. Use the provider's OpenVPN config instead.");
         }

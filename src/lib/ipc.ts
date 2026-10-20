@@ -17,6 +17,12 @@ import type {
   SearchOptions,
   EngineEvent,
   FileEntry,
+  FilePriority,
+  RssArticle,
+  RssOptions,
+  RssRule,
+  RssRuleMatch,
+  RssView,
   Preview,
   QueueMove,
   Settings,
@@ -40,6 +46,13 @@ export const api = {
   remove: (ids: string[], deleteFiles: boolean) => invoke<void>("remove_torrents", { ids, deleteFiles }),
   setFiles: (id: string, files: number[]) => invoke<void>("set_files", { id, files }),
   files: (id: string) => invoke<FileEntry[]>("torrent_files", { id }),
+  setFilePriority: (id: string, files: number[], priority: FilePriority) =>
+    invoke<void>("set_file_priority", { id, files, priority }),
+  exportTorrent: (id: string, path: string) => invoke<void>("export_torrent", { id, path }),
+  autostartGet: () => invoke<boolean>("autostart_get"),
+  autostartSet: (enabled: boolean) => invoke<void>("autostart_set", { enabled }),
+  revealFile: (id: string, index: number) => invoke<void>("reveal_torrent_file", { id, index }),
+  openFile: (id: string, index: number) => invoke<void>("open_torrent_file", { id, index }),
   trackers: (id: string) => invoke<string[]>("torrent_trackers", { id }),
   peers: (id: string) => invoke<unknown>("torrent_peers", { id }),
   magnet: (id: string) => invoke<string>("torrent_magnet", { id }),
@@ -105,6 +118,17 @@ export const api = {
   vpnPrefs: () => invoke<VpnPrefs>("vpn_get_prefs"),
   vpnSetPrefs: (prefs: VpnPrefs) => invoke<void>("vpn_set_prefs", { prefs }),
   openVpnInstalled: () => invoke<boolean>("vpn_openvpn_installed"),
+  rssView: () => invoke<RssView>("rss_view"),
+  rssArticles: (feed: number) => invoke<RssArticle[]>("rss_articles", { feed }),
+  rssAddFeed: (url: string, name: string | null) => invoke<number>("rss_add_feed", { url, name }),
+  rssRemoveFeed: (feed: number) => invoke<void>("rss_remove_feed", { feed }),
+  rssRenameFeed: (feed: number, name: string) => invoke<void>("rss_rename_feed", { feed, name }),
+  rssMarkRead: (feed: number, article: string | null) => invoke<void>("rss_mark_read", { feed, article }),
+  rssRefresh: (feeds: number[] | null) => invoke<void>("rss_refresh", { feeds }),
+  rssSetOptions: (options: RssOptions) => invoke<void>("rss_set_options", { options }),
+  rssSaveRule: (rule: RssRule) => invoke<number>("rss_save_rule", { rule }),
+  rssDeleteRule: (id: number) => invoke<void>("rss_delete_rule", { id }),
+  rssPreviewRule: (rule: RssRule) => invoke<RssRuleMatch[]>("rss_preview_rule", { rule }),
 };
 
 export const events = {
@@ -114,6 +138,7 @@ export const events = {
   trayAction: (cb: (action: string) => void) => listen<string>("riptor://tray-action", (e) => cb(e.payload)),
   search: (cb: (e: SearchEvent) => void) => listen<SearchEvent>("riptor://search", (e) => cb(e.payload)),
   vpn: (cb: (s: VpnStatus) => void) => listen<VpnStatus>("riptor://vpn", (e) => cb(e.payload)),
+  rss: (cb: () => void) => listen("riptor://rss", () => cb()),
 };
 
 export function errorText(e: unknown): string {

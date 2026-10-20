@@ -468,9 +468,35 @@ async fn kill_switch_blocks_everything_until_lifted() {
     );
     let mut events = engine.subscribe();
     let id = engine
-        .add_direct(Source::File(torrent_file), AddParams::default())
+        .add_direct(Source::File(torrent_file.clone()), AddParams::default())
         .await
         .unwrap();
+
+    // Links on the internet wait for the VPN; ones on this machine still load.
+    let err = engine
+        .preview(Source::Url("https://example.com/x.torrent".into()))
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("waiting for the VPN"),
+        "{err:#}"
+    );
+    let body = std::fs::read(&torrent_file).unwrap();
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = server.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut s, _) = server.accept().await.unwrap();
+        let _ = s.read(&mut [0; 4096]).await;
+        let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+        let _ = s.write_all(head.as_bytes()).await;
+        let _ = s.write_all(&body).await;
+    });
+    let local = engine
+        .preview(Source::Url(format!("http://127.0.0.1:{port}/x.torrent")))
+        .await
+        .unwrap();
+    assert!(local.already_added);
 
     let mut ticks = 0;
     while ticks < 4 {
@@ -945,5 +971,105 @@ async fn created_torrent_seeds_in_place() {
     .await;
     assert_eq!(Path::new(&t.save_path), content);
     assert!(engine.create_progress().is_none());
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn incomplete_folder_trackers_priorities_and_export() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source");
+    let content = source.join("content");
+    let rels: Vec<PathBuf> = make_content(&content).into_iter().map(|(p, _)| p).collect();
+    let created = create_torrent(
+        &content,
+        CreateTorrentOptions {
+            name: Some("content"),
+            trackers: vec![],
+            piece_length: Some(256 * 1024),
+        },
+        &BlockingSpawner::new(4),
+    )
+    .await
+    .unwrap();
+    let (addr, _) = range_server(source.clone()).await;
+    let torrent = with_url_list(
+        &created.as_bytes().unwrap(),
+        &[format!("http://{addr}/good/")],
+    );
+    let torrent_file = tmp.path().join("web.torrent");
+    std::fs::write(&torrent_file, torrent).unwrap();
+
+    let downloads = tmp.path().join("downloads");
+    let incomplete = tmp.path().join("incomplete");
+    let data_dir = tmp.path().join("data");
+    let extra = "udp://tracker.invalid:1337/announce".to_string();
+    let settings = Settings {
+        incomplete_dir: Some(incomplete.clone()),
+        extra_trackers: vec![extra.clone()],
+        ..quiet_settings(&downloads)
+    };
+    riptor_core::state_file::save(&data_dir.join("settings.json"), &settings).unwrap();
+    let engine = Engine::start(EngineConfig { data_dir }).await.unwrap();
+    engine.allow_local_web_seeds();
+    let mut events = engine.subscribe();
+    let id = engine
+        .add_direct(
+            Source::File(torrent_file),
+            AddParams {
+                start_paused: true,
+                ..AddParams::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(engine.trackers(&id).unwrap().contains(&extra));
+    let t = wait_for(&mut events, &id, "first tick", |_| true).await;
+    assert!(
+        Path::new(&t.save_path).starts_with(&incomplete),
+        "starts in the incomplete folder: {}",
+        t.save_path
+    );
+
+    let files = engine.files(&id).unwrap();
+    engine
+        .set_file_priority(&id, &[files[1].index], riptor_core::FilePriority::High)
+        .unwrap();
+    assert!(engine
+        .set_file_priority(&id, &[10_000], riptor_core::FilePriority::High)
+        .is_err());
+    let files = engine.files(&id).unwrap();
+    assert_eq!(files[1].priority, riptor_core::FilePriority::High);
+    assert_eq!(files[0].priority, riptor_core::FilePriority::Normal);
+
+    let out = tmp.path().join("export.torrent");
+    engine.export_torrent(&id, &out).unwrap();
+    assert_eq!(std::fs::read(&out).unwrap().first(), Some(&b'd'));
+    let not_torrent = tmp.path().join("notes.txt");
+    assert!(engine.export_torrent(&id, &not_torrent).is_err());
+    std::fs::write(tmp.path().join("keep.torrent"), b"hello").unwrap();
+    assert!(engine
+        .export_torrent(&id, &tmp.path().join("keep.torrent"))
+        .is_err());
+
+    engine.resume(std::slice::from_ref(&id)).unwrap();
+    wait_for(&mut events, &id, "download", complete).await;
+    // Then it moves to the save folder by itself.
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while !downloads.join("content").join(&rels[0]).exists()
+            || incomplete.join("content").exists()
+        {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("moved out of the incomplete folder");
+    wait_for(&mut events, &id, "recheck after the move", complete).await;
+    for p in &rels {
+        assert_eq!(
+            sha(&downloads.join("content").join(p)),
+            sha(&content.join(p))
+        );
+    }
     engine.shutdown().await.unwrap();
 }

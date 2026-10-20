@@ -49,9 +49,43 @@ pub fn host_allowed(u: &Url) -> bool {
     }
 }
 
+/// Loopback or LAN by address, so the request never leaves this network.
+pub fn stays_local(u: &Url) -> bool {
+    match u.host() {
+        Some(Host::Ipv4(ip)) => !is_public(ip.into()),
+        Some(Host::Ipv6(ip)) => !is_public(ip.into()),
+        Some(Host::Domain(d)) => {
+            let d = d.trim_end_matches('.').to_ascii_lowercase();
+            d == "localhost" || d.ends_with(".localhost")
+        }
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_hosts_are_recognised() {
+        for u in [
+            "http://127.0.0.1:9117/api",
+            "http://192.168.1.5/torznab",
+            "http://[::1]:9696/",
+            "http://localhost:9117/",
+            "http://jackett.localhost./",
+        ] {
+            assert!(stays_local(&Url::parse(u).unwrap()), "{u}");
+        }
+        for u in [
+            "https://archive.org/",
+            "https://8.8.8.8/",
+            "https://localhost.example.com/",
+            "https://10.0.0.1.example.com/",
+        ] {
+            assert!(!stays_local(&Url::parse(u).unwrap()), "{u}");
+        }
+    }
 
     #[test]
     fn private_addresses_are_refused() {

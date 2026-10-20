@@ -123,6 +123,39 @@ pub fn is_executable_name(name: &str) -> bool {
     }
 }
 
+/// Types Windows would run or mount rather than just show.
+const NEVER_OPEN_EXTS: &[&str] = &[
+    "url",
+    "msc",
+    "iso",
+    "img",
+    "vhd",
+    "vhdx",
+    "application",
+    "appref-ms",
+    "settingcontent-ms",
+    "library-ms",
+    "search-ms",
+    "xll",
+    "ws",
+    "gadget",
+    "inf",
+    "scf",
+    "chm",
+    "docm",
+    "xlsm",
+    "pptm",
+];
+
+/// Files the user may open with their default app from inside Riptor.
+pub fn safe_to_open(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    match lower.rsplit_once('.') {
+        Some((_, ext)) => !EXECUTABLE_EXTS.contains(&ext) && !NEVER_OPEN_EXTS.contains(&ext),
+        None => false,
+    }
+}
+
 pub fn magnet_link(info_hash: &str, name: &str, trackers: &[String]) -> String {
     let enc = |s: &str| url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
     let mut m = format!("magnet:?xt=urn:btih:{info_hash}");
@@ -139,6 +172,25 @@ pub fn magnet_link(info_hash: &str, name: &str, trackers: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_harmless_files_open() {
+        for ok in ["movie.MKV", "a/b/song.flac", "book.pdf", "notes.txt"] {
+            assert!(super::safe_to_open(ok), "{ok}");
+        }
+        for bad in [
+            "setup.exe",
+            "x.Lnk",
+            "disk.iso",
+            "site.url",
+            "macro.docm",
+            "run.ps1",
+            "README",
+            "evil.pdf.scr",
+        ] {
+            assert!(!super::safe_to_open(bad), "{bad}");
+        }
+    }
+
     #[test]
     fn magnet_links_round_trip() {
         let hash = "0123456789abcdef0123456789abcdef01234567";

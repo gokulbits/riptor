@@ -1,7 +1,9 @@
 mod associations;
+mod autostart;
 mod commands;
 mod elevate;
 mod logs;
+mod rss;
 mod tray;
 mod vpn;
 
@@ -25,6 +27,7 @@ pub struct AppState {
     pub startup_items: Mutex<Vec<Source>>,
     pub search: OnceCell<Arc<riptor_search::SearchManager>>,
     pub vpn: OnceCell<Arc<vpn::VpnManager>>,
+    pub rss: OnceCell<Arc<riptor_rss::Rss>>,
 }
 
 /// Magnet links and existing .torrent files only.
@@ -137,6 +140,12 @@ pub fn run() {
             });
 
             tray::create(&handle)?;
+            if autostart::started_minimized() {
+                if let Some(w) = handle.get_webview_window("main") {
+                    let _ = w.hide();
+                    tray::set_toggle_text(&handle, false);
+                }
+            }
 
             // Not in dev builds, or the registry would point at target/debug.
             if !cfg!(debug_assertions) {
@@ -150,6 +159,7 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             let data_dir_search = data_dir.clone();
             let data_dir_vpn = data_dir.clone();
+            let data_dir_rss = data_dir.clone();
             tauri::async_runtime::spawn(async move {
                 match Engine::start(EngineConfig { data_dir }).await {
                     Ok(engine) => {
@@ -170,10 +180,14 @@ pub fn run() {
                         }
                         match vpn::VpnManager::new(handle.clone(), engine.clone(), &data_dir_vpn) {
                             Ok(v) => {
-                                let _ = handle.state::<AppState>().vpn.set(v);
+                                let _ = handle.state::<AppState>().vpn.set(v.clone());
+                                v.auto_connect();
                             }
                             Err(e) => error!("VPN failed to start: {e:#}"),
                         }
+                        let feeds = Arc::new(riptor_rss::Rss::open(&data_dir_rss));
+                        let _ = handle.state::<AppState>().rss.set(feeds.clone());
+                        rss::spawn(handle.clone(), engine.clone(), feeds);
                         pump_events(handle.clone(), engine.clone());
                         let _ = handle.state::<AppState>().engine.set(engine);
                         let _ = handle.emit("riptor://ready", ());
@@ -202,6 +216,23 @@ pub fn run() {
             commands::force_start_torrents,
             commands::remove_torrents,
             commands::set_files,
+            commands::set_file_priority,
+            commands::autostart_get,
+            commands::autostart_set,
+            commands::reveal_torrent_file,
+            commands::open_torrent_file,
+            commands::export_torrent,
+            commands::rss_view,
+            commands::rss_articles,
+            commands::rss_add_feed,
+            commands::rss_remove_feed,
+            commands::rss_rename_feed,
+            commands::rss_mark_read,
+            commands::rss_refresh,
+            commands::rss_set_options,
+            commands::rss_save_rule,
+            commands::rss_delete_rule,
+            commands::rss_preview_rule,
             commands::torrent_files,
             commands::torrent_trackers,
             commands::torrent_peers,

@@ -37,7 +37,7 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 
 ## Why Riptor
 
-- **Safe by default.** Torrent metadata, peers, trackers, search results, plugins, backups and VPN profiles are all treated as hostile input. A torrent can't write outside its save folder, downloads are never opened automatically, and nothing is ever added without you seeing it first.
+- **Safe by default.** Torrent metadata, peers, trackers, search results, plugins, backups and VPN profiles are all treated as hostile input. A torrent can't write outside its save folder, downloads are never opened automatically, and nothing is added without you seeing it first, except by RSS rules you set up yourself.
 - **A VPN that only covers Riptor.** Connect an OpenVPN profile from your provider and only Riptor's traffic goes through it. Your browser and other apps keep your normal connection. The kill switch holds every torrent while the tunnel is down, including at startup.
 - **Everything included.** The Windows setup installs everything the app needs, and the Linux packages pull in their dependencies through the package manager. No extra downloads or manual setup.
 - **Lightweight.** A native Rust engine ([librqbit](https://github.com/ikatson/rqbit)) and a small Tauri shell, not a bundled browser.
@@ -45,13 +45,17 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 ## Features
 
 ### Downloading and seeding
-- Add `.torrent` files, magnet links and http(s) torrent URLs. Drag and drop, paste with <kbd>Ctrl</kbd>+<kbd>V</kbd>, or use **Add**.
+- Add `.torrent` files, magnet links, info hashes and http(s) torrent URLs. Drag and drop files or links, paste with <kbd>Ctrl</kbd>+<kbd>V</kbd>, or use **Add**.
 - The add dialog lets you pick files, the save folder, a category and tags. It shows free disk space and warns when a torrent contains programs or scripts.
 - Share limits: maximum ratio, seeding time and inactive time, set globally or per torrent. When a limit is reached, Riptor stops the torrent, removes it, or removes it with its files.
 - Queueing: limits on active downloads, uploads and torrents, with "don't count slow torrents", force start and a manual queue order.
 - Global and alternative speed limits, with a weekly schedule for the alternative ones. Per-torrent limits can change while it runs.
 - Categories with default folders, and tags. Move a torrent, downloaded or still downloading, to another folder, optionally whenever its category changes.
-- Force recheck, copy magnet link, and a watched folder that adds `.torrent` files saved there.
+- Force recheck, copy magnet link, export the `.torrent` file, and a watched folder that adds `.torrent` files saved there.
+- File priorities (High, Normal, Low) on top of choosing which files to download. Open finished files (never programs) or show them in their folder.
+- A folder for incomplete downloads: torrents download there and move to their save folder when complete.
+- Trackers that are added to every new public torrent, and an option to add new torrents stopped.
+- RSS and Atom feeds, with download rules (words or regular expressions, per feed, with a category and folder) that add matching torrents automatically. Feeds are fetched through the VPN when it's on, and torrents with programs are always added stopped.
 - Web seeds (BEP 19): torrents that list HTTP servers, such as most Internet Archive items, download from them too.
 - Create torrents from your files, with trackers, web seeds and a private flag, and start seeding them in place.
 
@@ -71,15 +75,17 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 ### App-only VPN
 - Import OpenVPN (`.ovpn`) profiles from your VPN provider and connect from the **VPN** tab.
 - Only Riptor's sockets are bound to the tunnel. The tunnel never becomes your computer's default route.
-- Kill switch: while it's on and the VPN is down, there's no DHT, no listening port, no trackers and no peers.
+- Searches, seed and peer lookups, plugin requests and `.torrent` links you add go through the tunnel too. Indexers on your own machine or LAN are reached directly.
+- Kill switch: while it's on and the VPN is down, there's no DHT, no listening port, no trackers, no peers and no searches.
 - UPnP and local peer discovery are switched off while the VPN is in use. Optional NAT-PMP port forwarding is available if your provider supports it.
 - The status bar shows whether the VPN is connected and the public IP peers see. The IP is masked until you click the eye icon.
 
 ### Everything else
 - An encrypted, tamper-evident backup and restore of torrents, settings, categories and statistics, with an optional password.
 - A statistics page with all-time and session totals, a 30-day chart, peaks, wasted data and disk-cache figures.
-- Customisable torrent list: show, hide, reorder and resize columns. The layout is saved with your settings and backups.
-- A system tray icon with live speeds. Closing the window keeps Riptor running in the tray (you can turn this off).
+- Customisable torrent list: show, hide, reorder and resize columns (including downloaded, uploaded, completed, seeding time, tags, tracker and save path). The layout is saved with your settings and backups. The sidebar filters by status, category, tag and tracker.
+- A system tray icon with live speeds. Closing the window keeps Riptor running in the tray (you can turn this off), and Riptor can start in the tray when you sign in.
+- The status bar shows free space where downloads go; click either speed to pick a global limit.
 - Window size and position, sort order and panel layout are remembered.
 - 9 themes, "follow system", and custom accent colours.
 - An About page and a log viewer. Logs stay in memory, with tracker passkeys and URL parameters masked.
@@ -112,7 +118,7 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 ## Usage
 
 ### Adding torrents
-Use **Add** for a `.torrent` file, or **Magnet** for magnet links and URLs. You can also drop files onto the window, paste a magnet link anywhere, or open one from your browser. Every torrent goes through the add dialog, where you choose what to download and where to put it.
+Use **Add** for a `.torrent` file, or **Magnet** for magnet links and URLs. You can also drop files or links onto the window, paste magnet links, info hashes or `.torrent` links anywhere, or open one from your browser. Every torrent goes through the add dialog, where you choose what to download and where to put it.
 
 Right-click a torrent to pause, resume or force-start it, change its category or tags, set share limits, move it in the queue, open its folder, or copy its magnet link. Double-clicking a torrent opens its folder.
 
@@ -122,13 +128,20 @@ Right-click a torrent to pause, resume or force-start it, change its category or
 | --- | --- |
 | <kbd>Ctrl</kbd>+<kbd>O</kbd> | Add a torrent file |
 | <kbd>Ctrl</kbd>+<kbd>U</kbd> | Add magnet links or URLs |
-| <kbd>Ctrl</kbd>+<kbd>V</kbd> | Add the magnet links on the clipboard |
-| <kbd>Ctrl</kbd>+<kbd>F</kbd> | Open search |
+| <kbd>Ctrl</kbd>+<kbd>V</kbd> | Add the magnet links, info hashes or `.torrent` links on the clipboard |
+| <kbd>Ctrl</kbd>+<kbd>F</kbd> | Filter the torrent list |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd> | Open search |
+| <kbd>↑</kbd> <kbd>↓</kbd> <kbd>Home</kbd> <kbd>End</kbd> | Move through the list (<kbd>Shift</kbd> extends the selection) |
+| <kbd>Space</kbd> | Stop the selected torrents, or resume them if they're all stopped |
+| <kbd>Enter</kbd> | Open the focused torrent's folder |
 | <kbd>Ctrl</kbd>+<kbd>A</kbd> | Select all torrents |
 | <kbd>Delete</kbd> | Remove the selected torrents |
 
 ### Customising the torrent list
 Right-click any column header to show or hide columns, or to reset the layout. Drag a header to move a column, and drag a header's edge to resize it.
+
+### RSS
+Open the **RSS** tab, add a feed's URL, and use the filter button to set up download rules. A rule's words must all appear in an article's title (use `|` between alternatives), or switch it to a regular expression; the preview shows which current articles match. Rules apply to new articles as they arrive.
 
 ### Search
 Open the **Search** tab and choose **Search engines** to:
@@ -164,7 +177,7 @@ Security is a core design requirement. In short:
 
 **Known limitations:**
 - Peer traffic isn't encrypted (the engine has no MSE/PE support).
-- Search requests to the Internet Archive, Torznab indexers and plugins use your normal connection, even while the VPN is on.
+- On the VPN, search plugins reach the web through a local proxy bound to the tunnel. Plugins that use the standard helpers or Python's `urllib` go through it; one that opens its own sockets would bypass it.
 - Web seeds are skipped while a SOCKS5 proxy or anonymous mode is in use, since they would bypass the proxy.
 
 See **[SECURITY.md](SECURITY.md)** for the full threat model and how to report a vulnerability privately.
@@ -271,14 +284,14 @@ vendor/               Vendored librqbit with Riptor patches (see vendor/PATCHES.
 
 ## Roadmap
 
-Riptor is built in milestones. These are the main remaining items.
+The main remaining items.
 
-### Finish the VPN (milestone 4)
+### VPN
 Done: profile import and sanitizing, the elevated helper, the OpenVPN management client, Windows adapter binding, the kill switch and watchdog, NAT-PMP, the VPN page, the status indicator with a public-IP check, tracker and DHT lookups through the tunnel, WireGuard on Linux, a private Unix socket for OpenVPN management on Linux, and a security review.
 - [ ] Finish the end-to-end test with a real VPN provider. Verified on Windows: connecting with a provider OpenVPN profile works, Riptor appears with the VPN IP while other apps keep the normal IP, and the default route is untouched. Still to check: the IP trackers see, and that nothing leaks when the tunnel drops.
 - [ ] Test WireGuard and the Unix management socket on real Linux (so far only type-checked and built in CI).
 
-### Packaging and release (milestone 5)
+### Packaging and release
 Done: the Windows setup with OpenVPN and Python bundled, `.deb` and `.rpm` packages, checksums, draft releases from CI, an About page and a log viewer.
 - [ ] Test the installers on clean Windows and Linux machines.
 - [ ] Code signing (optional).
@@ -290,19 +303,18 @@ Done: web seeds (BEP 19), runtime per-torrent speed limits, force recheck, movin
 - [ ] Storage benchmark: the download path now measures the same as plain file I/O (medians within 1%), but results are noisy; re-check on a fast NVMe drive.
 
 ### Seeding and queueing
-Done: a weekly schedule for the alternative speed limits, a watched folder, moving files when a torrent's category changes, and creating torrents.
+Done: a weekly schedule for the alternative speed limits, a watched folder, moving files when a torrent's category changes, creating torrents, RSS feeds with download rules, an incomplete-downloads folder, file priorities, extra trackers for new torrents, and exporting `.torrent` files.
+- [ ] Try RSS against real feeds from sites and indexers.
 
 ### Search
 - [ ] Test the bubblewrap plugin sandbox on Linux.
 - [ ] Test popular community plugins. Set `RIPTOR_TEST_PYTHON` to run the plugin end-to-end test without a system Python.
 - [ ] Update the pinned embedded Python with each Python security release (3.14.8 is current).
-- [ ] Route search provider requests (Internet Archive, Torznab, plugins) through the VPN. Tracker lookups already are.
 
 ### Security and quality
 Done: hostile-input tests for torrents, bencode, backups, Torznab and Internet Archive replies, plugin results, tracker scrapes and VPN profiles. They found and fixed a stack overflow on deeply nested bencode, integer overflow in bencode numbers, and a crash on non-ASCII dates in search results.
 - [ ] Check for dependency updates regularly and upgrade by hand. Advisories already fail CI.
-- [ ] Move to Tailwind CSS 4. Tailwind 3's build tooling pulls in packages with open advisories (build time only, nothing shipped).
-- [ ] Do a security review at the end of each milestone.
+- [ ] Do a security review before each release.
 - [ ] Privately report the Windows path-escape issue and the bencode crashes to upstream librqbit (see `vendor/PATCHES.md`).
 - [ ] Test on real Linux hardware. So far Riptor has only been tested on Linux in CI.
 

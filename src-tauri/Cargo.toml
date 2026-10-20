@@ -31,6 +31,7 @@ parking_lot.workspace = true
 url.workspace = true
 riptor-core = { path = "../crates/riptor-core" }
 riptor-search = { path = "../crates/riptor-search" }
+riptor-rss = { path = "../crates/riptor-rss" }
 riptor-vpn = { path = "../crates/riptor-vpn" }
 getrandom = "0.3"
 

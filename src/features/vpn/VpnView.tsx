@@ -265,11 +265,11 @@ export function VpnView() {
     }
   };
 
-  const setForwarding = async (on: boolean) => {
+  const savePrefs = async (p: Partial<VpnPrefs>) => {
     if (!prefs) return;
     try {
-      await api.vpnSetPrefs({ ...prefs, port_forwarding: on });
-      setPrefs({ ...prefs, port_forwarding: on });
+      await api.vpnSetPrefs({ ...prefs, ...p });
+      setPrefs({ ...prefs, ...p });
     } catch (e) {
       toast("error", errorText(e));
     }
@@ -313,9 +313,19 @@ export function VpnView() {
             />
             <Toggle
               checked={prefs.port_forwarding}
-              onChange={setForwarding}
+              onChange={(v) => savePrefs({ port_forwarding: v })}
               label="Ask the VPN to forward a port (NAT-PMP)"
               hint="Lets other peers connect to you. Only works if your VPN provider and server support NAT-PMP port forwarding. Applies on the next connect."
+            />
+            <Toggle
+              checked={prefs.auto_connect}
+              onChange={(v) => savePrefs({ auto_connect: v })}
+              label="Connect when Riptor starts"
+              hint={
+                prefs.last_profile
+                  ? "Reconnects the profile you used last. Windows asks for administrator rights each time."
+                  : "Connect a profile once first; Riptor then reconnects it at startup."
+              }
             />
           </div>
         </section>

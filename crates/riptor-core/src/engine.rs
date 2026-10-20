@@ -55,6 +55,7 @@ struct Pending {
     multi_file: bool,
     file_count: usize,
     has_executables: bool,
+    private: bool,
     at: Instant,
 }
 
@@ -67,6 +68,8 @@ struct Runtime {
     dl_rate: f64,
     ul_rate: f64,
     running_since: Option<Instant>,
+    /// The live state file priorities were last applied to.
+    priorities_applied: Option<usize>,
 }
 
 pub struct Engine {
@@ -102,6 +105,9 @@ pub struct Engine {
     alt_window: Mutex<Option<bool>>,
     /// The torrent being created, if any.
     creating: Mutex<Option<Arc<crate::create::Progress>>>,
+    /// Finished downloads leaving the incomplete folder; `queued` waits for the ticker.
+    moving: Mutex<HashSet<Id20>>,
+    queued_moves: Mutex<Vec<(Id20, PathBuf)>>,
 }
 
 #[derive(Default)]
@@ -232,6 +238,8 @@ impl Engine {
             allow_local_web_seeds: AtomicBool::new(false),
             alt_window: Mutex::new(None),
             creating: Mutex::new(None),
+            moving: Mutex::new(HashSet::new()),
+            queued_moves: Mutex::new(Vec::new()),
         });
         engine.apply_limits();
         engine.forget_orphans().await;
@@ -279,7 +287,11 @@ impl Engine {
 
     /// Magnets can take a while: metadata comes from peers.
     pub async fn preview(&self, src: Source) -> anyhow::Result<Preview> {
-        let (add, mut trackers) = match input::resolve(&src, &self.http).await? {
+        let http = match &src {
+            Source::Url(u) => self.web_client(u)?,
+            _ => self.http.clone(),
+        };
+        let (add, mut trackers) = match input::resolve(&src, &http).await? {
             Resolved::Magnet(m) => {
                 let parsed = librqbit::Magnet::parse(&m)?;
                 (AddTorrent::from_url(m), parsed.trackers.clone())
@@ -362,6 +374,7 @@ impl Engine {
                     size: f.len,
                     done: 0,
                     selected: lo.only_files.as_ref().is_none_or(|o| o.contains(&i)),
+                    priority: FilePriority::Normal,
                 }
             })
             .collect();
@@ -398,6 +411,7 @@ impl Engine {
                 multi_file,
                 file_count: layout.files.len(),
                 has_executables,
+                private: lo.info.info().private,
                 at: Instant::now(),
             },
         );
@@ -447,10 +461,20 @@ impl Engine {
 
         let subfolder =
             params.create_subfolder.unwrap_or(settings.create_subfolder) && p.multi_file;
+        // Files already at the save folder (seeding what you have) stay put.
+        let has_data = base.join(sanitize_component(&p.name)).exists();
+        let incomplete = settings
+            .incomplete_dir
+            .clone()
+            .filter(|d| *d != base && !has_data);
+        if let Some(d) = &incomplete {
+            self.check_root(d)?;
+        }
+        let start = incomplete.as_ref().unwrap_or(&base);
         let (root, owned) = if subfolder {
-            (base.join(sanitize_component(&p.name)), true)
+            (start.join(sanitize_component(&p.name)), true)
         } else {
-            (base.clone(), false)
+            (start.clone(), false)
         };
         let root_str = root
             .to_str()
@@ -477,7 +501,17 @@ impl Engine {
             overwrite: true,
             output_folder: Some(root_str),
             only_files: params.only_files.clone(),
-            trackers: (!p.trackers.is_empty()).then(|| p.trackers.clone()),
+            trackers: {
+                let mut t = p.trackers.clone();
+                if !p.private {
+                    for extra in &settings.extra_trackers {
+                        if !t.contains(extra) {
+                            t.push(extra.clone());
+                        }
+                    }
+                }
+                (!t.is_empty()).then_some(t)
+            },
             ..Default::default()
         };
         if let Err(e) = self
@@ -523,6 +557,8 @@ impl Engine {
                 has_executables: p.has_executables,
                 dl_limit_kib: None,
                 ul_limit_kib: None,
+                move_on_complete: incomplete.map(|_| base.clone()),
+                file_priority: BTreeMap::new(),
             },
         );
         drop(records);
@@ -530,6 +566,19 @@ impl Engine {
         self.persist_now()?;
         info!("added {}", p.name);
         Ok(hash.as_string())
+    }
+
+    /// Links are fetched the way torrents connect: through the VPN when it's on.
+    pub fn web_client(&self, url: &str) -> anyhow::Result<reqwest::Client> {
+        let lan = url::Url::parse(url).is_ok_and(|u| riptor_net::stays_local(&u));
+        match self.network() {
+            _ if lan => Ok(self.http.clone()),
+            NetworkMode::Normal => Ok(self.http.clone()),
+            NetworkMode::Vpn(b) => webseed::client(Some(b.local_ip.into()), false),
+            NetworkMode::Blocked => {
+                bail!("waiting for the VPN: the kill switch holds downloads while it's down")
+            }
+        }
     }
 
     pub async fn add_direct(&self, src: Source, mut params: AddParams) -> anyhow::Result<String> {
@@ -607,10 +656,40 @@ impl Engine {
     /// Moves each torrent's files under `dest`; a torrent's own folder comes along.
     pub async fn move_torrents(&self, ids: &[String], dest: &Path) -> anyhow::Result<()> {
         self.check_root(dest)?;
+        // An explicit move replaces the move out of the incomplete folder.
+        self.edit_records(ids, |r| r.move_on_complete = None)?;
         for id in ids {
             self.reattach(parse_hash(id)?, Some(dest)).await?;
         }
         Ok(())
+    }
+
+    /// Moves a finished download out of the incomplete folder.
+    async fn finish_move(&self, hash: Id20, dest: PathBuf) {
+        let result = match self.check_root(&dest) {
+            Ok(()) => self.reattach(hash, Some(&dest)).await,
+            Err(e) => Err(e),
+        };
+        let name = self.records.write().get_mut(&hash).map(|r| {
+            r.move_on_complete = None;
+            r.name.clone()
+        });
+        self.dirty.store(true, Ordering::Relaxed);
+        self.moving.lock().remove(&hash);
+        if let (Err(e), Some(name)) = (result, name) {
+            warn!("moving {name} out of the incomplete folder failed: {e:#}");
+            let _ = self.events.send(Event::Notice {
+                level: NoticeLevel::Warning,
+                message: format!(
+                    "{name} finished but couldn't be moved to {}: {e:#}",
+                    dest.display()
+                ),
+            });
+        }
+    }
+
+    fn take_queued_moves(&self) -> Vec<(Id20, PathBuf)> {
+        std::mem::take(&mut *self.queued_moves.lock())
     }
 
     /// Moves torrents into their category's folder (or the default one).
@@ -626,6 +705,15 @@ impl Engine {
                 .as_ref()
                 .and_then(|c| self.categories.read().get(c).cloned().flatten())
                 .unwrap_or_else(|| download_dir.clone());
+            // Still downloading: it moves to the new folder once complete.
+            if rec.move_on_complete.is_some() {
+                self.check_root(&target)?;
+                if let Some(r) = self.records.write().get_mut(&hash) {
+                    r.move_on_complete = Some(target);
+                }
+                self.dirty.store(true, Ordering::Relaxed);
+                continue;
+            }
             let base = if rec.owned_root {
                 rec.root.parent().map(Path::to_path_buf)
             } else {
@@ -775,6 +863,61 @@ impl Engine {
         self.session().update_only_files(&t, &set).await
     }
 
+    pub fn set_file_priority(
+        &self,
+        id: &str,
+        files: &[usize],
+        priority: FilePriority,
+    ) -> anyhow::Result<()> {
+        let hash = parse_hash(id)?;
+        let t = self.handle(&hash)?;
+        let count = t.with_metadata(|m| m.file_infos.len())?;
+        ensure!(
+            !files.is_empty() && files.iter().all(|i| *i < count),
+            "invalid file selection"
+        );
+        {
+            let mut records = self.records.write();
+            let rec = records.get_mut(&hash).context("unknown torrent")?;
+            for i in files {
+                if priority == FilePriority::Normal {
+                    rec.file_priority.remove(i);
+                } else {
+                    rec.file_priority.insert(*i, priority);
+                }
+            }
+        }
+        if let Some(r) = self.runtime.lock().get_mut(&hash) {
+            r.priorities_applied = None;
+        }
+        self.dirty.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Saves the torrent's .torrent file.
+    pub fn export_torrent(&self, id: &str, path: &Path) -> anyhow::Result<()> {
+        ensure!(path.is_absolute(), "path must be absolute");
+        ensure!(
+            path.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("torrent")),
+            "the file must end in .torrent"
+        );
+        self.check_root(path.parent().context("no folder")?)?;
+        if let Ok(existing) = std::fs::read(path) {
+            ensure!(
+                existing.first() == Some(&b'd'),
+                "{} exists and is not a torrent file",
+                path.display()
+            );
+        }
+        let bytes = self
+            .handle(&parse_hash(id)?)?
+            .with_metadata(|m| m.torrent_bytes.clone())?;
+        ensure!(!bytes.is_empty(), "this torrent's metadata isn't known yet");
+        std::fs::write(path, &bytes)?;
+        Ok(())
+    }
+
     pub fn set_category(&self, ids: &[String], category: Option<String>) -> anyhow::Result<()> {
         if let Some(c) = &category {
             validate_label(c)?;
@@ -914,6 +1057,12 @@ impl Engine {
             .context("torrent has no save folder")?;
         let stats = t.stats();
         let only = t.only_files();
+        let priorities = self
+            .records
+            .read()
+            .get(&hash)
+            .map(|r| r.file_priority.clone())
+            .unwrap_or_default();
         t.with_metadata(|m| -> anyhow::Result<Vec<FileEntry>> {
             let layout = layout_for(&root, m)?;
             Ok(layout
@@ -935,6 +1084,7 @@ impl Engine {
                         size: f.len,
                         done: stats.file_progress.get(i).copied().unwrap_or(0),
                         selected: only.as_ref().is_none_or(|o| o.contains(&i)),
+                        priority: priorities.get(&i).copied().unwrap_or_default(),
                     }
                 })
                 .collect())
@@ -998,6 +1148,24 @@ impl Engine {
             )?),
             None => Ok(serde_json::Value::Null),
         }
+    }
+
+    /// One file's path on disk, and whether it's fully downloaded.
+    pub fn file_path(&self, id: &str, index: usize) -> anyhow::Result<(PathBuf, bool)> {
+        let hash = parse_hash(id)?;
+        let root = self.factory.root_of(&hash).context("unknown torrent")?;
+        let t = self.handle(&hash)?;
+        let done = t.stats().file_progress.get(index).copied();
+        let (path, len) = t.with_metadata(|m| -> anyhow::Result<(PathBuf, u64)> {
+            let layout = layout_for(&root, m)?;
+            let f = layout
+                .files
+                .get(index)
+                .filter(|f| !f.padding)
+                .context("no such file")?;
+            Ok((f.path.clone(), f.len))
+        })??;
+        Ok((path, done == Some(len)))
     }
 
     pub fn reveal_target(&self, id: &str) -> anyhow::Result<RevealTarget> {
@@ -1191,7 +1359,7 @@ impl Engine {
 
     // -------------------------------------------------------------- backup
 
-    fn check_root(&self, p: &Path) -> anyhow::Result<()> {
+    pub fn check_root(&self, p: &Path) -> anyhow::Result<()> {
         paths::check_save_root(p, Some(&self.data_dir))
     }
 
@@ -1506,10 +1674,27 @@ impl Engine {
                     continue;
                 };
                 let stats = h.stats();
+                let r = rt.entry(hash).or_default();
                 if let Some(live) = h.live() {
                     apply_speed_limits(live.ratelimits(), rec.dl_limit_kib, rec.ul_limit_kib);
+                    let key = Arc::as_ptr(&live) as usize;
+                    if r.priorities_applied != Some(key) {
+                        let len = rec.file_priority.keys().max().map_or(0, |m| m + 1);
+                        let mut levels = vec![FilePriority::Normal.level(); len];
+                        for (i, p) in &rec.file_priority {
+                            levels[*i] = p.level();
+                        }
+                        live.set_file_priority_levels(&levels);
+                        r.priorities_applied = Some(key);
+                    }
                 }
-                let r = rt.entry(hash).or_default();
+                if rec.completed_on.is_some() {
+                    if let Some(dest) = &rec.move_on_complete {
+                        if self.moving.lock().insert(hash) {
+                            self.queued_moves.lock().push((hash, dest.clone()));
+                        }
+                    }
+                }
                 let running = matches!(stats.state, TorrentStatsState::Live);
                 let (fetched, uploaded, checked, peers, seen) = stats
                     .live
@@ -1613,7 +1798,14 @@ impl Engine {
                     limits: rec.limits,
                     limit_action: rec.limit_action,
                 });
-                summaries.push(summarize(rec, &stats, r, peers, seen));
+                let tracker = h
+                    .shared()
+                    .trackers
+                    .iter()
+                    .filter_map(|u| u.host_str())
+                    .min()
+                    .map(str::to_string);
+                summaries.push(summarize(rec, &stats, r, peers, seen, tracker));
                 if running && !stats.finished {
                     if let Some(live) = h.live() {
                         web_wanted.push((hash, h.clone(), live));
@@ -1743,11 +1935,13 @@ impl Engine {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let add_stopped = self.settings.read().add_stopped;
             let added = match self.preview(Source::File(path.clone())).await {
                 Ok(p) if p.already_added => Ok(()),
                 Ok(p) => self
                     .add(AddParams {
                         info_hash: p.info_hash,
+                        start_paused: add_stopped,
                         ..Default::default()
                     })
                     .await
@@ -1955,6 +2149,7 @@ fn summarize(
     r: &Runtime,
     peers: u32,
     seen: u32,
+    tracker: Option<String>,
 ) -> TorrentSummary {
     let state = match stats.state {
         TorrentStatsState::Error => TorrentState::Error,
@@ -2007,6 +2202,7 @@ fn summarize(
         category: rec.category.clone(),
         tags: rec.tags.clone(),
         save_path: rec.root.to_string_lossy().into_owned(),
+        tracker,
         added_on: rec.added_on,
         completed_on: rec.completed_on,
         seeding_time: rec.seeding_time,
@@ -2111,6 +2307,10 @@ fn spawn_ticker(engine: Weak<Engine>) {
             iv.tick().await;
             let Some(e) = engine.upgrade() else { break };
             e.tick().await;
+            for (hash, dest) in e.take_queued_moves() {
+                let e = e.clone();
+                tokio::spawn(async move { e.finish_move(hash, dest).await });
+            }
         }
     });
 }

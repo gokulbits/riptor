@@ -14,11 +14,12 @@ use tracing::warn;
 use crate::catalog::{self, Catalog};
 use crate::nova::{self, PluginCaps, PluginPreview, Python};
 use crate::{
-    archive, clean, dedupe_key, pyembed, scrape, secrets, torznab, ProviderInfo, ProviderKind,
-    SearchEvent, SearchResult,
+    archive, clean, dedupe_key, proxy, pyembed, scrape, secrets, torznab, ProviderInfo,
+    ProviderKind, SearchEvent, SearchResult,
 };
 
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(45);
+const HELD: &str = "waiting for the VPN: the kill switch holds searches while it's down";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TorznabEndpoint {
@@ -78,16 +79,24 @@ pub struct SearchManager {
     catalog: tokio::sync::Mutex<Option<(Instant, Catalog)>>,
     active: Mutex<HashMap<u64, CancellationToken>>,
     next_id: AtomicU64,
-    lookup_route: RwLock<LookupRoute>,
+    route: RwLock<Route>,
     shipped_python: RwLock<Option<PathBuf>>,
 }
 
+/// How searches, plugins and seed lookups reach the internet.
 #[derive(Clone)]
-pub enum LookupRoute {
+pub enum Route {
     Direct,
     /// Through the VPN tunnel.
     Tunnel(scrape::Tunnel),
-    /// Kill switch on: no lookups.
+    /// Kill switch on: nothing leaves except to the LAN.
+    Held,
+}
+
+/// One search's way out, built from the current [`Route`].
+enum Reach {
+    Direct,
+    Tunnel(scrape::Net, scrape::Tunnel),
     Held,
 }
 
@@ -128,7 +137,7 @@ impl SearchManager {
             catalog: tokio::sync::Mutex::new(None),
             active: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
-            lookup_route: RwLock::new(LookupRoute::Direct),
+            route: RwLock::new(Route::Direct),
             shipped_python: RwLock::new(None),
         }))
     }
@@ -139,9 +148,42 @@ impl SearchManager {
         }
     }
 
-    /// How tracker lookups for the next searches reach the trackers.
-    pub fn route_lookups(&self, route: LookupRoute) {
-        *self.lookup_route.write() = route;
+    /// Applies to searches and downloads started after this.
+    pub fn set_route(&self, route: Route) {
+        *self.route.write() = route;
+    }
+
+    fn reach(&self) -> anyhow::Result<Reach> {
+        Ok(match self.route.read().clone() {
+            Route::Direct => Reach::Direct,
+            Route::Tunnel(t) => Reach::Tunnel(scrape::Net::through(t.clone(), false)?, t),
+            Route::Held => Reach::Held,
+        })
+    }
+
+    /// Loopback and LAN addresses are reached directly; the VPN only matters for the internet.
+    fn http_for<'a>(
+        &'a self,
+        reach: &'a Reach,
+        url: Option<&str>,
+    ) -> anyhow::Result<&'a reqwest::Client> {
+        let local = url
+            .and_then(|u| url::Url::parse(u).ok())
+            .is_some_and(|u| riptor_net::stays_local(&u));
+        match reach {
+            _ if local => Ok(&self.http),
+            Reach::Direct => Ok(&self.http),
+            Reach::Tunnel(net, _) => Ok(&net.http),
+            Reach::Held => bail!(HELD),
+        }
+    }
+
+    async fn plugin_proxy(reach: &Reach) -> anyhow::Result<Option<proxy::Proxy>> {
+        match reach {
+            Reach::Direct => Ok(None),
+            Reach::Tunnel(_, t) => Ok(Some(proxy::Proxy::start(t.clone(), false).await?)),
+            Reach::Held => bail!(HELD),
+        }
     }
 
     pub fn set_scrape(&self, on: bool) -> anyhow::Result<()> {
@@ -489,7 +531,15 @@ impl SearchManager {
             .strip_prefix("plugin:")
             .context("not a plugin result")?;
         let py = self.python().await.context("Python is not installed")?;
-        nova::download(&py, &self.dir, short, url).await
+        let proxy = Self::plugin_proxy(&self.reach()?).await?;
+        nova::download(
+            &py,
+            &self.dir,
+            short,
+            url,
+            proxy.as_ref().map(|p| p.url()).as_deref(),
+        )
+        .await
     }
 
     // ------------------------------------------------------------- search
@@ -532,10 +582,10 @@ impl SearchManager {
         let category = category.to_string();
 
         let (lookup_tx, lookup_rx) = tokio::sync::mpsc::unbounded_channel::<scrape::Job>();
-        let route = self.lookup_route.read().clone();
-        let lookups_on = self.config.read().scrape && !matches!(route, LookupRoute::Held);
-        let net = match route {
-            LookupRoute::Tunnel(t) => scrape::Net::through(t, false)?,
+        let reach = Arc::new(self.reach()?);
+        let lookups_on = self.config.read().scrape && !matches!(*reach, Reach::Held);
+        let net = match &*reach {
+            Reach::Tunnel(n, _) => n.clone(),
             _ => self.scrape_net.clone(),
         };
 
@@ -557,8 +607,8 @@ impl SearchManager {
                 })
             };
             let tasks = chosen.into_iter().map(|p| {
-                let (me, sink, seen, token, query, category, lookup_tx) =
-                    (me.clone(), sink.clone(), seen.clone(), token.clone(), query.clone(), category.clone(), lookup_tx.clone());
+                let (me, sink, seen, token, query, category, lookup_tx, reach) =
+                    (me.clone(), sink.clone(), seen.clone(), token.clone(), query.clone(), category.clone(), lookup_tx.clone(), reach.clone());
                 async move {
                     let emit = |batch: Vec<SearchResult>| {
                         let mut s = seen.lock();
@@ -575,7 +625,7 @@ impl SearchManager {
                         }
                     };
                     let result = tokio::select! {
-                        r = tokio::time::timeout(PROVIDER_TIMEOUT, me.run_provider(&p, &query, &category, token.clone(), emit)) =>
+                        r = tokio::time::timeout(PROVIDER_TIMEOUT, me.run_provider(&p, &query, &category, &reach, token.clone(), emit)) =>
                             r.unwrap_or_else(|_| Err(anyhow::anyhow!("timed out"))),
                         _ = token.cancelled() => Ok(0),
                     };
@@ -601,15 +651,19 @@ impl SearchManager {
         p: &ProviderInfo,
         query: &str,
         category: &str,
+        reach: &Reach,
         token: CancellationToken,
         mut emit: impl FnMut(Vec<SearchResult>),
     ) -> anyhow::Result<usize> {
         let results = match p.kind {
-            ProviderKind::Builtin => archive::search(&self.http, query, category).await?,
+            ProviderKind::Builtin => {
+                archive::search(self.http_for(reach, None)?, query, category).await?
+            }
             ProviderKind::Torznab => {
+                let http = self.http_for(reach, Some(&p.url))?;
                 let short = p.id.strip_prefix("torznab:").unwrap_or(&p.id);
                 let key = secrets::api_key(short)?;
-                torznab::search(&self.http, &p.url, &key, &p.id, query, category).await?
+                torznab::search(http, &p.url, &key, &p.id, query, category).await?
             }
             ProviderKind::Plugin => {
                 let py = self
@@ -617,12 +671,23 @@ impl SearchManager {
                     .await
                     .context("Python 3.9 or newer is needed for plugins")?;
                 let short = p.id.strip_prefix("plugin:").unwrap_or(&p.id).to_string();
-                return nova::search(&py, &self.dir, &short, category, query, token, |mut b| {
-                    for r in &mut b {
-                        r.engine = p.id.clone();
-                    }
-                    emit(b)
-                })
+                let proxy = Self::plugin_proxy(reach).await?;
+                let proxy_url = proxy.as_ref().map(|p| p.url());
+                return nova::search(
+                    &py,
+                    &self.dir,
+                    &short,
+                    category,
+                    query,
+                    proxy_url.as_deref(),
+                    token,
+                    |mut b| {
+                        for r in &mut b {
+                            r.engine = p.id.clone();
+                        }
+                        emit(b)
+                    },
+                )
                 .await;
             }
         };

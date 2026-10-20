@@ -14,6 +14,10 @@ const APP_COMMANDS = new Set([
   "search_remove_python", "search_options", "search_set_scrape",
   "vpn_profiles", "vpn_import", "vpn_delete", "vpn_set_credentials", "vpn_connect", "vpn_disconnect",
   "vpn_status", "vpn_get_prefs", "vpn_set_prefs", "vpn_openvpn_installed",
+  "autostart_get", "autostart_set",
+  "set_file_priority", "export_torrent", "reveal_torrent_file", "open_torrent_file",
+  "rss_view", "rss_articles", "rss_add_feed", "rss_remove_feed", "rss_rename_feed", "rss_mark_read",
+  "rss_refresh", "rss_set_options", "rss_save_rule", "rss_delete_rule", "rss_preview_rule",
 ]);
 const PLUGIN_PREFIXES = ["plugin:event|", "plugin:window|", "plugin:webview|", "plugin:app|", "plugin:path|"];
 const PLUGIN_COMMANDS = new Set(["plugin:dialog|open", "plugin:dialog|save", "plugin:dialog|message", "plugin:dialog|ask", "plugin:dialog|confirm"]);

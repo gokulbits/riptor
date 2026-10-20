@@ -1,0 +1,21 @@
+[package]
+name = "riptor-rss"
+description = "RSS and Atom feeds with download rules for Riptor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+url.workspace = true
+quick-xml = "0.42"
+regex = "1"
+riptor-search = { path = "../riptor-search" }
+
+[dev-dependencies]
+tempfile.workspace = true

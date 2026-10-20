@@ -1,7 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
 import { AlertTriangle, ArrowDown, ArrowUp, Check, RotateCcw } from "lucide-react";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatBytes, formatDate, formatDuration, formatPercent, formatRate, formatRatio } from "../../lib/format";
 import { api, errorText } from "../../lib/ipc";
 import type { ColumnPref, TorrentSummary } from "../../lib/types";
@@ -15,6 +15,8 @@ interface Column {
   label: string;
   width: number;
   align?: "right";
+  /** Off until turned on from the header menu. */
+  hidden?: boolean;
   render: (t: TorrentSummary) => ReactNode;
 }
 
@@ -53,6 +55,13 @@ const COLUMNS: Column[] = [
   { key: "ratio", label: "Ratio", width: 64, align: "right", render: (t) => formatRatio(t.ratio) },
   { key: "category", label: "Category", width: 100, render: (t) => t.category ?? "" },
   { key: "added_on", label: "Added", width: 150, render: (t) => formatDate(t.added_on) },
+  { key: "downloaded", label: "Downloaded", width: 96, align: "right", hidden: true, render: (t) => formatBytes(t.downloaded) },
+  { key: "uploaded", label: "Uploaded", width: 96, align: "right", hidden: true, render: (t) => formatBytes(t.uploaded) },
+  { key: "completed_on", label: "Completed", width: 150, hidden: true, render: (t) => (t.completed_on ? formatDate(t.completed_on) : "") },
+  { key: "seeding_time", label: "Seeding Time", width: 100, align: "right", hidden: true, render: (t) => (t.seeding_time ? formatDuration(t.seeding_time) : "") },
+  { key: "tags", label: "Tags", width: 120, hidden: true, render: (t) => <span title={t.tags.join(", ")}>{t.tags.join(", ")}</span> },
+  { key: "tracker", label: "Tracker", width: 150, hidden: true, render: (t) => t.tracker ?? "" },
+  { key: "save_path", label: "Save Path", width: 220, hidden: true, render: (t) => <span title={t.save_path}>{t.save_path}</span> },
 ];
 
 const ROW_HEIGHT = 30;
@@ -75,7 +84,7 @@ function layout(prefs: ColumnPref[]): Slot[] {
     seen.add(p.key);
     out.push({ col, visible: p.visible || col.key === "name", width: p.width ?? col.width });
   }
-  for (const col of COLUMNS) if (!seen.has(col.key)) out.push({ col, visible: true, width: col.width });
+  for (const col of COLUMNS) if (!seen.has(col.key)) out.push({ col, visible: !col.hidden, width: col.width });
   return out;
 }
 
@@ -144,6 +153,13 @@ export function TorrentTable({
     overscan: 12,
   });
   const ids = useMemo(() => rows.map((r) => r.id), [rows]);
+  const focused = useApp((s) => s.focused);
+  // Keyboard moves keep the focused row on screen.
+  useEffect(() => {
+    const i = focused ? ids.indexOf(focused) : -1;
+    if (i >= 0) virtualizer.scrollToIndex(i, { align: "auto" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focused]);
   const template = shown.map((s) => `${s.width}px`).join(" ");
   const totalWidth = shown.reduce((n, s) => n + s.width, 0);
 

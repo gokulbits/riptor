@@ -23,6 +23,18 @@ pub struct ColumnPref {
 }
 
 const MAX_COLUMNS: usize = 32;
+const MAX_EXTRA_TRACKERS: usize = 100;
+
+/// http(s) or udp, no credentials or odd characters.
+pub fn valid_tracker(t: &str) -> bool {
+    t.len() <= 512
+        && !t.chars().any(|c| c.is_whitespace() || c.is_control())
+        && url::Url::parse(t).is_ok_and(|u| {
+            matches!(u.scheme(), "http" | "https" | "udp")
+                && u.host_str().is_some()
+                && u.password().is_none()
+        })
+}
 
 /// When the alternative speed limits switch on by themselves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +99,12 @@ pub struct Settings {
     pub alt_schedule: AltSchedule,
     /// `.torrent` files saved here are added automatically.
     pub watched_folder: Option<PathBuf>,
+    /// Downloads live here until complete, then move to their save folder.
+    pub incomplete_dir: Option<PathBuf>,
+    /// Added to every new torrent that isn't private.
+    pub extra_trackers: Vec<String>,
+    /// New torrents start stopped (the add dialog's default, the watched folder, RSS).
+    pub add_stopped: bool,
     /// `socks5://[user:pass@]host:port` for peer connections.
     pub proxy_url: Option<String>,
     pub blocklist_url: Option<String>,
@@ -125,6 +143,9 @@ impl Default for Settings {
             alt_speed_enabled: false,
             alt_schedule: AltSchedule::default(),
             watched_folder: None,
+            incomplete_dir: None,
+            extra_trackers: Vec::new(),
+            add_stopped: false,
             proxy_url: None,
             blocklist_url: None,
             anonymous_mode: false,
@@ -174,6 +195,19 @@ impl Settings {
         );
         if let Some(w) = &self.watched_folder {
             anyhow::ensure!(w.is_absolute(), "watched folder must be an absolute path");
+        }
+        if let Some(d) = &self.incomplete_dir {
+            anyhow::ensure!(
+                d.is_absolute(),
+                "incomplete downloads folder must be an absolute path"
+            );
+        }
+        anyhow::ensure!(
+            self.extra_trackers.len() <= MAX_EXTRA_TRACKERS,
+            "too many trackers"
+        );
+        for t in &self.extra_trackers {
+            anyhow::ensure!(valid_tracker(t), "not a tracker URL: {t}");
         }
         anyhow::ensure!(self.columns.len() <= MAX_COLUMNS, "too many columns");
         let mut seen = std::collections::HashSet::new();
@@ -239,6 +273,24 @@ mod tests {
         s.blocklist_url = Some("http://plain.example/list".into());
         assert!(s.validate().is_err());
         s.blocklist_url = None;
+        s.extra_trackers = vec!["udp://tracker.example:1337/announce".into()];
+        s.validate().unwrap();
+        for bad in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "udp://a b/announce",
+            "http://user:pass@tracker.example/announce",
+            "udp://",
+        ] {
+            s.extra_trackers = vec![bad.into()];
+            assert!(s.validate().is_err(), "{bad}");
+        }
+        s.extra_trackers = vec!["udp://t.example:1/a".into(); 101];
+        assert!(s.validate().is_err());
+        s.extra_trackers.clear();
+        s.incomplete_dir = Some(PathBuf::from("relative"));
+        assert!(s.validate().is_err());
+        s.incomplete_dir = None;
         s.download_dir = PathBuf::from("relative");
         assert!(s.validate().is_err());
     }

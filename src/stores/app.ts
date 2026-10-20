@@ -13,7 +13,10 @@ export type StatusFilter =
   | "queued"
   | "errored";
 
-const SORT_KEYS = ["name", "size", "progress", "state", "peers", "dl_rate", "ul_rate", "eta", "ratio", "added_on", "queue_pos", "category"] as const;
+const SORT_KEYS = [
+  "name", "size", "progress", "state", "peers", "dl_rate", "ul_rate", "eta", "ratio", "added_on", "queue_pos", "category",
+  "downloaded", "uploaded", "save_path", "tags", "completed_on", "seeding_time", "tracker",
+] as const;
 export type SortKey = (typeof SORT_KEYS)[number];
 
 function loadSort(): { key: SortKey; desc: boolean } {
@@ -91,10 +94,12 @@ interface AppState {
   status: StatusFilter;
   category: string | null | undefined; // undefined = all, null = uncategorised
   tag: string | null;
+  /** Tracker host; "" means torrents without trackers. */
+  tracker: string | null;
   search: string;
   sort: { key: SortKey; desc: boolean };
 
-  view: "transfers" | "search" | "vpn";
+  view: "transfers" | "search" | "rss" | "vpn";
   /** From settings; null until loaded. */
   columnPrefs: ColumnPref[] | null;
   setColumnPrefs: (c: ColumnPref[]) => void;
@@ -116,9 +121,10 @@ interface AppState {
   setStatus: (s: StatusFilter) => void;
   setCategory: (c: string | null | undefined) => void;
   setTag: (t: string | null) => void;
+  setTracker: (t: string | null) => void;
   setSearch: (s: string) => void;
   setSort: (key: SortKey) => void;
-  setView: (v: "transfers" | "search" | "vpn") => void;
+  setView: (v: "transfers" | "search" | "rss" | "vpn") => void;
   setTheme: (t: Theme) => void;
   setAccent: (a: string) => void;
   queueAdds: (items: Source[]) => void;
@@ -142,6 +148,7 @@ export const useApp = create<AppState>()((set, get) => ({
   status: "all",
   category: undefined,
   tag: null,
+  tracker: null,
   search: "",
   sort: loadSort(),
   view: "transfers",
@@ -208,6 +215,7 @@ export const useApp = create<AppState>()((set, get) => ({
   setStatus: (status) => set({ status }),
   setCategory: (category) => set({ category }),
   setTag: (tag) => set({ tag }),
+  setTracker: (tracker) => set({ tracker }),
   setSearch: (search) => set({ search }),
   setSort: (key) =>
     set((s) => {
@@ -243,14 +251,16 @@ export function visibleTorrents(s: AppState): TorrentSummary[] {
     if (!matchesStatus(t, s.status)) continue;
     if (s.category !== undefined && t.category !== s.category) continue;
     if (s.tag && !t.tags.includes(s.tag)) continue;
+    if (s.tracker !== null && (t.tracker ?? "") !== s.tracker) continue;
     if (q && !t.name.toLowerCase().includes(q)) continue;
     list.push(t);
   }
   const { key, desc } = s.sort;
   const dir = desc ? -1 : 1;
   list.sort((a, b) => {
-    const av = a[key] as unknown;
-    const bv = b[key] as unknown;
+    const pick = (t: TorrentSummary) => (Array.isArray(t[key]) ? (t[key] as string[]).join(", ") || null : t[key]) as unknown;
+    const av = pick(a);
+    const bv = pick(b);
     if (av == null && bv == null) return 0;
     if (av == null) return 1;
     if (bv == null) return -1;
