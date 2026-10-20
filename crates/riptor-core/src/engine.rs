@@ -2036,8 +2036,10 @@ async fn build_session(
         .map(|v| std::net::IpAddr::V4(v.local_ip))
         .or(s.listen_address);
     // On the VPN, tracker and DHT lookups go through the tunnel too.
-    let resolver =
-        vpn.map(|v| crate::dns::TunnelResolver::new(v.local_ip.into(), &crate::dns::SERVERS));
+    let resolver = vpn
+        .map(|v| crate::dns::TunnelResolver::new(v.local_ip.into(), &crate::dns::SERVERS))
+        .transpose()
+        .context("setting up DNS through the VPN")?;
     crate::dns::install(resolver.as_ref());
     let dht = (s.dht && !anon && !blocked).then(|| DhtSessionConfig {
         persistence: Some(DhtPersistenceConfig {

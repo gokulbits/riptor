@@ -403,16 +403,17 @@ pub async fn search_start(
         s.route_lookups(match e.network() {
             NetworkMode::Normal => LookupRoute::Direct,
             NetworkMode::Blocked => LookupRoute::Held,
-            NetworkMode::Vpn(b) => {
-                let r = riptor_core::dns::TunnelResolver::new(
-                    b.local_ip.into(),
-                    &riptor_core::dns::SERVERS,
-                );
-                LookupRoute::Tunnel(riptor_search::scrape::Tunnel {
+            // Never the system resolver while on the VPN.
+            NetworkMode::Vpn(b) => match riptor_core::dns::TunnelResolver::new(
+                b.local_ip.into(),
+                &riptor_core::dns::SERVERS,
+            ) {
+                Ok(r) => LookupRoute::Tunnel(riptor_search::scrape::Tunnel {
                     local: b.local_ip.into(),
                     lookup: r.hook(),
-                })
-            }
+                }),
+                Err(_) => LookupRoute::Held,
+            },
         });
     }
     s.start(&query, &category, providers, sink)

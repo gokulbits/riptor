@@ -5,9 +5,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use hickory_resolver::config::{NameServerConfig, ResolveHosts, ResolverConfig, ResolverOpts};
-use hickory_resolver::name_server::TokioConnectionProvider;
-use hickory_resolver::proto::xfer::Protocol;
+use hickory_resolver::config::{
+    ConnectionConfig, NameServerConfig, ResolveHosts, ResolverConfig, ResolverOpts,
+};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::TokioResolver;
 
 /// Public resolvers, reached through the tunnel.
@@ -22,23 +23,30 @@ pub struct TunnelResolver {
 }
 
 impl TunnelResolver {
-    pub fn new(bind: IpAddr, servers: &[SocketAddr]) -> Self {
-        let mut cfg = ResolverConfig::new();
-        for s in servers {
-            for p in [Protocol::Udp, Protocol::Tcp] {
-                let mut ns = NameServerConfig::new(*s, p);
-                ns.bind_addr = Some(SocketAddr::new(bind, 0));
-                cfg.add_name_server(ns);
-            }
-        }
+    pub fn new(bind: IpAddr, servers: &[SocketAddr]) -> anyhow::Result<Self> {
+        let name_servers = servers
+            .iter()
+            .map(|s| {
+                let connections = [ConnectionConfig::udp(), ConnectionConfig::tcp()]
+                    .into_iter()
+                    .map(|mut c| {
+                        c.port = s.port();
+                        c.bind_addr = Some(SocketAddr::new(bind, 0));
+                        c
+                    })
+                    .collect();
+                NameServerConfig::new(s.ip(), true, connections)
+            })
+            .collect();
+        let cfg = ResolverConfig::from_name_servers(name_servers);
         let mut opts = ResolverOpts::default();
         opts.timeout = Duration::from_secs(4);
         opts.attempts = 2;
         opts.use_hosts_file = ResolveHosts::Never;
-        let inner = TokioResolver::builder_with_config(cfg, TokioConnectionProvider::default())
+        let inner = TokioResolver::builder_with_config(cfg, TokioRuntimeProvider::default())
             .with_options(opts)
-            .build();
-        Self { inner }
+            .build()?;
+        Ok(Self { inner })
     }
 
     pub async fn lookup(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
@@ -95,7 +103,12 @@ mod tests {
                 let q = &buf[..n];
                 let mut r = Vec::from(&q[..2]); // id
                 r.extend_from_slice(&[0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0]);
-                r.extend_from_slice(&q[12..]); // the question
+                // The question only, not the EDNS record that follows it.
+                let mut end = 12;
+                while end < n && q[end] != 0 {
+                    end += 1 + q[end] as usize;
+                }
+                r.extend_from_slice(&q[12..(end + 5).min(n)]);
                 r.extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 203, 0, 113, 9]);
                 let _ = sock.send_to(&r, from).await;
             }
@@ -106,7 +119,7 @@ mod tests {
     #[tokio::test]
     async fn queries_go_to_the_given_servers_from_the_bound_address() {
         let server = fake_dns().await;
-        let r = TunnelResolver::new(IpAddr::V4(Ipv4Addr::LOCALHOST), &[server]);
+        let r = TunnelResolver::new(IpAddr::V4(Ipv4Addr::LOCALHOST), &[server]).unwrap();
         let got = r.lookup("tracker.example", 6969).await.unwrap();
         assert_eq!(got, vec!["203.0.113.9:6969".parse().unwrap()]);
         // Literal addresses never hit the network.
@@ -119,7 +132,7 @@ mod tests {
     #[tokio::test]
     async fn the_hook_reaches_the_patched_crates() {
         let server = fake_dns().await;
-        let r = TunnelResolver::new(IpAddr::V4(Ipv4Addr::LOCALHOST), &[server]);
+        let r = TunnelResolver::new(IpAddr::V4(Ipv4Addr::LOCALHOST), &[server]).unwrap();
         install(Some(&r));
         let got = librqbit_dht::resolve_hook::lookup("router.example", 6881)
             .await

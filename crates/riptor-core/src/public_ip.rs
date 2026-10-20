@@ -24,7 +24,7 @@ pub async fn lookup(local: Option<IpAddr>) -> anyhow::Result<IpAddr> {
         .timeout(Duration::from_secs(10))
         .user_agent("Riptor");
     if let Some(ip) = local {
-        let resolver = crate::dns::TunnelResolver::new(ip, &crate::dns::SERVERS);
+        let resolver = crate::dns::TunnelResolver::new(ip, &crate::dns::SERVERS)?;
         b = b
             .local_address(ip)
             .dns_resolver(std::sync::Arc::new(resolver));
