@@ -9,18 +9,18 @@ pub struct UpdateInfo {
     pub date: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct Progress {
-    pub done: u64,
-    pub total: Option<u64>,
-}
-
 #[cfg(windows)]
 mod imp {
     use super::*;
     use parking_lot::Mutex;
     use tauri::{AppHandle, Emitter, Manager};
     use tauri_plugin_updater::{Update, UpdaterExt};
+
+    #[derive(Clone, Debug, Serialize)]
+    pub struct Progress {
+        pub done: u64,
+        pub total: Option<u64>,
+    }
 
     /// The update found by the last check, kept for install.
     #[derive(Default)]

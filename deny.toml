@@ -15,6 +15,13 @@ ignore = [
   # Drop, so the bug is unreachable; uTP is also off by default. Remove when
   # librqbit-utp moves to ringbuf >= 0.5.2.
   { id = "RUSTSEC-2026-0293", reason = "unreachable: ringbuf element type is u8 (no Drop)" },
+  # zip <9 extract(): Unix setuid bits and symlinks escaping the target folder.
+  # Only tauri-plugin-updater 2.x uses it, on Windows only, and only on downloads
+  # whose signature already verified against our key; we ship an unzipped setup.
+  # Remove when a stable updater moves to zip >= 9.
+  { id = "RUSTSEC-2026-0367", reason = "zip 4 via the Windows-only updater; signed, unzipped artifacts" },
+  { id = "RUSTSEC-2026-0368", reason = "zip 4 via the Windows-only updater; signed, unzipped artifacts" },
+  { id = "RUSTSEC-2026-0369", reason = "zip 4 via the Windows-only updater; signed, unzipped artifacts" },
 ]
 
 [licenses]
