@@ -151,6 +151,22 @@ async fn open(
 }
 
 async fn dial(t: &Tunnel, host: &str, port: u16, allow_local: bool) -> anyhow::Result<TcpStream> {
+    let got = dial_once(t, host, port, allow_local).await;
+    riptor_net::ledger::record_via(
+        riptor_net::ledger::Purpose::Plugin,
+        host,
+        riptor_net::ledger::Route::Tunnel,
+        got.is_ok(),
+    );
+    got
+}
+
+async fn dial_once(
+    t: &Tunnel,
+    host: &str,
+    port: u16,
+    allow_local: bool,
+) -> anyhow::Result<TcpStream> {
     let addrs: Vec<SocketAddr> = match host.parse::<std::net::IpAddr>() {
         Ok(ip) => vec![SocketAddr::new(ip, port)],
         Err(_) => (t.lookup)(host.to_string(), port).await?,

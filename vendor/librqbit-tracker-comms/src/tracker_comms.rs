@@ -250,7 +250,11 @@ impl TrackerComms {
                         .with_min_delay(Duration::from_secs(10))
                         .with_max_delay(Duration::from_secs(600)),
                 )
-                .notify(|err, retry_in| debug!(?retry_in, "error calling tracker: {err:#}"))
+                .notify(|err, retry_in| {
+                    // RIPTOR PATCH: see observe.rs.
+                    crate::observe::failed(self.info_hash, tracker_url.host_str().unwrap_or(""));
+                    debug!(?retry_in, "error calling tracker: {err:#}")
+                })
                 .await
                 .context("this shouldn't fail")?;
 
@@ -311,6 +315,18 @@ impl TrackerComms {
             })?
             .0;
 
+        // RIPTOR PATCH: see observe.rs.
+        crate::observe::report(crate::observe::Announce {
+            info_hash: self.info_hash,
+            host: tracker_url.host_str().unwrap_or("").to_string(),
+            ok: true,
+            seeders: response.complete.map(|n| n.min(u32::MAX as u64) as u32),
+            leechers: response.incomplete.map(|n| n.min(u32::MAX as u64) as u32),
+            external_ip: response
+                .external_ip
+                .as_ref()
+                .and_then(|b| crate::observe::ip_from_bytes(b.as_ref())),
+        });
         for peer in response.iter_peers() {
             self.tx.send(peer).await?;
         }
@@ -362,7 +378,7 @@ impl TrackerComms {
             match addrs {
                 UdpTrackerResolveResult::One(addr) => {
                     match self
-                        .tracker_one_request_udp(addr, &client)
+                        .tracker_one_request_udp(addr, url.host_str().unwrap_or(""), &client)
                         .instrument(trace_span!("udp request", ?addr))
                         .await
                     {
@@ -374,9 +390,9 @@ impl TrackerComms {
                 }
                 UdpTrackerResolveResult::Two(v4, v6) => {
                     let (r4, r6) = tokio::join!(
-                        self.tracker_one_request_udp(v4.into(), &client)
+                        self.tracker_one_request_udp(v4.into(), url.host_str().unwrap_or(""), &client)
                             .instrument(trace_span!("udp request", addr=?v4)),
-                        self.tracker_one_request_udp(v6.into(), &client)
+                        self.tracker_one_request_udp(v6.into(), url.host_str().unwrap_or(""), &client)
                             .instrument(trace_span!("udp request", addr=?v6))
                     );
                     sleep_interval = Some(
@@ -393,6 +409,7 @@ impl TrackerComms {
     async fn tracker_one_request_udp(
         &self,
         addr: SocketAddr,
+        host: &str,
         client: &UdpTrackerClient,
     ) -> anyhow::Result<Duration> {
         use tracker_comms_udp::*;
@@ -420,7 +437,17 @@ impl TrackerComms {
             port: self.announce_port,
         };
 
-        match client.announce(addr, request).await {
+        // RIPTOR PATCH: see observe.rs.
+        let result = client.announce(addr, request).await;
+        crate::observe::report(crate::observe::Announce {
+            info_hash: self.info_hash,
+            host: host.to_string(),
+            ok: result.is_ok(),
+            seeders: result.as_ref().ok().map(|r| r.seeders),
+            leechers: result.as_ref().ok().map(|r| r.leechers),
+            external_ip: None,
+        });
+        match result {
             Ok(response) => {
                 trace!(len = response.addrs.len(), "received announce response");
                 for addr in response.addrs {

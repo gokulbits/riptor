@@ -96,6 +96,44 @@ fn mutated_torrents_never_panic() {
     });
 }
 
+#[test]
+fn passkey_stripping_survives_mutated_torrents() {
+    let base = sample_torrent();
+    on_small_stack(move || {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(19);
+        for _ in 0..5_000 {
+            let b = mutate(&mut rng, &base);
+            if let Ok((out, _)) = riptor_core::passkey::strip_secret_trackers(&b) {
+                // Whatever comes out must still be one well-formed dictionary.
+                assert_eq!(out.first(), Some(&b'd'));
+            }
+        }
+        let deep = nested(1_000_000);
+        assert!(riptor_core::passkey::strip_secret_trackers(&deep).is_err());
+    });
+}
+
+#[test]
+fn checksum_files_and_file_names_from_hostile_torrents_never_panic() {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(23);
+    let alphabet: Vec<char> = "0123456789abcdef *()=/\\.:;#\n\r\t\u{202e}\u{feff}é 漢 SHA256 MD5"
+        .chars()
+        .collect();
+    for _ in 0..3_000 {
+        let len = rng.random_range(0..400);
+        let text: String = (0..len)
+            .map(|_| alphabet[rng.random_range(0..alphabet.len())])
+            .collect();
+        for name in ["SHA256SUMS", "x.sfv", "a.md5", "sums.txt"] {
+            for e in riptor_core::checksums::parse(name, &text) {
+                assert!(!e.name.split('/').any(|p| p == ".." || p.is_empty()));
+            }
+        }
+        let files = vec![(text.clone(), len as u64), (format!("{text}.mp4.exe"), 1)];
+        let _ = riptor_core::suspicion::check_names(&text, &files);
+    }
+}
+
 /// The whole add-dialog path, file to preview, on mutated torrents.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn previews_of_mutated_torrents_fail_cleanly() {

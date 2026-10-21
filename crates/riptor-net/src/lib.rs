@@ -6,6 +6,8 @@ use std::net::IpAddr;
 
 use url::{Host, Url};
 
+pub mod ledger;
+
 pub fn is_public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {

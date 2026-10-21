@@ -92,7 +92,10 @@ pub async fn install(search_dir: &Path) -> anyhow::Result<()> {
     };
     let body = tokio::time::timeout(Duration::from_secs(300), work)
         .await
-        .context("downloading Python timed out")??;
+        .context("downloading Python timed out")
+        .and_then(|r| r);
+    riptor_net::ledger::record(riptor_net::ledger::Purpose::Python, rel.url, body.is_ok());
+    let body = body?;
     let got = hex(&Sha256::digest(&body));
     ensure!(
         got == rel.sha256,

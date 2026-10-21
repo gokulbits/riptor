@@ -27,7 +27,7 @@ export function AboutDialog({ onClose, onLogs }: { onClose: () => void; onLogs: 
       footer={
         <>
           <button className="btn-ghost" onClick={onLogs}>
-            View Logs
+            View logs
           </button>
           <button className="btn-primary" onClick={onClose}>
             Close
@@ -45,8 +45,8 @@ export function AboutDialog({ onClose, onLogs }: { onClose: () => void; onLogs: 
           A BitTorrent client for Windows and Linux with built-in search, an app-only VPN and a kill switch.
         </p>
         <div className="flex flex-wrap justify-center gap-2">
-          {link("Source Code", REPO)}
-          {link("Report A Problem", `${REPO}/issues`)}
+          {link("Source code", REPO)}
+          {link("Report a problem", `${REPO}/issues`)}
           {link("Licenses", `${REPO}/blob/main/THIRD-PARTY-NOTICES.md`)}
         </div>
         <Updates />

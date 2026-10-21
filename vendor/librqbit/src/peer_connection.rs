@@ -477,6 +477,10 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
 
                 if let Message::Extended(ExtendedMessage::Handshake(h)) = &message {
                     *extended_handshake_ref.write() = Some(h.peer_extended_messages());
+                    // RIPTOR PATCH: see riptor_observe.rs.
+                    if let Some(seen) = h.yourip {
+                        crate::riptor_observe::yourip(self.addr.ip(), seen.0);
+                    }
                     self.handler
                         .on_extended_handshake(h)
                         .map_err(Error::Anyhow)?;

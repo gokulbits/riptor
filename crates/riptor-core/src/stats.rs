@@ -64,6 +64,17 @@ impl Statistics {
             })
     }
 
+    /// Totals since the day `key` (inclusive).
+    pub fn since(&self, key: &str) -> DayTotals {
+        self.daily
+            .range(key.to_string()..)
+            .fold(DayTotals::default(), |mut acc, (_, d)| {
+                acc.uploaded += d.uploaded;
+                acc.downloaded += d.downloaded;
+                acc
+            })
+    }
+
     /// Backups can be crafted.
     pub fn sanitize(&mut self) {
         self.daily.retain(|k, _| is_day_key(k));
@@ -95,6 +106,25 @@ pub fn day_key(unix: u64) -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// The day a monthly period that restarts on `reset_day` began, as a day key.
+pub fn period_start(now_unix: u64, reset_day: u8) -> String {
+    let today = day_key(now_unix);
+    let (y, m, d) = (
+        today[..4].parse::<i32>().unwrap_or(1970),
+        today[5..7].parse::<u32>().unwrap_or(1),
+        today[8..].parse::<u8>().unwrap_or(1),
+    );
+    let reset = reset_day.clamp(1, 28);
+    let (y, m) = if d >= reset {
+        (y, m)
+    } else if m == 1 {
+        (y - 1, 12)
+    } else {
+        (y, m - 1)
+    };
+    format!("{y:04}-{m:02}-{reset:02}")
 }
 
 fn is_day_key(k: &str) -> bool {
@@ -148,6 +178,27 @@ pub fn ratio(up: u64, down: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_cap_periods() {
+        // 2026-03-15 and 2026-01-03 (UTC noon).
+        let mar15 = 1_773_576_000;
+        let jan3 = 1_767_441_600;
+        assert_eq!(day_key(mar15), "2026-03-15");
+        assert_eq!(day_key(jan3), "2026-01-03");
+        assert_eq!(period_start(mar15, 1), "2026-03-01");
+        assert_eq!(period_start(mar15, 15), "2026-03-15");
+        assert_eq!(period_start(mar15, 20), "2026-02-20");
+        assert_eq!(period_start(jan3, 10), "2025-12-10");
+        assert_eq!(period_start(jan3, 0), "2026-01-01");
+
+        let mut s = Statistics::default();
+        s.record_transfer(100, 1, mar15 - 30 * 86_400);
+        s.record_transfer(5, 2, mar15 - 86_400);
+        s.record_transfer(7, 3, mar15);
+        let t = s.since(&period_start(mar15, 10));
+        assert_eq!((t.downloaded, t.uploaded), (12, 5));
+    }
 
     #[test]
     fn day_keys() {

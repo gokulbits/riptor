@@ -65,6 +65,8 @@ mod peer_connection;
 mod peer_info_reader;
 mod piece_tracker;
 mod read_buf;
+// RIPTOR PATCH: see riptor_observe.rs.
+pub mod riptor_observe;
 mod session;
 mod session_persistence;
 pub mod session_stats;

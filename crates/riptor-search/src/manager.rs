@@ -444,7 +444,9 @@ impl SearchManager {
                 .and_then(|mut s| s.next_back())
                 .unwrap_or_default()
                 .to_string();
-            let resp = self.http.get(u).send().await?.error_for_status()?;
+            let resp = self.http.get(u).send().await;
+            riptor_net::ledger::record(riptor_net::ledger::Purpose::Plugin, source, resp.is_ok());
+            let resp = resp?.error_for_status()?;
             ensure!(
                 resp.url().scheme() == "https",
                 "the plugin download was redirected off https"

@@ -15,7 +15,7 @@ export type StatusFilter =
 
 const SORT_KEYS = [
   "name", "size", "progress", "state", "peers", "dl_rate", "ul_rate", "eta", "ratio", "added_on", "queue_pos", "category",
-  "downloaded", "uploaded", "save_path", "tags", "completed_on", "seeding_time", "tracker",
+  "downloaded", "uploaded", "save_path", "tags", "completed_on", "seeding_time", "tracker", "swarm_seeds",
 ] as const;
 export type SortKey = (typeof SORT_KEYS)[number];
 

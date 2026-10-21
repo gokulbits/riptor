@@ -34,7 +34,15 @@ mod imp {
     }
 
     pub async fn check(app: &AppHandle) -> anyhow::Result<Option<UpdateInfo>> {
-        let found = app.updater()?.check().await.map_err(|e| {
+        // The updater plugin has its own client, so this never goes through the VPN.
+        let found = app.updater()?.check().await;
+        riptor_net::ledger::record_via(
+            riptor_net::ledger::Purpose::Update,
+            "github.com",
+            riptor_net::ledger::Route::Direct,
+            found.is_ok(),
+        );
+        let found = found.map_err(|e| {
             anyhow::anyhow!("couldn't get update information from GitHub ({e}); you may be offline")
         })?;
         let info = found.as_ref().map(|u| UpdateInfo {

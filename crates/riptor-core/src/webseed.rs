@@ -309,7 +309,14 @@ impl Layout {
                         allow_local || riptor_net::host_allowed(&url),
                         "refusing to contact a local or private address"
                     );
-                    fetch_range(http, url, start, n, limits, &mut out).await?;
+                    let host = url.host_str().unwrap_or("").to_string();
+                    let got = fetch_range(http, url, start, n, limits, &mut out).await;
+                    riptor_net::ledger::record(
+                        riptor_net::ledger::Purpose::WebSeed,
+                        &host,
+                        got.is_ok(),
+                    );
+                    got?;
                 }
             }
         }

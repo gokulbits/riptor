@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, Check, Database, Download, Gauge, HardDrive, Loader2, Network, ShieldAlert, ShieldCheck, ShieldOff } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Database, Download, Gauge, HardDrive, Loader2, Network, PauseCircle, PieChart, ShieldAlert, ShieldCheck, ShieldOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { PublicIpView } from "../../components/PublicIp";
 import { api, errorText } from "../../lib/ipc";
@@ -85,6 +85,7 @@ function RateButton({ dir }: { dir: "down" | "up" }) {
 
 function VpnIndicator() {
   const network = useApp((s) => s.global?.network);
+  const untrusted = useApp((s) => !!s.global?.untrusted_network);
   const vpn = useApp((s) => s.vpn);
   const setView = useApp((s) => s.setView);
   const refreshPublicIp = useApp((s) => s.refreshPublicIp);
@@ -100,7 +101,9 @@ function VpnIndicator() {
       ? [ShieldCheck, `VPN connected${vpn?.profile_name ? ` · ${vpn.profile_name}` : ""}`, "text-ok", "Torrent traffic goes through the VPN"]
       : busy
         ? [Loader2, vpn?.phase === "reconnecting" ? "VPN reconnecting…" : "VPN connecting…", "text-warn", vpn?.message ?? ""]
-        : network === "blocked"
+        : network === "blocked" && untrusted
+          ? [ShieldAlert, "Untrusted network", "text-danger", "On networks you haven't trusted, torrents wait for the VPN"]
+          : network === "blocked"
           ? [ShieldAlert, "Kill switch on", "text-danger", "Torrents are held until the VPN connects"]
           : [ShieldOff, "VPN off", "text-muted", "Torrents use your normal connection"];
 
@@ -142,6 +145,19 @@ export function StatusBar({ onToggleAlt, onUpdate }: { onToggleAlt: () => void; 
         <button className="flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-accent hover:bg-raised" onClick={onUpdate} title="Install the new version">
           <Download size={12} /> Update to {update.version}
         </button>
+      )}
+      {g?.hold && (
+        <span className="flex items-center gap-1 text-warn" title="Change this in Settings, Speed">
+          <PauseCircle size={12} /> {g.hold}
+        </span>
+      )}
+      {g?.data_cap && (
+        <span
+          className={clsx("flex items-center gap-1", g.data_cap.used >= g.data_cap.limit * 0.9 && "text-warn")}
+          title="Data used this month, of your cap"
+        >
+          <PieChart size={12} /> {formatBytes(g.data_cap.used)} / {formatBytes(g.data_cap.limit)}
+        </span>
       )}
       <FreeSpace />
       <button

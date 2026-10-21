@@ -31,8 +31,20 @@ pub async fn lookup(local: Option<IpAddr>) -> anyhow::Result<IpAddr> {
     }
     let client = b.build()?;
     let mut last = None;
+    let route = if local.is_some() {
+        riptor_net::ledger::Route::Tunnel
+    } else {
+        riptor_net::ledger::Route::Direct
+    };
     for url in SERVICES {
-        match fetch(&client, url).await {
+        let got = fetch(&client, url).await;
+        riptor_net::ledger::record_via(
+            riptor_net::ledger::Purpose::IpCheck,
+            url,
+            route,
+            got.is_ok(),
+        );
+        match got {
             Ok(ip) => return Ok(ip),
             Err(e) => last = Some(e),
         }

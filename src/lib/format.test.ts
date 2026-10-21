@@ -54,6 +54,12 @@ const t = (over: Partial<TorrentSummary>): TorrentSummary => ({
   dl_limit_kib: null,
   ul_limit_kib: null,
   error: null,
+  checksum: null,
+  suspicion: null,
+  swarm_seeds: null,
+  swarm_leechers: null,
+  scrub: null,
+  last_scrub: null,
   ...over,
 });
 

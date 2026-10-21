@@ -17,7 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 import { PublicIpView } from "../../components/PublicIp";
 import { Field, Toggle } from "../../components/ui";
 import { api, errorText, events } from "../../lib/ipc";
-import type { LeakCheck, VpnPrefs, VpnProfile, VpnStatus } from "../../lib/types";
+import type { LeakCheck, SwarmView, VpnPrefs, VpnProfile, VpnStatus } from "../../lib/types";
 import { useApp } from "../../stores/app";
 
 const OPENVPN_URL = "https://openvpn.net/community-downloads/";
@@ -54,9 +54,9 @@ function LeakCheckCard() {
   return (
     <div className="card space-y-2 p-3 text-sm">
       <div className="flex items-center gap-2">
-        <span className="flex-1 font-medium">Leak Check</span>
+        <span className="flex-1 font-medium">Leak check</span>
         <button className="btn-ghost border border-border text-xs" onClick={run} disabled={busy}>
-          {busy ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} Run Check
+          {busy ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} Run check
         </button>
       </div>
       <p className="text-xs text-muted">Asks an IP lookup service for your address twice: through the tunnel and over your normal connection.</p>
@@ -74,6 +74,78 @@ function LeakCheckCard() {
             </p>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** What peers and trackers report seeing, checked all the time without extra requests. */
+function SwarmCard() {
+  const toast = useApp((s) => s.toast);
+  const [view, setView] = useState<SwarmView | null>(null);
+  const load = useCallback(() => {
+    api.swarmView().then(setView, () => {});
+  }, []);
+  useEffect(() => {
+    load();
+    const t = window.setInterval(load, 5000);
+    return () => window.clearInterval(t);
+  }, [load]);
+  if (!view) return null;
+  const v = view.verdict;
+  const release = () =>
+    api.releaseLeakHold().then(
+      () => {
+        toast("info", "Torrents can run again. Riptor keeps watching what the swarm sees.");
+        load();
+      },
+      (e) => toast("error", errorText(e)),
+    );
+  return (
+    <div className={clsx("card space-y-2 p-3 text-sm", view.held && "border-danger/60")}>
+      <span className="font-medium">What the swarm sees</span>
+      <p className="text-xs text-muted">
+        Peers and some trackers tell Riptor which address they see it on. Riptor compares that with the VPN's address all the time,
+        without sending anything extra. Peers can lie, so it takes several unrelated ones to count.
+      </p>
+      {view.held && (
+        <div className="space-y-2 rounded-md bg-danger/10 p-2 text-danger">
+          <p>
+            Torrents are held: several peers and trackers saw your normal address ({view.held}). Reconnect the VPN or run the leak check,
+            then let them run again.
+          </p>
+          <button className="btn-ghost border border-danger/40 text-xs" onClick={release}>
+            Let torrents run again
+          </button>
+        </div>
+      )}
+      <p
+        className={clsx(
+          "font-medium",
+          v.kind === "expected" ? "text-ok" : v.kind === "leak" ? "text-danger" : v.kind === "unexpected" ? "text-warn" : "text-muted",
+        )}
+      >
+        {v.kind === "expected"
+          ? "The swarm sees the VPN's address."
+          : v.kind === "leak"
+            ? `The swarm sees your normal address (${v.ip}).`
+            : v.kind === "unexpected"
+              ? `Most of the swarm sees ${v.ip}, not the VPN's address.`
+              : "Not enough reports yet."}
+      </p>
+      {view.seen.length > 0 && (
+        <ul className="space-y-0.5 text-xs">
+          {view.seen.map((s) => (
+            <li key={s.ip} className="flex gap-2">
+              <span className="w-40 select-text font-mono">{s.ip}</span>
+              <span className="text-muted">
+                {s.peers} peer network{s.peers === 1 ? "" : "s"}, {s.trackers} tracker{s.trackers === 1 ? "" : "s"}
+                {s.ip === view.vpn_ip && " · the VPN"}
+                {s.ip === view.normal_ip && " · your normal address"}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -335,6 +407,7 @@ export function VpnView() {
       <div className="mx-auto max-w-3xl space-y-5 p-6">
         <StatusCard status={status} killSwitch={killSwitch} onDisconnect={disconnect} />
         {status.phase === "connected" && <LeakCheckCard />}
+        <SwarmCard />
 
         {openvpn === false && (
           <div className="card flex items-start gap-3 border-warn/50 p-3 text-sm">

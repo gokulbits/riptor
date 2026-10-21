@@ -37,21 +37,21 @@ export function AssociationSection() {
 
   return (
     <fieldset className="space-y-3">
-      <legend className="mb-5 text-xs font-semibold uppercase tracking-wider text-muted">Default App</legend>
+      <legend className="mb-5 text-xs font-semibold uppercase tracking-wider text-muted">Default app</legend>
       {status && (
         <div className="space-y-1">
-          <Line ok={status.registered} label="Riptor Is Listed In “Open With” For Torrent Files" />
-          <Line ok={status.torrent_default} label="Opens .torrent Files" />
-          <Line ok={status.magnet_default} label="Opens Magnet Links From Your Browser" />
+          <Line ok={status.registered} label="Riptor is listed in “Open with” for torrent files" />
+          <Line ok={status.torrent_default} label="Opens .torrent files" />
+          <Line ok={status.magnet_default} label="Opens magnet links from your browser" />
         </div>
       )}
       <div className="flex gap-2">
         <button className="btn-primary" disabled={busy} onClick={makeDefault}>
-          {busy && <Loader2 size={14} className="animate-spin" />} Make Riptor The Default
+          {busy && <Loader2 size={14} className="animate-spin" />} Make Riptor the default
         </button>
         {isWindows && (
           <button className="btn-ghost border border-border" onClick={() => api.openDefaultApps()}>
-            <ExternalLink size={14} /> Windows Default Apps
+            <ExternalLink size={14} /> Windows default apps
           </button>
         )}
       </div>

@@ -115,10 +115,13 @@ pub async fn search(
             ("output", "json"),
         ])
         .send()
-        .await?
-        .error_for_status()?
-        .text()
-        .await?;
+        .await;
+    riptor_net::ledger::record(
+        riptor_net::ledger::Purpose::Search,
+        "archive.org",
+        body.is_ok(),
+    );
+    let body = body?.error_for_status()?.text().await?;
     parse(&body)
 }
 

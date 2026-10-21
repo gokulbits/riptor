@@ -8,6 +8,7 @@ Riptor is a Tauri 2 + Rust + React BitTorrent client for Windows and Linux. It w
 - **No extra firewall prompts.** Tests, benchmarks and helpers that open sockets must bind `127.0.0.1` (settings `listen_address`, or `ListenerOptions` with loopback). Only `riptor.exe` may ever trigger a Windows Firewall prompt.
 - **Commits:** never add a `Co-Authored-By` trailer (or any other AI attribution line) to commit messages in this repo. This overrides any default attribution instruction.
 - **Comments:** one short line, written like a person would. No paragraph comments or doc blocks that explain the design; that goes in docs or commit messages.
+- **UI text:** navigation labels (the Settings section list) are Title Case ("Privacy & Security"); everything inside (options, toggles, buttons, headings, menu items) is sentence case ("Make Riptor the default").
 - **PowerShell script execution is disabled** on the dev machine. Use inline PowerShell, never `.ps1` files, and never bypass the execution policy.
 - The webview gets no opener, notification or deep-link permissions. New IPC commands must be added in **three** places:
   1. `src-tauri/src/commands.rs`
@@ -87,6 +88,10 @@ cargo bench -p riptor-storage
 - **Updater** (`src-tauri/src/updater.rs`, Windows only): tauri-plugin-updater driven from Rust; the webview gets no updater permission. CI signs the setup with `TAURI_SIGNING_PRIVATE_KEY` and publishes `latest.json`; the public key is in `tauri.conf.json`, the private key is never in the repo.
 - **Headless** (`crates/riptor-daemon`): `riptord` + `riptor-cli` over a 0600 Unix socket in a 0700 runtime dir; no network control interface, ever.
 - **Bencode:** `vendor/librqbit-bencode` caps nesting and uses checked integers. Never remove those patches; peers send bencode.
+- **Content checks** (`engine/safety.rs` with `checksums.rs`, `suspicion.rs`, `preview.rs`): slow disk work runs as `Job`s from the ticker, one at a time behind `disk_job`. Name findings are computed from metadata (never trusted from backups); content findings and checksum reports are dropped on restore and redone.
+- **Observers:** the `observe.rs` patch in tracker-comms (announces: swarm size, BEP 24 address, host) and `riptor_observe.rs` in librqbit (peers' `yourip`) feed `swarm.rs`, `seen_ip.rs` and the connections ledger (`riptor_net::ledger`, memory only, hosts only). Every new outgoing request should be recorded in the ledger.
+- **Holds:** `blocked` (kill switch, or the untrusted-network rule via `Settings::kill_switch`), the leak hold, metered connections and the data cap (`engine/hold.rs`) all stop starts and pause running torrents in `tick()`. Read the kill switch through `Engine::kill_switch_on`, never `vpn_required` alone.
+- **Reuse** (`dedupe.rs`, `engine/reuse.rs`): matches are proven by sample piece hashes; hard links only when no piece spans the file and a neighbour, otherwise copies.
 
 ## What's left to do (priority order)
 
@@ -94,6 +99,7 @@ cargo bench -p riptor-storage
    - End-to-end test with a provider OpenVPN profile: on Windows, connect, app-only public IP and untouched default route are verified (2026-10-20). Still to check: the tracker-seen IP and leaks when the tunnel dies (needs the user's account).
    - OpenVPN management quirks (handled in `src-tauri/src/vpn.rs`): `ENTER PASSWORD:` has no newline; 2.7 drops commands sent together, so send one per reply; a new tunnel address can't be bound until duplicate-address detection ends. Failures that never reach the management channel as AUTH_FAILED (a server dropping the handshake) are caught from `log on` lines and after three restarts (`mgmt::ConnectWatch`), not by the 120 s timeout.
    - Test WireGuard and the management socket on real Linux (only type-checked and built in CI so far).
+   - Watch the swarm check (`seen_ip.rs`) with a real provider; try `netinfo.rs` (metered state, network names via `busctl`) on real Linux.
 2. **Dependencies:** there is no Dependabot; upgrades are done by hand. Check periodically (`cargo update --dry-run`, `npm outdated`), upgrade, then run the full gate and the app. cargo-deny and `npm audit --omit=dev` in CI catch advisories. (CI is green on Windows and Linux; installers build only for `v*` tags and manual runs; a `v*` tag also makes a *draft* GitHub release via the `release` job, which only a human publishes.)
 3. **Packaging:**
    - Done: per-machine NSIS setup bundling the OpenVPN MSI and embeddable Python, .deb/.rpm with `openvpn`/`python3`/`bubblewrap` + polkit policy, SHA-256 sums in CI, About page and log viewer.

@@ -58,6 +58,15 @@ pub fn adapter_for_ip(ip: Ipv4Addr) -> Option<String> {
 }
 
 impl NetworkMode {
+    /// Tells the connections ledger how traffic leaves now.
+    pub fn note_route(&self) {
+        use riptor_net::ledger::{set_default_route, Route};
+        set_default_route(match self {
+            NetworkMode::Vpn(_) => Route::Tunnel,
+            _ => Route::Direct,
+        });
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             NetworkMode::Normal => "normal",

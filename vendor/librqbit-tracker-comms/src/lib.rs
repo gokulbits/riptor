@@ -1,4 +1,5 @@
-// RIPTOR PATCH: see resolve_hook.rs.
+// RIPTOR PATCH: see resolve_hook.rs and observe.rs.
+pub mod observe;
 pub mod resolve_hook;
 mod tracker_comms;
 mod tracker_comms_http;

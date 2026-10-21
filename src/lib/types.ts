@@ -53,6 +53,72 @@ export interface TorrentSummary {
   dl_limit_kib: number | null;
   ul_limit_kib: number | null;
   error: string | null;
+  /** Checksum files in the torrent: all match, some don't, or nothing checked. */
+  checksum: boolean | null;
+  /** Looks like a fake release. */
+  suspicion: Level | null;
+  /** The whole swarm, as trackers report it (counting us). */
+  swarm_seeds: number | null;
+  swarm_leechers: number | null;
+  /** Background data check in progress (0-1). */
+  scrub: number | null;
+  last_scrub: number | null;
+}
+
+export type Level = "caution" | "danger";
+
+export interface Finding {
+  level: Level;
+  message: string;
+  file: string | null;
+}
+
+export interface ChecksumReport {
+  checked_at: number;
+  manifests: string[];
+  verified: number;
+  mismatched: string[];
+  mismatched_count: number;
+  skipped: number;
+  not_found: number;
+}
+
+export interface Safety {
+  has_manifest: boolean;
+  checksums: ChecksumReport | null;
+  secret_trackers: number;
+  private: boolean;
+  findings: Finding[];
+}
+
+export interface Connection {
+  purpose: string;
+  host: string;
+  route: "direct" | "tunnel" | "local";
+  count: number;
+  failures: number;
+  first: number;
+  last: number;
+}
+
+export type SwarmVerdict =
+  | { kind: "unknown" }
+  | { kind: "expected" }
+  | { kind: "unexpected"; ip: string }
+  | { kind: "leak"; ip: string };
+
+export interface SwarmView {
+  seen: { ip: string; peers: number; trackers: number }[];
+  vpn_ip: string | null;
+  normal_ip: string | null;
+  verdict: SwarmVerdict;
+  held: string | null;
+}
+
+export interface MagnetLink {
+  link: string;
+  withheld: number;
+  private: boolean;
 }
 
 export interface CacheStats {
@@ -71,6 +137,10 @@ export interface GlobalStats {
   alt_speed: boolean;
   read_cache: CacheStats;
   write_buffer_used: number;
+  /** Why torrents are waiting (metered connection, data cap). */
+  hold: string | null;
+  data_cap: { used: number; limit: number } | null;
+  untrusted_network: boolean;
 }
 
 export interface FileEntry {
@@ -83,6 +153,7 @@ export interface FileEntry {
   priority: FilePriority;
   ready: number;
   media: boolean;
+  previewable: boolean;
 }
 
 export interface LeakCheck {
@@ -122,6 +193,10 @@ export interface Preview {
   already_added: boolean;
   trackers: string[];
   comment: string | null;
+  findings: Finding[];
+  /** Files other torrents already downloaded. */
+  duplicates: { index: number; existing: string }[];
+  duplicate_bytes: number;
 }
 
 export interface AddParams {
@@ -132,6 +207,10 @@ export interface AddParams {
   start_paused?: boolean;
   only_files?: number[] | null;
   create_subfolder?: boolean | null;
+  /** The user saw the fake-release warnings in the add dialog. */
+  allow_suspicious?: boolean;
+  /** Link or copy files other torrents already have. */
+  reuse_existing?: boolean;
 }
 
 export type Source = { kind: "magnet"; value: string } | { kind: "url"; value: string } | { kind: "file"; value: string };
@@ -153,6 +232,7 @@ export interface QueuePrefs {
   dl_rate_threshold: number;
   ul_rate_threshold: number;
   inactivity_timer_secs: number;
+  prefer_rare: boolean;
 }
 
 export interface SeedingPrefs {
@@ -235,6 +315,12 @@ export interface Settings {
   mark_of_the_web: boolean;
   /** Kill switch. */
   vpn_required: boolean;
+  require_vpn_untrusted: boolean;
+  trusted_networks: string[];
+  pause_on_metered: boolean;
+  data_cap: DataCap | null;
+  scrub_days: number | null;
+  scrub_mib_per_sec: number;
   close_to_tray: boolean;
   columns: ColumnPref[];
   storage: StorageConfig;
@@ -519,3 +605,20 @@ export interface RssRuleMatch {
   feed: string;
   title: string;
 }
+
+export interface DataCap {
+  gib: number;
+  counts: "download" | "upload" | "both";
+  /** 1-28, UTC. */
+  reset_day: number;
+}
+
+export interface NetInfo {
+  metered: boolean | null;
+  names: string[];
+}
+
+export type FilePreview =
+  | { kind: "image"; mime: string; data: string }
+  | { kind: "text"; text: string; truncated: boolean }
+  | { kind: "unsupported"; reason: string };

@@ -1,4 +1,4 @@
-import { AlertTriangle, Ban, ExternalLink, FileSymlink, FolderOpen, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Ban, ExternalLink, Eye, FileSymlink, FolderOpen, HeartHandshake, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Dialog, Toggle } from "../../components/ui";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, errorText } from "../../lib/ipc";
@@ -6,6 +6,8 @@ import { formatBytes, formatDate, formatDuration, formatPercent, formatRatio } f
 import type { FileEntry, FilePriority, Limit, PieceMap, TorrentSummary } from "../../lib/types";
 import { ProgressBar, StateLabel, Tabs } from "../../components/ui";
 import { loadPref, savePref, useApp } from "../../stores/app";
+import { PreviewDialog } from "./PreviewDialog";
+import { SafetyPanel } from "./SafetyPanel";
 import { SpeedGraph } from "./SpeedGraph";
 
 const TABS = ["general", "files", "trackers", "peers", "speed"] as const;
@@ -67,6 +69,12 @@ function General({ t }: { t: TorrentSummary }) {
           <AlertTriangle size={14} /> This torrent contains programs or scripts. Only run them if you trust the source.
         </p>
       )}
+      {t.progress >= 1 && t.swarm_seeds != null && t.swarm_seeds <= 1 && (
+        <p className="flex items-center gap-2 rounded-md bg-info/10 px-2 py-1.5 text-info">
+          <HeartHandshake size={14} className="shrink-0" /> The trackers know of no other seeder: you may be the last copy. Seeding it keeps it alive.
+        </p>
+      )}
+      <SafetyPanel t={t} />
       <dl className="grid grid-cols-[9rem_1fr_9rem_1fr] gap-x-4 gap-y-1.5">
         <Row k="Status">
           <StateLabel state={t.state} forced={t.forced} />
@@ -89,6 +97,12 @@ function General({ t }: { t: TorrentSummary }) {
         <Row k="Inactive limit">{limitText(t.limits.inactive_seeding_time, " min")}</Row>
         <Row k="Peers">
           {t.peers} connected, {t.peers_seen} known
+        </Row>
+        <Row k="Data checked">
+          {t.scrub != null ? `Checking now… ${formatPercent(t.scrub)}` : t.last_scrub ? formatDate(t.last_scrub) : "Not yet"}
+        </Row>
+        <Row k="Swarm">
+          {t.swarm_seeds == null ? "Not reported yet" : `${t.swarm_seeds} seeders, ${t.swarm_leechers ?? 0} downloading`}
         </Row>
       </dl>
     </div>
@@ -172,6 +186,7 @@ function Files({ t }: { t: TorrentSummary }) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [dirty, setDirty] = useState(false);
   const [renaming, setRenaming] = useState<FileEntry | null>(null);
+  const [previewing, setPreviewing] = useState<FileEntry | null>(null);
 
   const load = useCallback(() => {
     api
@@ -255,7 +270,7 @@ function Files({ t }: { t: TorrentSummary }) {
               <th className="w-24 px-2 py-1.5 text-right font-medium">Size</th>
               <th className="w-40 px-2 py-1.5 font-medium">Progress</th>
               <th className="w-28 px-2 py-1.5 font-medium">Priority</th>
-              <th className="w-24 px-2 py-1.5" />
+              <th className="w-28 px-2 py-1.5" />
             </tr>
           </thead>
           <tbody>
@@ -313,6 +328,16 @@ function Files({ t }: { t: TorrentSummary }) {
                   >
                     {f.media && f.done < f.size ? <Play size={13} /> : <FileSymlink size={13} />}
                   </button>
+                  {f.previewable && (
+                    <button
+                      className="btn-ghost p-1"
+                      title={f.done >= f.size ? "Preview in Riptor" : "Not fully downloaded yet"}
+                      disabled={f.done < f.size || !f.selected}
+                      onClick={() => setPreviewing(f)}
+                    >
+                      <Eye size={13} />
+                    </button>
+                  )}
                   <button
                     className="btn-ghost p-1"
                     title="Show in folder"
@@ -330,6 +355,7 @@ function Files({ t }: { t: TorrentSummary }) {
         </table>
       </div>
       {renaming && <RenameDialog t={t} file={renaming} files={files} onClose={() => setRenaming(null)} onDone={load} />}
+      {previewing && <PreviewDialog id={t.id} file={previewing} onClose={() => setPreviewing(null)} />}
     </div>
   );
 }
@@ -467,7 +493,7 @@ function Peers({ t }: { t: TorrentSummary }) {
           onKeyDown={(e) => e.key === "Enter" && peer.trim() && addPeer()}
         />
         <button className="btn-ghost py-1 text-xs" disabled={!peer.trim()} onClick={addPeer}>
-          <Plus size={13} /> Add Peer
+          <Plus size={13} /> Add peer
         </button>
       </div>
       {sorted.length === 0 ? (

@@ -18,6 +18,7 @@ when upgrading, and try to upstream each one.
 | `src/session.rs` | `SessionOptions::blocklist_file`, loaded with the existing `IpRanges::load_from_file`. | Blocklists from a local file as well as a URL. | Not yet; trivial. |
 | `src/session.rs` | New `SessionOptions::dns_resolver`, used for the HTTP(S) tracker client. | On the VPN, tracker hostnames are resolved through the tunnel (see `riptor-core/src/dns.rs`), not by the system resolver. | Not yet. |
 | `src/session.rs` | New `SessionOptions::bind_local_ip`, applied as reqwest's `local_address` for HTTP(S) trackers. | reqwest can't bind to an interface on Windows. Pinning the source address to the VPN adapter's IP keeps tracker requests inside the tunnel, and makes them fail rather than leak if it drops. | Not yet. |
+| `src/riptor_observe.rs`, `src/peer_connection.rs`, `src/lib.rs` | A process-wide observer told each peer's `yourip` from its extended handshake (BEP 10). | Riptor's swarm leak check compares the address peers see with the VPN's (`riptor-core/src/seen_ip.rs`). | Not yet; upstream might prefer it in per-peer stats. |
 
 ### Security findings to report upstream
 
@@ -32,6 +33,7 @@ Copied from crates.io and wired in via `[patch.crates-io]`.
 | --- | --- | --- | --- |
 | `src/resolve_hook.rs` (both), `src/lib.rs` | An optional process-wide resolver (`set_resolver`). Unset, lookups use `tokio::net::lookup_host` as before. | Riptor installs its tunnel resolver while the VPN is up, so UDP tracker hostnames and DHT bootstrap hosts are looked up through the tunnel instead of the system DNS. | Not yet; a resolver option on the session would be cleaner upstream. |
 | `tracker-comms/src/tracker_comms.rs`, `dht/src/dht.rs` | The two `lookup_host` calls go through `resolve_hook::lookup`. | Same. | Same. |
+| `tracker-comms/src/observe.rs`, `tracker_comms.rs`, `tracker_comms_http.rs`, `lib.rs` | A process-wide observer told about every announce: host, success, seeders and leechers (HTTP and UDP), and the BEP 24 `external ip`. HTTP `complete`/`incomplete` became optional so "not sent" isn't read as zero. | Seeding where the swarm needs it, the swarm leak check and the connections ledger. | Not yet; a per-torrent stats channel would be cleaner upstream. |
 
 ## librqbit-bencode 9.0.1
 

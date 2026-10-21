@@ -72,7 +72,7 @@ export function Updates() {
             </p>
           ) : (
             <button className="btn-primary text-xs" onClick={install}>
-              <Download size={13} /> Install And Restart
+              <Download size={13} /> Install and restart
             </button>
           )}
           <p className="text-xs text-muted">Riptor closes, the installer asks for administrator rights, then Riptor starts again.</p>
@@ -80,12 +80,12 @@ export function Updates() {
       ) : (
         <div className="flex items-center gap-2">
           <button className="btn-ghost border border-border text-xs" onClick={check} disabled={state === "checking"}>
-            {state === "checking" ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Check For Updates
+            {state === "checking" ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Check for updates
           </button>
           {state === "current" && <span className="text-xs text-muted">Riptor is up to date.</span>}
         </div>
       )}
-      <Toggle checked={!!auto} disabled={auto === null} onChange={setAutoCheck} label="Check Automatically When Riptor Starts" />
+      <Toggle checked={!!auto} disabled={auto === null} onChange={setAutoCheck} label="Check automatically when Riptor starts" />
     </div>
   );
 }

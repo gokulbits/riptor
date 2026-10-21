@@ -64,10 +64,10 @@ export function LogsDialog({ onClose }: { onClose: () => void }) {
     >
       <div className="mb-2 flex items-center gap-2">
         <select className="input w-40" value={level} onChange={(e) => setLevel(e.target.value as Level)} aria-label="Level">
-          <option value="all">All Levels</option>
-          <option value="info">Info And Above</option>
-          <option value="warn">Warnings And Errors</option>
-          <option value="error">Errors Only</option>
+          <option value="all">All levels</option>
+          <option value="info">Info and above</option>
+          <option value="warn">Warnings and errors</option>
+          <option value="error">Errors only</option>
         </select>
         <label className="flex items-center gap-1.5 text-xs text-muted">
           <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> Follow

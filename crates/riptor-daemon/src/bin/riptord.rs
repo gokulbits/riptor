@@ -86,7 +86,7 @@ mod unix {
             data_dir: data_dir.clone(),
         })
         .await?;
-        if engine.settings().vpn_required {
+        if engine.kill_switch_on() {
             warn!("the kill switch is on, but headless mode has no VPN: torrents stay held");
         }
 

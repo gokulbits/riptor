@@ -30,6 +30,7 @@ tracing-subscriber.workspace = true
 parking_lot.workspace = true
 url.workspace = true
 riptor-core = { path = "../crates/riptor-core" }
+riptor-net = { path = "../crates/riptor-net" }
 riptor-search = { path = "../crates/riptor-search" }
 riptor-rss = { path = "../crates/riptor-rss" }
 riptor-vpn = { path = "../crates/riptor-vpn" }

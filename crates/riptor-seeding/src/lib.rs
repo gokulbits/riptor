@@ -44,6 +44,9 @@ pub struct TorrentView {
     pub running_for: u64,
     pub dl_rate: u64,
     pub ul_rate: u64,
+    /// Seeders the trackers report, if they said.
+    #[serde(default)]
+    pub swarm_seeds: Option<u32>,
 
     pub limits: ShareLimits,
     /// `None` uses the global action.
@@ -99,6 +102,14 @@ pub enum Action {
         action: ShareLimitAction,
         reason: LimitKind,
     },
+}
+
+impl Action {
+    pub fn id(&self) -> TorrentId {
+        match self {
+            Action::Start { id } | Action::Queue { id } | Action::ShareLimit { id, .. } => *id,
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -174,6 +185,7 @@ pub(crate) mod test_util {
             running_for: 1000,
             dl_rate: 1_000_000,
             ul_rate: 1_000_000,
+            swarm_seeds: None,
             limits: ShareLimits::default(),
             limit_action: None,
         }

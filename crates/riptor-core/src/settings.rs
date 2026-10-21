@@ -87,6 +87,24 @@ impl AltSchedule {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapCounts {
+    #[default]
+    Download,
+    Upload,
+    Both,
+}
+
+/// A monthly allowance; torrents wait once it's used up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataCap {
+    pub gib: u32,
+    pub counts: CapCounts,
+    /// The day of the month the allowance starts again (1-28, UTC).
+    pub reset_day: u8,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -137,6 +155,17 @@ pub struct Settings {
     pub mark_of_the_web: bool,
     /// Kill switch.
     pub vpn_required: bool,
+    /// The kill switch also applies on any network not in `trusted_networks`.
+    pub require_vpn_untrusted: bool,
+    /// Network names (as the OS reports them) where the VPN isn't required.
+    pub trusted_networks: Vec<String>,
+    /// Hold torrents while the OS says the connection is metered.
+    pub pause_on_metered: bool,
+    pub data_cap: Option<DataCap>,
+    /// Re-check finished torrents' data this often; `None` = never.
+    pub scrub_days: Option<u32>,
+    /// How fast the background check may read.
+    pub scrub_mib_per_sec: u32,
     /// Closing the window hides it; Quit is in the tray menu.
     pub close_to_tray: bool,
     /// Empty means the default layout.
@@ -179,6 +208,12 @@ impl Default for Settings {
             web_seeds: true,
             mark_of_the_web: true,
             vpn_required: false,
+            require_vpn_untrusted: false,
+            trusted_networks: Vec::new(),
+            pause_on_metered: false,
+            data_cap: None,
+            scrub_days: Some(30),
+            scrub_mib_per_sec: 32,
             close_to_tray: true,
             columns: Vec::new(),
             storage: StorageConfig::default(),
@@ -285,6 +320,34 @@ impl Settings {
             );
         }
         anyhow::ensure!(self.banned_ips.len() <= 10_000, "too many banned peers");
+        anyhow::ensure!(
+            self.trusted_networks.len() <= 50,
+            "too many trusted networks"
+        );
+        for n in &self.trusted_networks {
+            anyhow::ensure!(
+                (1..=128).contains(&n.chars().count()) && !n.chars().any(char::is_control),
+                "invalid network name"
+            );
+        }
+        anyhow::ensure!(
+            self.scrub_days.is_none_or(|d| (1..=365).contains(&d)),
+            "check data every 1 to 365 days"
+        );
+        anyhow::ensure!(
+            (1..=4096).contains(&self.scrub_mib_per_sec),
+            "the data check speed must be 1 to 4096 MiB/s"
+        );
+        if let Some(c) = &self.data_cap {
+            anyhow::ensure!(
+                (1..=1_000_000).contains(&c.gib),
+                "the data cap must be 1 GiB to 1,000,000 GiB"
+            );
+            anyhow::ensure!(
+                (1..=28).contains(&c.reset_day),
+                "the data cap resets on a day from 1 to 28"
+            );
+        }
         for t in &self.extra_trackers {
             anyhow::ensure!(valid_tracker(t), "not a tracker URL: {t}");
         }
@@ -303,6 +366,17 @@ impl Settings {
             );
         }
         Ok(())
+    }
+
+    /// Whether torrents must wait for the VPN here; an unknown network is untrusted.
+    pub fn kill_switch(&self, current: Option<&[String]>) -> bool {
+        self.vpn_required
+            || (self.require_vpn_untrusted
+                && !current.is_some_and(|names| {
+                    names
+                        .iter()
+                        .any(|n| self.trusted_networks.iter().any(|t| t == n))
+                }))
     }
 
     pub fn effective_limits(&self) -> (Option<u32>, Option<u32>) {
@@ -404,6 +478,33 @@ mod tests {
             s.columns = bad;
             assert!(s.validate().is_err(), "{:?}", s.columns);
         }
+    }
+
+    #[test]
+    fn untrusted_networks_need_the_vpn() {
+        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut s = Settings {
+            require_vpn_untrusted: true,
+            trusted_networks: names(&["Home"]),
+            ..Settings::default()
+        };
+        assert!(!s.kill_switch(Some(&names(&["Home"]))));
+        assert!(!s.kill_switch(Some(&names(&["Guest", "Home"]))));
+        assert!(s.kill_switch(Some(&names(&["Cafe Wi-Fi"]))));
+        assert!(s.kill_switch(Some(&[])));
+        // Not known yet: treated as untrusted.
+        assert!(s.kill_switch(None));
+        // Names must match exactly, not loosely.
+        assert!(s.kill_switch(Some(&names(&["home"]))));
+        s.require_vpn_untrusted = false;
+        assert!(!s.kill_switch(None));
+        s.vpn_required = true;
+        assert!(s.kill_switch(Some(&names(&["Home"]))));
+
+        s.trusted_networks = names(&["bad\u{0}name"]);
+        assert!(s.validate().is_err());
+        s.trusted_networks = vec!["x".into(); 51];
+        assert!(s.validate().is_err());
     }
 
     #[test]

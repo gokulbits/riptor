@@ -52,6 +52,12 @@ pub async fn refresh(
 
 /// Goes through the VPN when it's on, like every other request.
 async fn fetch(engine: &Engine, url: &str) -> anyhow::Result<Vec<u8>> {
+    let got = fetch_once(engine, url).await;
+    riptor_net::ledger::record(riptor_net::ledger::Purpose::Feed, url, got.is_ok());
+    got
+}
+
+async fn fetch_once(engine: &Engine, url: &str) -> anyhow::Result<Vec<u8>> {
     let client = engine.web_client(url)?;
     let mut resp = client
         .get(url)
@@ -94,6 +100,8 @@ async fn add(app: &AppHandle, engine: &Engine, d: Download) {
                     || engine.settings().add_stopped,
                 only_files: None,
                 create_subfolder: None,
+                allow_suspicious: false,
+                reuse_existing: true,
             })
             .await?;
         anyhow::Ok(Some(preview.has_executables))

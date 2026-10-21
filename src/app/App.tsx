@@ -9,11 +9,13 @@ import {
   ChevronUp,
   Copy,
   Type,
+  FileCheck2,
   FileDown,
   Link2,
   Folder,
   FolderInput,
   FolderOpen,
+  HardDriveDownload,
   RefreshCw,
   Gauge,
   Pause,
@@ -43,6 +45,7 @@ import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { StatsDialog } from "../features/stats/StatsDialog";
 import { AboutDialog } from "../features/about/AboutDialog";
 import { LogsDialog } from "../features/about/LogsDialog";
+import { ConnectionsDialog } from "../features/about/ConnectionsDialog";
 import { CreateTorrentDialog } from "../features/create/CreateTorrentDialog";
 import { SearchView, useSearchEvents } from "../features/search/SearchView";
 import { VpnView } from "../features/vpn/VpnView";
@@ -55,6 +58,7 @@ type Modal =
   | { kind: "stats" }
   | { kind: "create" }
   | { kind: "logs" }
+  | { kind: "connections" }
   | { kind: "about" }
   | { kind: "category" }
   | { kind: "limits"; ids: string[] }
@@ -95,7 +99,7 @@ function WhenDoneCountdown() {
   };
   return (
     <Dialog
-      title="Downloads Finished"
+      title="Downloads finished"
       onClose={cancel}
       width="max-w-sm"
       footer={
@@ -383,16 +387,24 @@ export default function App() {
 
   const exportSelected = async (ids: string[]) => {
     const fileName = (id: string) => `${(s.torrents.get(id)?.name ?? id).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")}.torrent`;
+    const secrets = await Promise.all(ids.map((id) => api.safety(id).then((x) => x.secret_trackers, () => 0)));
+    // Closing the question removes the passkey: the safe answer.
+    const strip =
+      secrets.some((n) => n > 0) &&
+      !(await ask(
+        "Trackers in this torrent carry your personal passkey. Anyone with the file could use your account. Keep it only if the file is your own backup.",
+        { title: "Personal passkey", kind: "warning", okLabel: "Keep passkey", cancelLabel: "Remove it" },
+      ));
     if (ids.length === 1) {
       const path = await save({ defaultPath: fileName(ids[0]), filters: [{ name: "Torrent file", extensions: ["torrent"] }] });
-      if (path) run(api.exportTorrent(ids[0], path).then(() => actions.toast("success", "Torrent file saved")));
+      if (path) run(api.exportTorrent(ids[0], path, strip).then(() => actions.toast("success", "Torrent file saved")));
       return;
     }
     const dir = await open({ directory: true, title: `Save ${ids.length} torrent files to` });
     if (typeof dir !== "string") return;
     const sep = dir.includes("\\") ? "\\" : "/";
     run(
-      Promise.all(ids.map((id) => api.exportTorrent(id, `${dir}${sep}${fileName(id)}`))).then(() =>
+      Promise.all(ids.map((id) => api.exportTorrent(id, `${dir}${sep}${fileName(id)}`, strip))).then(() =>
         actions.toast("success", `${ids.length} torrent files saved`),
       ),
     );
@@ -449,13 +461,29 @@ export default function App() {
       { label: "Move…", icon: <FolderInput size={14} />, onClick: () => moveSelected(selected) },
       { label: "Force recheck", icon: <RefreshCw size={14} />, onClick: () => recheckSelected(selected) },
       {
+        label: "Check data on disk",
+        icon: <HardDriveDownload size={14} />,
+        onClick: () =>
+          run(api.checkData(selected).then(() => actions.toast("info", "Checking the data in the background; seeding carries on."))),
+      },
+      {
+        label: "Verify checksum files",
+        icon: <FileCheck2 size={14} />,
+        onClick: () => run(api.verifyChecksums(selected).then(() => actions.toast("info", "Checking files against their checksum files…"))),
+      },
+      {
         label: "Copy magnet link",
         icon: <Link2 size={14} />,
         onClick: () =>
           run(
-            Promise.all(selected.map((id) => api.magnet(id))).then((links) =>
-              navigator.clipboard.writeText(links.join("\n")),
-            ),
+            Promise.all(selected.map((id) => api.magnet(id))).then(async (links) => {
+              await navigator.clipboard.writeText(links.map((l) => l.link).join("\n"));
+              const withheld = links.reduce((n, l) => n + l.withheld, 0);
+              if (withheld)
+                actions.toast("info", `Copied. Left out ${withheld} tracker(s) that carry your personal passkey.`);
+              if (links.some((l) => l.private))
+                actions.toast("warning", "Private torrents only work for members of their tracker, so the link won't help others.");
+            }),
           ),
       },
       { label: "Export .torrent…", icon: <FileDown size={14} />, onClick: () => exportSelected(selected) },
@@ -504,6 +532,7 @@ export default function App() {
         onStats={() => setModal({ kind: "stats" })}
         onCreate={() => setModal({ kind: "create" })}
         onLogs={() => setModal({ kind: "logs" })}
+        onConnections={() => setModal({ kind: "connections" })}
         onResumeAll={() => run(api.resume([...s.torrents.keys()]))}
         onStopAll={() => run(api.stop([...s.torrents.keys()]))}
         onImport={importFromClient}
@@ -562,6 +591,7 @@ export default function App() {
       {modal?.kind === "stats" && <StatsDialog onClose={() => setModal(null)} />}
       {modal?.kind === "create" && <CreateTorrentDialog onClose={() => setModal(null)} />}
       {modal?.kind === "logs" && <LogsDialog onClose={() => setModal(null)} />}
+      {modal?.kind === "connections" && <ConnectionsDialog onClose={() => setModal(null)} />}
       {modal?.kind === "about" && <AboutDialog onClose={() => setModal(null)} onLogs={() => setModal({ kind: "logs" })} />}
       {modal?.kind === "category" && <CategoryDialog onClose={() => setModal(null)} onSaved={refreshCategories} />}
       {modal?.kind === "limits" && limitTargets.length > 0 && <ShareLimitsDialog torrents={limitTargets} onClose={() => setModal(null)} />}

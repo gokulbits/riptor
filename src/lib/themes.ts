@@ -75,7 +75,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: "solarized-dark",
-    label: "Solarized Dark",
+    label: "Solarized dark",
     scheme: "dark",
     tokens: {
       bg: "0 43 54", panel: "7 54 66", raised: "13 66 80", border: "30 82 96",
@@ -85,7 +85,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: "solarized-light",
-    label: "Solarized Light",
+    label: "Solarized light",
     scheme: "light",
     tokens: {
       bg: "253 246 227", panel: "255 251 240", raised: "238 232 213", border: "220 212 188",

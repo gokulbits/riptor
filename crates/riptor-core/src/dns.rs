@@ -20,6 +20,7 @@ pub const SERVERS: [SocketAddr; 2] = [
 #[derive(Clone)]
 pub struct TunnelResolver {
     inner: TokioResolver,
+    server: IpAddr,
 }
 
 impl TunnelResolver {
@@ -46,15 +47,26 @@ impl TunnelResolver {
         let inner = TokioResolver::builder_with_config(cfg, TokioRuntimeProvider::default())
             .with_options(opts)
             .build()?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            server: servers
+                .first()
+                .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |s| s.ip()),
+        })
     }
 
     pub async fn lookup(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
         if let Ok(ip) = host.trim_matches(['[', ']']).parse::<IpAddr>() {
             return Ok(vec![SocketAddr::new(ip, port)]);
         }
-        let ips = self.inner.lookup_ip(host).await.map_err(io::Error::other)?;
-        Ok(ips.iter().map(|ip| SocketAddr::new(ip, port)).collect())
+        let ips = self.inner.lookup_ip(host).await.map_err(io::Error::other);
+        riptor_net::ledger::record_via(
+            riptor_net::ledger::Purpose::Dns,
+            &self.server.to_string(),
+            riptor_net::ledger::Route::Tunnel,
+            ips.is_ok(),
+        );
+        Ok(ips?.iter().map(|ip| SocketAddr::new(ip, port)).collect())
     }
 
     /// For the patched tracker and DHT crates.

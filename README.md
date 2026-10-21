@@ -64,6 +64,16 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - RSS and Atom feeds, with download rules (words or regular expressions, per feed, with a category and folder) that add matching torrents automatically. Feeds are fetched through the VPN when it's on, and torrents with programs are always added stopped.
 - Web seeds (BEP 19): torrents that list HTTP servers, such as most Internet Archive items, download from them too.
 - Create torrents from your files, with trackers, web seeds and a private flag, and start seeding them in place.
+- **Reuses what you already have:** when a new torrent contains files another torrent already downloaded (checked against the new torrent's own piece hashes), Riptor shares or copies them instead of downloading them again.
+- **Pauses on metered connections** if you want, and a **monthly data cap** with its own reset day holds torrents once it's used up.
+
+### Trust and safety
+- **Fake-release warnings:** the add dialog flags the tricks fake torrents use to get malware run: names with hidden characters, `movie.mp4.exe`-style double extensions, shortcuts and screen savers, "codec" installers in video releases, archives with their password in a text file, and "1080p" releases with a tiny video. A dangerous-looking torrent is added stopped unless you saw the warning. Once finished, files that are really programs or archives under a video, image or text name are flagged too, and Riptor won't open them.
+- **Checksum files are checked for you:** when a torrent ships `SHA256SUMS`, `.sfv`, `.md5` or similar, Riptor checks the finished files against them and tells you which match.
+- **Background data checks:** what you seed is re-read now and then at a gentle pace and compared with the torrent, so a failing disk doesn't send bad data. Damaged parts are downloaded again.
+- **Your passkey stays private:** copied magnet links leave out trackers with your personal passkey, and exporting a `.torrent` offers to remove it (the info hash stays the same).
+- **Safe preview:** look at images and text files (including `.nfo`) inside Riptor, without opening another program.
+- **Seed where it matters:** seeding slots go first to torrents whose trackers report few other seeders. The list shows each swarm's size, and a torrent tells you when you may be the last seeder.
 
 ### Storage engine
 - **Write-back piece buffer:** hash checks read pieces from memory, and verified pieces reach the disk in a few large writes.
@@ -84,6 +94,9 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - Searches, seed and peer lookups, plugin requests and `.torrent` links you add go through the tunnel too. Indexers on your own machine or LAN are reached directly.
 - Kill switch: while it's on and the VPN is down, there's no DHT, no listening port, no trackers, no peers and no searches.
 - A leak check compares the address trackers and peers see with your normal one, and checks name lookups go through the tunnel.
+- **What the swarm sees:** peers and some trackers say which address they see Riptor on. Riptor compares that with the VPN's address all the time, without extra requests. If several unrelated ones see your normal address, it warns you, and with the kill switch on, holds torrents until you've looked.
+- **Untrusted networks:** optionally require the VPN everywhere except the networks you trust (your home Wi-Fi, say). On any other network the kill switch holds torrents until the VPN connects.
+- **Connections ledger:** a list of every host Riptor contacted this session (trackers, web seeds, searches, feeds, lookups, updates) and whether it went through the VPN. Kept in memory only.
 - UPnP and local peer discovery are switched off while the VPN is in use. Optional NAT-PMP port forwarding is available if your provider supports it.
 - The status bar shows whether the VPN is connected and the public IP peers see. The IP is masked until you click the eye icon.
 
@@ -190,7 +203,7 @@ Security is a core design requirement. In short:
 
 - **Hostile metadata:** every file path in a torrent is rebuilt and proven to stay inside the save folder. This includes Windows drive-prefix tricks, reserved device names, alternate data streams and `..`.
 - **Protected locations:** save folders can never be system folders, startup folders, `~/.ssh` or Riptor's own data.
-- **Downloads:** never opened automatically. On Windows, finished files get a Mark-of-the-Web, so SmartScreen and Office treat them as coming from the internet.
+- **Downloads:** never opened automatically. On Windows, finished files get a Mark-of-the-Web, so SmartScreen and Office treat them as coming from the internet. Fake-release checks are heuristics: they catch common tricks, not malware in general.
 - **Search plugins:** they install only after you confirm, and run isolated (`python -I`, cleared environment, time and output limits, and bubblewrap on Linux).
 - **VPN profiles:** scripts, plugins and file references are removed or refused. The small elevated helper accepts one fixed request and re-checks every profile before OpenVPN reads it.
 - **Web seeds:** only http(s) URLs on public addresses (checked after DNS and on every redirect), exact lengths, and every piece is hash-checked like peer data. A server that keeps failing or sends bad data is dropped.
@@ -203,6 +216,9 @@ Security is a core design requirement. In short:
 - Peer traffic isn't encrypted (the engine has no MSE/PE support).
 - On the VPN, search plugins reach the web through a local proxy bound to the tunnel. Plugins that use the standard helpers or Python's `urllib` go through it; one that opens its own sockets would bypass it.
 - Web seeds are skipped while a SOCKS5 proxy or anonymous mode is in use, since they would bypass the proxy.
+- The update check never goes through the VPN (the updater uses its own connection); the connections ledger shows it.
+- What peers say they see can be made up, so the swarm check needs several unrelated sources, and it only holds torrents when they see the normal address the leak check found.
+- Metered-connection detection and network names come from Windows or, on Linux, NetworkManager (`busctl`); without them a network counts as untrusted and metered state as unknown.
 
 See **[SECURITY.md](SECURITY.md)** for the full threat model and how to report a vulnerability privately.
 
@@ -317,6 +333,8 @@ The main remaining items.
 Done: profile import and sanitizing, the elevated helper, the OpenVPN management client, Windows adapter binding, the kill switch and watchdog, NAT-PMP, the VPN page, the status indicator with a public-IP check, tracker and DHT lookups through the tunnel, WireGuard on Linux, a private Unix socket for OpenVPN management on Linux, and a security review.
 - [ ] Finish the end-to-end test with a real VPN provider. Verified on Windows: connecting with a provider OpenVPN profile works, Riptor appears with the VPN IP while other apps keep the normal IP, the default route is untouched, and OpenVPN stops with Riptor. Still to check: the in-app leak check against a real provider, and that nothing leaks when the tunnel drops.
 - [ ] Test WireGuard and the Unix management socket on real Linux (so far only type-checked and built in CI).
+- [ ] Watch the swarm check ("What the swarm sees") with a real provider: how many peers and trackers report an address, and whether the verdict settles.
+- [ ] Try metered detection and network names through NetworkManager on real Linux (only built in CI).
 
 ### Packaging and release
 Done: the Windows setup with OpenVPN and Python bundled, `.deb` and `.rpm` packages (with headless mode), checksums, draft releases from CI, in-app updates on Windows, an About page and a log viewer.
@@ -332,7 +350,7 @@ Done: web seeds (BEP 19), runtime per-torrent speed limits, force recheck, movin
 - [ ] Storage benchmark: the download path now measures the same as plain file I/O (medians within 1%), but results are noisy; re-check on a fast NVMe drive.
 
 ### Seeding and queueing
-Done: a weekly schedule for the alternative speed limits, a watched folder, moving files when a torrent's category changes, creating torrents, RSS feeds with download rules, an incomplete-downloads folder, file priorities, extra trackers for new torrents, and exporting `.torrent` files.
+Done: a weekly schedule for the alternative speed limits, a watched folder, moving files when a torrent's category changes, creating torrents, RSS feeds with download rules, an incomplete-downloads folder, file priorities, extra trackers for new torrents, exporting `.torrent` files, seeding where the swarm needs it, background data checks, reusing files other torrents have, metered-connection pauses and a monthly data cap.
 - [ ] Try RSS against real feeds from sites and indexers.
 
 ### Search
@@ -341,7 +359,7 @@ Done: a weekly schedule for the alternative speed limits, a watched folder, movi
 - [ ] Update the pinned embedded Python with each Python security release (3.14.8 is current).
 
 ### Security and quality
-Done: hostile-input tests for torrents, bencode, backups, Torznab and Internet Archive replies, plugin results, tracker scrapes and VPN profiles. They found and fixed a stack overflow on deeply nested bencode, integer overflow in bencode numbers, and a crash on non-ASCII dates in search results.
+Done: fake-release warnings, checksum-file checks, passkey stripping, safe preview, the connections ledger, the swarm leak check, the untrusted-networks rule, and hostile-input tests for torrents, bencode, backups, Torznab and Internet Archive replies, plugin results, tracker scrapes, VPN profiles, checksum files and passkey stripping. They found and fixed a stack overflow on deeply nested bencode, integer overflow in bencode numbers, and a crash on non-ASCII dates in search results.
 - [ ] Check for dependency updates regularly and upgrade by hand. Advisories already fail CI.
 - [ ] Do a security review before each release.
 - [ ] Privately report the Windows path-escape issue and the bencode crashes to upstream librqbit (see `vendor/PATCHES.md`).

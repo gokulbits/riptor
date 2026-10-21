@@ -137,18 +137,20 @@ pub struct TrackerResponse<'a> {
     #[allow(dead_code)]
     #[serde(rename = "warning message", borrow)]
     pub warning_message: Option<ByteBuf<'a>>,
-    #[allow(dead_code)]
+    // RIPTOR PATCH: optional, so "not sent" isn't read as zero seeders.
     #[serde(default)]
-    pub complete: u64,
+    pub complete: Option<u64>,
     pub interval: u64,
     #[allow(dead_code)]
     #[serde(rename = "min interval")]
     pub min_interval: Option<u64>,
     #[allow(dead_code)]
     pub tracker_id: Option<ByteBuf<'a>>,
-    #[allow(dead_code)]
     #[serde(default)]
-    pub incomplete: u64,
+    pub incomplete: Option<u64>,
+    // RIPTOR PATCH: BEP 24.
+    #[serde(rename = "external ip", default, borrow)]
+    pub external_ip: Option<ByteBuf<'a>>,
     #[serde(borrow)]
     pub peers: Peers<'a, SocketAddrV4>,
     #[serde(default, borrow)]

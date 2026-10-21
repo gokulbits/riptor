@@ -103,9 +103,11 @@ async fn get_capped(http: &reqwest::Client, url: &str, cap: usize) -> anyhow::Re
         }
         anyhow::Ok(body)
     };
-    tokio::time::timeout(FETCH_TIMEOUT, work)
+    let got = tokio::time::timeout(FETCH_TIMEOUT, work)
         .await
-        .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out")))
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out")));
+    riptor_net::ledger::record(riptor_net::ledger::Purpose::Catalog, url, got.is_ok());
+    got
 }
 
 pub fn parse_official_index(body: &str) -> Vec<(String, String)> {

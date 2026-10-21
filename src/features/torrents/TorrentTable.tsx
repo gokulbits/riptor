@@ -1,6 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
-import { AlertTriangle, ArrowDown, ArrowUp, Check, RotateCcw } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Check, RotateCcw, ShieldAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatBytes, formatDate, formatDuration, formatPercent, formatRate, formatRatio } from "../../lib/format";
 import { api, errorText } from "../../lib/ipc";
@@ -28,6 +28,13 @@ const COLUMNS: Column[] = [
     width: 380,
     render: (t) => (
       <span className="flex min-w-0 items-center gap-1.5" title={t.name}>
+        {t.suspicion && (
+          <ShieldAlert
+            size={13}
+            className={`shrink-0 ${t.suspicion === "danger" ? "text-danger" : "text-warn"}`}
+            aria-label="Looks like a fake release"
+          />
+        )}
         {t.has_executables && (
           <AlertTriangle size={13} className="shrink-0 text-warn" aria-label="Contains executable files" />
         )}
@@ -49,6 +56,20 @@ const COLUMNS: Column[] = [
   },
   { key: "state", label: "Status", width: 104, render: (t) => <StateLabel state={t.state} forced={t.forced} /> },
   { key: "peers", label: "Peers", width: 72, align: "right", render: (t) => `${t.peers} (${t.peers_seen})` },
+  {
+    key: "swarm_seeds",
+    label: "Swarm",
+    width: 90,
+    align: "right",
+    render: (t) =>
+      t.swarm_seeds == null ? (
+        ""
+      ) : (
+        <span title={`Trackers report ${t.swarm_seeds} seeders and ${t.swarm_leechers ?? 0} downloading`}>
+          <span className={t.progress >= 1 && t.swarm_seeds <= 1 ? "text-warn" : undefined}>{t.swarm_seeds}</span> / {t.swarm_leechers ?? 0}
+        </span>
+      ),
+  },
   { key: "dl_rate", label: "Down", width: 92, align: "right", render: (t) => formatRate(t.dl_rate) },
   { key: "ul_rate", label: "Up", width: 92, align: "right", render: (t) => formatRate(t.ul_rate) },
   { key: "eta", label: "ETA", width: 80, align: "right", render: (t) => (t.progress >= 1 ? "–" : formatDuration(t.eta)) },
@@ -58,10 +79,10 @@ const COLUMNS: Column[] = [
   { key: "downloaded", label: "Downloaded", width: 96, align: "right", hidden: true, render: (t) => formatBytes(t.downloaded) },
   { key: "uploaded", label: "Uploaded", width: 96, align: "right", hidden: true, render: (t) => formatBytes(t.uploaded) },
   { key: "completed_on", label: "Completed", width: 150, hidden: true, render: (t) => (t.completed_on ? formatDate(t.completed_on) : "") },
-  { key: "seeding_time", label: "Seeding Time", width: 100, align: "right", hidden: true, render: (t) => (t.seeding_time ? formatDuration(t.seeding_time) : "") },
+  { key: "seeding_time", label: "Seeding time", width: 100, align: "right", hidden: true, render: (t) => (t.seeding_time ? formatDuration(t.seeding_time) : "") },
   { key: "tags", label: "Tags", width: 120, hidden: true, render: (t) => <span title={t.tags.join(", ")}>{t.tags.join(", ")}</span> },
   { key: "tracker", label: "Tracker", width: 150, hidden: true, render: (t) => t.tracker ?? "" },
-  { key: "save_path", label: "Save Path", width: 220, hidden: true, render: (t) => <span title={t.save_path}>{t.save_path}</span> },
+  { key: "save_path", label: "Save path", width: 220, hidden: true, render: (t) => <span title={t.save_path}>{t.save_path}</span> },
 ];
 
 const ROW_HEIGHT = 30;

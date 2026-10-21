@@ -76,7 +76,7 @@ export function CreateTorrentDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Dialog
-      title="Create Torrent"
+      title="Create torrent"
       onClose={busy ? () => {} : onClose}
       footer={
         busy ? (
@@ -96,7 +96,7 @@ export function CreateTorrentDialog({ onClose }: { onClose: () => void }) {
       }
     >
       <div className="space-y-4">
-        <Field label="Files To Share">
+        <Field label="Files to share">
           <div className="flex gap-1">
             <input className="input font-mono text-xs" readOnly value={source} placeholder="Choose a file or a folder" />
             <button className="btn-ghost border border-border" disabled={busy} onClick={() => pick(false)} title="Choose a file">
@@ -116,7 +116,7 @@ export function CreateTorrentDialog({ onClose }: { onClose: () => void }) {
             spellCheck={false}
           />
         </Field>
-        <Field label="Web Seeds" hint="Optional. HTTP servers that host the same files, one per line.">
+        <Field label="Web seeds" hint="Optional. HTTP servers that host the same files, one per line.">
           <textarea
             className="input h-14 resize-y font-mono text-xs"
             value={webSeeds}
@@ -129,7 +129,7 @@ export function CreateTorrentDialog({ onClose }: { onClose: () => void }) {
           <Field label="Comment">
             <input className="input" value={comment} disabled={busy} onChange={(e) => setComment(e.target.value)} />
           </Field>
-          <Field label="Piece Size">
+          <Field label="Piece size">
             <select
               className="input"
               value={piece ?? ""}
@@ -149,10 +149,10 @@ export function CreateTorrentDialog({ onClose }: { onClose: () => void }) {
           checked={isPrivate}
           onChange={setPrivate}
           disabled={busy}
-          label="Private Torrent"
+          label="Private torrent"
           hint="Peers only come from the trackers: no DHT, peer exchange or local discovery."
         />
-        <Toggle checked={seed} onChange={setSeed} disabled={busy} label="Start Seeding" hint="Adds the torrent and seeds it from where the files are." />
+        <Toggle checked={seed} onChange={setSeed} disabled={busy} label="Start seeding" hint="Adds the torrent and seeds it from where the files are." />
         {busy && (
           <div className="space-y-1">
             <div className="h-2 overflow-hidden rounded-sm bg-raised">

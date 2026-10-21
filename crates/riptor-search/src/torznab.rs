@@ -247,7 +247,9 @@ pub async fn search(
     if let Some(c) = cat_ids(category) {
         req = req.query(&[("cat", c)]);
     }
-    let resp = req.send().await?.error_for_status()?;
+    let resp = req.send().await;
+    riptor_net::ledger::record(riptor_net::ledger::Purpose::Search, endpoint, resp.is_ok());
+    let resp = resp?.error_for_status()?;
     if let Some(len) = resp.content_length() {
         ensure!(len <= 16 << 20, "indexer response too large");
     }

@@ -375,7 +375,7 @@ impl VpnManager {
     }
 
     async fn fall_back(&self) {
-        let mode = if self.engine.settings().vpn_required {
+        let mode = if self.engine.kill_switch_on() {
             NetworkMode::Blocked
         } else {
             NetworkMode::Normal
@@ -428,6 +428,15 @@ impl VpnManager {
             if !openvpn_installed() {
                 bail!("OpenVPN isn't installed. Install OpenVPN Community, then try again.");
             }
+        }
+        // The tunnel itself has to use the normal connection.
+        for server in &profile.servers {
+            riptor_net::ledger::record_via(
+                riptor_net::ledger::Purpose::VpnServer,
+                server,
+                riptor_net::ledger::Route::Direct,
+                true,
+            );
         }
         self.set_status(|s| {
             *s = VpnStatus {

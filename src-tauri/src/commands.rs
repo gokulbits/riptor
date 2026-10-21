@@ -97,7 +97,10 @@ pub async fn torrent_trackers(state: State<'_, AppState>, id: String) -> Res<Vec
 }
 
 #[tauri::command]
-pub async fn torrent_magnet(state: State<'_, AppState>, id: String) -> Res<String> {
+pub async fn torrent_magnet(
+    state: State<'_, AppState>,
+    id: String,
+) -> Res<riptor_core::MagnetLink> {
     engine(&state).await?.magnet_link(&id).map_err(err)
 }
 
@@ -268,7 +271,8 @@ pub async fn open_torrent_file(
     id: String,
     index: usize,
 ) -> Res<()> {
-    let (path, len, ready) = engine(&state).await?.file_path(&id, index).map_err(err)?;
+    let e = engine(&state).await?;
+    let (path, len, ready) = e.file_path(&id, index).map_err(err)?;
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -277,6 +281,9 @@ pub async fn open_torrent_file(
         return Err(
             "Riptor doesn't open programs or files that can run code; use Show in folder".into(),
         );
+    }
+    if e.flagged_dangerous(&id, index) {
+        return Err("This file isn't what its name says, so Riptor won't open it".into());
     }
     // Audio and video can start playing before the rest arrives.
     let enough = ready >= len
@@ -719,10 +726,15 @@ pub async fn set_file_priority(
 
 /// `path` comes from the save dialog.
 #[tauri::command]
-pub async fn export_torrent(state: State<'_, AppState>, id: String, path: PathBuf) -> Res<()> {
+pub async fn export_torrent(
+    state: State<'_, AppState>,
+    id: String,
+    path: PathBuf,
+    strip_secrets: bool,
+) -> Res<()> {
     engine(&state)
         .await?
-        .export_torrent(&id, &path)
+        .export_torrent(&id, &path, strip_secrets)
         .map_err(err)
 }
 
@@ -922,6 +934,86 @@ pub async fn import_torrents(
     path: PathBuf,
 ) -> Res<riptor_core::import::ImportReport> {
     engine(&state).await?.import_from(&path).await.map_err(err)
+}
+
+#[derive(serde::Serialize)]
+pub struct Connection {
+    purpose: &'static str,
+    host: String,
+    route: &'static str,
+    count: u64,
+    failures: u64,
+    first: u64,
+    last: u64,
+}
+
+/// Hosts contacted this session; kept in memory only.
+#[tauri::command]
+pub fn connections() -> Vec<Connection> {
+    riptor_net::ledger::snapshot()
+        .into_iter()
+        .map(|e| Connection {
+            purpose: e.purpose.label(),
+            host: e.host,
+            route: e.route.label(),
+            count: e.count,
+            failures: e.failures,
+            first: e.first,
+            last: e.last,
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn connections_clear() {
+    riptor_net::ledger::clear();
+}
+
+/// `None` until the OS has been asked (a few seconds after start).
+#[tauri::command]
+pub async fn network_info(
+    state: State<'_, AppState>,
+) -> Res<Option<riptor_core::netinfo::NetInfo>> {
+    Ok(engine(&state).await?.net_info())
+}
+
+#[tauri::command]
+pub async fn swarm_view(state: State<'_, AppState>) -> Res<riptor_core::SwarmView> {
+    Ok(engine(&state).await?.swarm_view())
+}
+
+#[tauri::command]
+pub async fn release_leak_hold(state: State<'_, AppState>) -> Res<()> {
+    engine(&state).await?.release_leak_hold();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn preview_file(
+    state: State<'_, AppState>,
+    id: String,
+    index: usize,
+) -> Res<riptor_core::preview::FilePreview> {
+    engine(&state)
+        .await?
+        .preview_file(&id, index)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn check_data(state: State<'_, AppState>, ids: Vec<String>) -> Res<()> {
+    engine(&state).await?.check_data(&ids).map_err(err)
+}
+
+#[tauri::command]
+pub async fn verify_checksums(state: State<'_, AppState>, ids: Vec<String>) -> Res<()> {
+    engine(&state).await?.verify_checksums(&ids).map_err(err)
+}
+
+#[tauri::command]
+pub async fn torrent_safety(state: State<'_, AppState>, id: String) -> Res<riptor_core::Safety> {
+    engine(&state).await?.safety(&id).map_err(err)
 }
 
 #[tauri::command]

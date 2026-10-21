@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { AlertTriangle, FolderOpen, Loader2, Lock } from "lucide-react";
+import { AlertTriangle, FolderOpen, Loader2, Lock, Recycle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Dialog, Field, Toggle } from "../../components/ui";
 import { api, errorText } from "../../lib/ipc";
@@ -7,6 +7,7 @@ import { formatBytes } from "../../lib/format";
 import { takePreview } from "../../lib/previewCache";
 import type { Preview, Source } from "../../lib/types";
 import { useApp } from "../../stores/app";
+import { FindingsList } from "./SafetyPanel";
 
 function describe(src: Source): string {
   if (src.kind === "file") return src.value.split(/[\\/]/).pop() ?? src.value;
@@ -36,6 +37,7 @@ export function AddDialog({
   const [tags, setTags] = useState("");
   const [startPaused, setStartPaused] = useState(false);
   const [subfolder, setSubfolder] = useState(true);
+  const [reuse, setReuse] = useState(true);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -52,6 +54,7 @@ export function AddDialog({
         if (!alive) return;
         setPreview(p);
         setSelected(new Set(p.files.filter((f) => f.selected).map((f) => f.index)));
+        if (p.findings.some((f) => f.level === "danger")) setStartPaused(true);
       })
       .catch((e) => alive && setError(errorText(e)));
     return () => {
@@ -65,6 +68,7 @@ export function AddDialog({
     [preview, selected],
   );
   const exeSelected = preview?.files.some((f) => f.executable && selected.has(f.index));
+  const dupes = useMemo(() => new Set(preview?.duplicates.map((d) => d.index)), [preview]);
 
   const [free, setFree] = useState<number | null>(null);
   useEffect(() => {
@@ -102,6 +106,9 @@ export function AddDialog({
         start_paused: startPaused,
         only_files: all ? null : [...selected],
         create_subfolder: subfolder,
+        // The warnings were on screen; "Add stopped" is the user's answer.
+        allow_suspicious: true,
+        reuse_existing: reuse,
       });
       toast("success", `Added ${preview.name}`);
       onClose();
@@ -144,6 +151,17 @@ export function AddDialog({
         <div className="space-y-4">
           {preview.already_added && (
             <p className="rounded-md bg-info/10 px-3 py-2 text-sm text-info">This torrent is already in your list.</p>
+          )}
+          <FindingsList findings={preview.findings} />
+          {preview.duplicates.length > 0 && (
+            <div className="rounded-md bg-ok/10 px-3 py-2 text-sm">
+              <Toggle
+                checked={reuse}
+                onChange={setReuse}
+                label={`Reuse ${formatBytes(preview.duplicate_bytes)} already on disk`}
+                hint={`${preview.duplicates.length} file(s) match files other torrents downloaded, checked against this torrent. They're shared where that's safe and copied otherwise, so they needn't be downloaded again.`}
+              />
+            </div>
           )}
           {exeSelected && (
             <p className="flex items-start gap-2 rounded-md bg-warn/10 px-3 py-2 text-sm text-warn">
@@ -231,6 +249,7 @@ export function AddDialog({
                     aria-label={`Download ${f.path}`}
                   />
                   {f.executable && <AlertTriangle size={13} className="shrink-0 text-warn" aria-label="Executable" />}
+                  {reuse && dupes.has(f.index) && <Recycle size={13} className="shrink-0 text-ok" aria-label="Already on disk" />}
                   <span className="flex-1 truncate" title={f.path}>
                     {f.path}
                   </span>

@@ -35,6 +35,14 @@ use crate::settings::{Settings, Transport};
 use crate::stats::{self, Statistics, StatsReport};
 use crate::{backup, motw, paths, state_file, webseed};
 
+mod data_check;
+mod hold;
+mod reuse;
+mod safety;
+mod swarm_ip;
+
+pub use swarm_ip::SwarmView;
+
 const TICK: Duration = Duration::from_secs(1);
 const PERSIST_EVERY_TICKS: u64 = 15;
 const METADATA_TIMEOUT: Duration = Duration::from_secs(180);
@@ -45,6 +53,17 @@ const DISK_CHECK_EVERY: Duration = Duration::from_secs(5);
 const DISK_HYSTERESIS: u64 = 256 * 1024 * 1024;
 
 type WebSeedInfo = (Arc<webseed::Layout>, Vec<url::Url>);
+
+/// Slow disk work the ticker hands off; one runs at a time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Job {
+    Checksums(Id20),
+    ContentScan(Id20),
+    /// The VPN's public address, to compare with what the swarm sees.
+    VpnAddress,
+    NetInfo,
+    Scrub(Id20),
+}
 
 pub struct EngineConfig {
     pub data_dir: PathBuf,
@@ -59,6 +78,8 @@ struct Pending {
     file_count: usize,
     has_executables: bool,
     private: bool,
+    findings: Vec<crate::suspicion::Finding>,
+    reuse: Option<reuse::ReusePlan>,
     at: Instant,
 }
 
@@ -114,6 +135,17 @@ pub struct Engine {
     moving: Mutex<HashSet<Id20>>,
     queued_moves: Mutex<Vec<(Id20, PathBuf)>>,
     last_disk_check: Mutex<Option<Instant>>,
+    /// Waiting, and everything queued or running (so nothing runs twice at once).
+    jobs: Mutex<(Vec<Job>, HashSet<Job>)>,
+    disk_job: tokio::sync::Mutex<()>,
+    /// Public addresses with and without the VPN, once known.
+    vpn_public: Mutex<(Option<std::net::IpAddr>, Option<Instant>)>,
+    normal_public: Mutex<Option<std::net::IpAddr>>,
+    swarm_verdict: Mutex<crate::seen_ip::Verdict>,
+    /// Torrents held because the swarm sees the normal address; the user lifts it.
+    leak_hold: Mutex<Option<String>>,
+    net_info: Mutex<Option<crate::netinfo::NetInfo>>,
+    scrubbing: Mutex<HashMap<Id20, Arc<crate::scrub::Progress>>>,
 }
 
 #[derive(Default)]
@@ -156,6 +188,7 @@ fn delta(now: u64, before: u64) -> u64 {
 impl Engine {
     pub async fn start(cfg: EngineConfig) -> anyhow::Result<Arc<Self>> {
         std::fs::create_dir_all(&cfg.data_dir)?;
+        crate::observe::install();
         let data_dir = cfg.data_dir;
         let mut settings: Settings = state_file::load(&data_dir.join("settings.json"))?;
         settings.migrate();
@@ -208,11 +241,13 @@ impl Engine {
             Err(e) => warn!("couldn't tidy the session folder: {e:#}"),
         }
 
-        let network = if settings.vpn_required {
+        // The network isn't known yet, so the untrusted-network rule holds too.
+        let network = if settings.kill_switch(None) {
             NetworkMode::Blocked
         } else {
             NetworkMode::Normal
         };
+        network.note_route();
         let session = build_session(&data_dir, &settings, &factory, &network).await?;
         let (events, _) = broadcast::channel(64);
         let engine = Arc::new(Self {
@@ -249,6 +284,14 @@ impl Engine {
             moving: Mutex::new(HashSet::new()),
             queued_moves: Mutex::new(Vec::new()),
             last_disk_check: Mutex::new(None),
+            jobs: Mutex::new((Vec::new(), HashSet::new())),
+            disk_job: tokio::sync::Mutex::new(()),
+            vpn_public: Mutex::new((None, None)),
+            normal_public: Mutex::new(None),
+            swarm_verdict: Mutex::new(crate::seen_ip::Verdict::Unknown),
+            leak_hold: Mutex::new(None),
+            net_info: Mutex::new(None),
+            scrubbing: Mutex::new(HashMap::new()),
         });
         engine.apply_limits();
         engine.forget_orphans().await;
@@ -305,7 +348,17 @@ impl Engine {
             Source::Url(u) => self.web_client(u)?,
             _ => self.http.clone(),
         };
-        let (add, mut trackers) = match input::resolve(&src, &http).await? {
+        let resolved = input::resolve(&src, &http).await;
+        if let Source::Url(u) = &src {
+            if !u.trim_start().starts_with("magnet:") {
+                riptor_net::ledger::record(
+                    riptor_net::ledger::Purpose::TorrentLink,
+                    u,
+                    resolved.is_ok(),
+                );
+            }
+        }
+        let (add, mut trackers) = match resolved? {
             Resolved::Magnet(m) => {
                 let parsed = librqbit::Magnet::parse(&m)?;
                 (AddTorrent::from_url(m), parsed.trackers.clone())
@@ -385,6 +438,7 @@ impl Engine {
                     index: i,
                     executable: input::is_executable_name(&rel),
                     media: input::is_media(&rel),
+                    previewable: crate::preview::previewable(&rel),
                     path: rel,
                     size: f.len,
                     done: 0,
@@ -396,6 +450,17 @@ impl Engine {
             .collect();
         let has_executables = files.iter().any(|f| f.executable);
         let already_added = self.records.read().contains_key(&lo.info_hash);
+        let findings = name_findings(&lo.info, &name);
+        let duplicates = if already_added {
+            Vec::new()
+        } else {
+            self.find_duplicates(&lo.info_hash, &lo.info).await
+        };
+        let duplicate_bytes = duplicates
+            .iter()
+            .filter_map(|d| files.iter().find(|f| f.index == d.index))
+            .map(|f| f.size)
+            .sum();
 
         let preview = Preview {
             info_hash: lo.info_hash.as_string(),
@@ -409,6 +474,15 @@ impl Engine {
             trackers: trackers.clone(),
             comment,
             files,
+            findings: findings.clone(),
+            duplicate_bytes,
+            duplicates: duplicates
+                .iter()
+                .map(|d| Duplicate {
+                    index: d.index,
+                    existing: d.existing.to_string_lossy().into_owned(),
+                })
+                .collect(),
         };
 
         let mut pending = self.pending.lock();
@@ -428,6 +502,9 @@ impl Engine {
                 file_count: layout.files.len(),
                 has_executables,
                 private: lo.info.info().private,
+                findings,
+                reuse: (!duplicates.is_empty())
+                    .then(|| reuse::ReusePlan::new(duplicates.clone(), &lo.info)),
                 at: Instant::now(),
             },
         );
@@ -504,6 +581,10 @@ impl Engine {
                 "invalid file selection"
             );
         }
+        if let (true, Some(plan)) = (params.reuse_existing, &p.reuse) {
+            self.place_duplicates(plan, &root, owned, params.only_files.as_deref())
+                .await;
+        }
 
         self.factory.register(
             hash,
@@ -541,6 +622,8 @@ impl Engine {
         }
 
         let now = unix_now();
+        let dangerous =
+            crate::suspicion::worst(&p.findings) == Some(crate::suspicion::Level::Danger);
         let mut records = self.records.write();
         let next_pos = records
             .values()
@@ -566,7 +649,7 @@ impl Engine {
                 limits: ShareLimits::default(),
                 limit_action: None,
                 queue_pos: Some(next_pos),
-                intent: if params.start_paused {
+                intent: if params.start_paused || (dangerous && !params.allow_suspicious) {
                     Intent::Stopped
                 } else {
                     Intent::Started
@@ -577,9 +660,19 @@ impl Engine {
                 move_on_complete: incomplete.map(|_| base.clone()),
                 file_priority: BTreeMap::new(),
                 renames: BTreeMap::new(),
+                checksums: None,
+                last_scrub: None,
+                findings: Some(p.findings),
+                content_findings: None,
             },
         );
         drop(records);
+        if dangerous && !params.allow_suspicious && !params.start_paused {
+            self.notice(
+                NoticeLevel::Warning,
+                format!("{} looks like a fake release, so it was added stopped. Check it before starting it.", p.name),
+            );
+        }
         self.statistics.lock().torrents_added += 1;
         // Checked on the next tick, before the queue can start it.
         *self.last_disk_check.lock() = None;
@@ -656,6 +749,7 @@ impl Engine {
 
     async fn remove_one(&self, hash: Id20, delete_files: bool) -> anyhow::Result<()> {
         let _g = self.admin.lock().await;
+        self.stop_data_check(&hash);
         self.web_seeds.lock().remove(&hash);
         let result = self
             .session()
@@ -666,6 +760,7 @@ impl Engine {
         }
         self.runtime.lock().remove(&hash);
         self.factory.unregister(&hash);
+        crate::swarm::forget(&hash);
         self.persist_now()?;
         let _ = self.events.send(Event::Removed {
             id: hash.as_string(),
@@ -763,6 +858,7 @@ impl Engine {
         renames: Option<BTreeMap<usize, String>>,
     ) -> anyhow::Result<()> {
         let _g = self.admin.lock().await;
+        self.stop_data_check(&hash);
         let rec = self
             .records
             .read()
@@ -992,8 +1088,8 @@ impl Engine {
         Ok(())
     }
 
-    /// Saves the torrent's .torrent file.
-    pub fn export_torrent(&self, id: &str, path: &Path) -> anyhow::Result<()> {
+    /// Saves the torrent's .torrent file, optionally without trackers that carry a passkey.
+    pub fn export_torrent(&self, id: &str, path: &Path, strip_secrets: bool) -> anyhow::Result<()> {
         ensure!(path.is_absolute(), "path must be absolute");
         ensure!(
             path.extension()
@@ -1012,6 +1108,11 @@ impl Engine {
             .handle(&parse_hash(id)?)?
             .with_metadata(|m| m.torrent_bytes.clone())?;
         ensure!(!bytes.is_empty(), "this torrent's metadata isn't known yet");
+        let bytes = if strip_secrets {
+            crate::passkey::strip_secret_trackers(&bytes)?.0.into()
+        } else {
+            bytes
+        };
         std::fs::write(path, &bytes)?;
         Ok(())
     }
@@ -1181,6 +1282,7 @@ impl Engine {
                         index: i,
                         executable: input::is_executable_name(&rel),
                         media: input::is_media(&rel),
+                        previewable: crate::preview::previewable(&rel),
                         path: rel,
                         size: f.len,
                         done: stats.file_progress.get(i).copied().unwrap_or(0),
@@ -1306,7 +1408,8 @@ impl Engine {
         self.update_settings(s).await
     }
 
-    pub fn magnet_link(&self, id: &str) -> anyhow::Result<String> {
+    /// Trackers with a passkey are left out: a magnet link is for sharing.
+    pub fn magnet_link(&self, id: &str) -> anyhow::Result<MagnetLink> {
         let hash = parse_hash(id)?;
         let name = self
             .records
@@ -1314,12 +1417,21 @@ impl Engine {
             .get(&hash)
             .map(|r| r.name.clone())
             .context("unknown torrent")?;
-        let trackers = self.trackers(id).unwrap_or_default();
-        Ok(crate::input::magnet_link(
-            &hash.as_string(),
-            &name,
-            &trackers,
-        ))
+        let (secret, trackers): (Vec<String>, Vec<String>) = self
+            .trackers(id)
+            .unwrap_or_default()
+            .into_iter()
+            .partition(|t| crate::passkey::has_secret(t));
+        let private = self
+            .handle(&hash)
+            .ok()
+            .and_then(|t| t.with_metadata(|m| m.info.info().private).ok())
+            .unwrap_or(false);
+        Ok(MagnetLink {
+            link: crate::input::magnet_link(&hash.as_string(), &name, &trackers),
+            withheld: secret.len(),
+            private,
+        })
     }
 
     /// The address peers see.
@@ -1332,6 +1444,7 @@ impl Engine {
             }
         };
         let ip = crate::public_ip::lookup(local).await?;
+        self.note_public_ip(ip, via_vpn);
         Ok(PublicIp {
             ip: ip.to_string(),
             via_vpn,
@@ -1355,9 +1468,15 @@ impl Engine {
                 .is_ok_and(|a| !a.is_empty()),
             Err(_) => false,
         };
-        let kill_switch = self.settings.read().vpn_required;
+        let kill_switch = self.kill_switch_on();
         let mut notes = Vec::new();
         let (vpn_ip, normal_ip) = (vpn.ok(), normal.ok());
+        if let Some(ip) = vpn_ip {
+            self.note_public_ip(ip, true);
+        }
+        if let Some(ip) = normal_ip {
+            self.note_public_ip(ip, false);
+        }
         match (&vpn_ip, &normal_ip) {
             (None, _) => notes.push("Couldn't reach the IP check service through the tunnel.".into()),
             (Some(v), Some(n)) if v == n => notes.push(
@@ -1484,11 +1603,10 @@ impl Engine {
         *self.last_disk_check.lock() = None;
         self.apply_limits();
         let current = self.network();
-        if new.vpn_required && current == NetworkMode::Normal {
-            return self.set_network(NetworkMode::Blocked).await;
-        }
-        if !new.vpn_required && current == NetworkMode::Blocked {
-            return self.set_network(NetworkMode::Normal).await;
+        if self.kill_switch_on() != (current == NetworkMode::Blocked)
+            && matches!(current, NetworkMode::Normal | NetworkMode::Blocked)
+        {
+            return self.apply_kill_switch().await;
         }
         if new.needs_restart(&old) {
             self.restart_session().await?;
@@ -1522,7 +1640,9 @@ impl Engine {
             return Ok(());
         }
         info!("network mode -> {}", mode.label());
+        mode.note_route();
         *self.network.write() = mode;
+        self.forget_swarm_view();
         self.restart_session().await
     }
 
@@ -1830,6 +1950,10 @@ impl Engine {
         if !resume {
             rec.intent = Intent::Stopped;
         }
+        // A forged backup could claim files were verified or hide warnings.
+        rec.checksums = None;
+        rec.findings = None;
+        rec.content_findings = None;
         rec.queue_pos = None;
         let only_files = t
             .only_files
@@ -2031,6 +2155,14 @@ impl Engine {
                         if self.moving.lock().insert(hash) {
                             self.queued_moves.lock().push((hash, dest.clone()));
                         }
+                    } else if rec.content_findings.is_none() {
+                        self.queue_job(Job::ContentScan(hash));
+                    }
+                }
+                if rec.findings.is_none() {
+                    if let Ok(f) = h.with_metadata(|m| name_findings(&m.info, &rec.name)) {
+                        rec.findings = Some(f);
+                        self.dirty.store(true, Ordering::Relaxed);
                     }
                 }
                 let running = matches!(stats.state, TorrentStatsState::Live);
@@ -2115,6 +2247,7 @@ impl Engine {
                 let since = rec
                     .last_activity
                     .max(rec.completed_on.unwrap_or(rec.added_on));
+                let swarm = crate::swarm::get(&hash);
                 views.push(TorrentView {
                     id: h.id(),
                     intent: rec.intent,
@@ -2133,6 +2266,7 @@ impl Engine {
                     running_for: r.running_since.map_or(0, |s| s.elapsed().as_secs()),
                     dl_rate: r.dl_rate as u64,
                     ul_rate: r.ul_rate as u64,
+                    swarm_seeds: swarm.map(|s| s.seeders),
                     limits: rec.limits,
                     limit_action: rec.limit_action,
                 });
@@ -2143,7 +2277,11 @@ impl Engine {
                     .filter_map(|u| u.host_str())
                     .min()
                     .map(str::to_string);
-                summaries.push(summarize(rec, &stats, r, peers, seen, tracker));
+                let mut summary = summarize(rec, &stats, r, peers, seen, tracker);
+                summary.swarm_seeds = swarm.map(|s| s.seeders);
+                summary.swarm_leechers = swarm.map(|s| s.leechers);
+                summary.scrub = self.data_check_progress(&hash);
+                summaries.push(summary);
                 if running && !stats.finished {
                     if let Some(live) = h.live() {
                         web_wanted.push((hash, h.clone(), live));
@@ -2178,6 +2316,7 @@ impl Engine {
                 name,
             });
             self.dirty.store(true, Ordering::Relaxed);
+            self.queue_job(Job::Checksums(hash));
             if mot && downloaded {
                 if let Ok(files) = self.files(&hash.as_string()) {
                     let root = self.factory.root_of(&hash);
@@ -2192,9 +2331,14 @@ impl Engine {
         }
 
         let actions = self.scheduler.lock().tick(&views, &prefs, now);
-        let blocked = matches!(*self.network.read(), NetworkMode::Blocked);
+        // A confirmed leak holds torrents like the kill switch does.
+        let blocked = matches!(*self.network.read(), NetworkMode::Blocked) || self.leak_held();
+        let hold = self.hold();
+        let finished: HashSet<usize> = views.iter().filter(|v| v.finished).map(|v| v.id).collect();
+        let held =
+            |id: usize| hold.all.is_some() || (hold.downloads.is_some() && !finished.contains(&id));
         for a in actions {
-            if blocked && matches!(a, Action::Start { .. }) {
+            if (blocked || held(a.id())) && matches!(a, Action::Start { .. }) {
                 continue;
             }
             if let Action::Start { id } = &a {
@@ -2206,12 +2350,15 @@ impl Engine {
                 warn!("scheduler action failed: {e:#}");
             }
         }
-        for (hash, h) in by_id.values() {
-            if (blocked || self.no_space(hash)) && !h.is_paused() {
+        for (id, (hash, h)) in &by_id {
+            if (blocked || held(*id) || self.no_space(hash)) && !h.is_paused() {
                 let _ = session.pause(h).await;
             }
         }
         global.network = self.network.read().label().to_string();
+        global.hold = hold.all.or(hold.downloads);
+        global.data_cap = self.data_cap_usage();
+        global.untrusted_network = self.untrusted_network();
 
         *self.last_tick_data.lock() = (summaries.clone(), global.clone());
         let _ = self.events.send(Event::Tick {
@@ -2228,6 +2375,15 @@ impl Engine {
             if let Err(e) = self.persist_now() {
                 warn!("saving torrent state failed: {e:#}");
             }
+        }
+        if n % 60 == 30 {
+            self.schedule_data_check();
+        }
+        if n % 15 == 1 {
+            self.queue_job(Job::NetInfo);
+        }
+        if n % 5 == 0 {
+            self.check_swarm_view();
         }
         if n % 15 == 0 {
             self.follow_alt_schedule();
@@ -2488,6 +2644,26 @@ fn ready_from_start(have: &[bool], m: &librqbit::TorrentMetadata) -> Vec<u64> {
         .collect()
 }
 
+/// Fake-release checks on the raw file names (before sanitizing hides the tricks).
+fn name_findings(
+    info: &librqbit_core::torrent_metainfo::ValidatedTorrentMetaV1Info<impl AsRef<[u8]>>,
+    name: &str,
+) -> Vec<crate::suspicion::Finding> {
+    let files: Vec<(String, u64)> = info
+        .iter_file_details()
+        .filter(|fd| !fd.attrs().padding)
+        .map(|fd| {
+            let parts: Vec<String> = fd
+                .filename
+                .iter_components()
+                .map(|c| c.into_owned())
+                .collect();
+            (parts.join("/"), fd.len)
+        })
+        .collect();
+    crate::suspicion::check_names(name, &files)
+}
+
 /// A user-typed relative path: real names only, nothing that sanitizing would change.
 fn clean_rel_path(rel: &str) -> anyhow::Result<String> {
     let parts: Vec<&str> = rel
@@ -2604,6 +2780,17 @@ fn summarize(
         dl_limit_kib: rec.dl_limit_kib,
         ul_limit_kib: rec.ul_limit_kib,
         error: stats.error.clone(),
+        checksum: rec
+            .checksums
+            .as_ref()
+            .filter(|c| c.verified + c.mismatched_count > 0)
+            .map(|c| c.mismatched_count == 0),
+        suspicion: rec.suspicion(),
+        // Filled in by the ticker.
+        swarm_seeds: None,
+        swarm_leechers: None,
+        scrub: None,
+        last_scrub: rec.last_scrub,
     }
 }
 
@@ -2652,6 +2839,11 @@ async fn build_session(
         ..Default::default()
     };
     let (dl, ul) = s.effective_limits();
+    let blocklist_file = match (&s.blocklist_file, &s.blocklist_url) {
+        (Some(f), _) => Some(f.clone()),
+        (None, Some(u)) => crate::blocklist::fetch(data_dir, u, net).await,
+        (None, None) => None,
+    };
     let opts = SessionOptions {
         dht,
         persistence: Some(SessionPersistenceConfig::Json {
@@ -2679,8 +2871,9 @@ async fn build_session(
             download_bps: kib(dl),
             upload_bps: kib(ul),
         },
-        blocklist_url: s.blocklist_url.clone(),
-        blocklist_file: s.blocklist_file.clone(),
+        // librqbit would fetch a URL itself, outside the tunnel.
+        blocklist_url: None,
+        blocklist_file,
         peer_limit: s.peer_limit,
         disable_local_service_discovery: !s.lsd || anon || vpn.is_some() || blocked,
         client_name_and_version: anon.then(|| "BitTorrent".to_string()),
@@ -2704,6 +2897,10 @@ fn spawn_ticker(engine: Weak<Engine>) {
             for (hash, dest) in e.take_queued_moves() {
                 let e = e.clone();
                 tokio::spawn(async move { e.finish_move(hash, dest).await });
+            }
+            for job in e.take_jobs() {
+                let e = e.clone();
+                tokio::spawn(async move { e.run_job(job).await });
             }
         }
     });

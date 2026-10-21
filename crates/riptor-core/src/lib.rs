@@ -2,26 +2,39 @@
 #![forbid(unsafe_code)]
 
 pub mod backup;
+mod blocklist;
+pub mod checksums;
 pub mod create;
+pub mod dedupe;
 pub mod dns;
 mod engine;
 pub mod import;
 pub mod input;
 pub mod model;
 mod motw;
+pub mod netinfo;
 pub mod network;
+mod observe;
+pub mod passkey;
 pub mod paths;
+pub mod preview;
 pub mod public_ip;
 pub mod relocate;
 pub mod reveal;
+pub mod scrub;
+pub mod seen_ip;
 mod session_db;
 pub mod settings;
 pub mod state_file;
 pub mod stats;
+pub mod suspicion;
+pub mod swarm;
 mod watch;
 mod webseed;
 
-pub use engine::{BackupSummary, Engine, EngineConfig, QueueMove, RestoreOptions, RestoreReport};
+pub use engine::{
+    BackupSummary, Engine, EngineConfig, QueueMove, RestoreOptions, RestoreReport, SwarmView,
+};
 pub use input::Source;
 pub use model::*;
 pub use network::{NetworkMode, VpnBinding};

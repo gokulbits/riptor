@@ -356,8 +356,10 @@ impl Net {
 
     async fn http_scrape(&self, announce: &Url, info_hash: &[u8; 20]) -> anyhow::Result<Counts> {
         let url = http_scrape_url(announce, info_hash).context("tracker has no scrape URL")?;
-        let body = self.get_capped(url, MAX_SCRAPE_BYTES).await?;
-        parse_http_reply(&body, info_hash)
+        let host = url.host_str().unwrap_or("").to_string();
+        let body = self.get_capped(url, MAX_SCRAPE_BYTES).await;
+        riptor_net::ledger::record(riptor_net::ledger::Purpose::Scrape, &host, body.is_ok());
+        parse_http_reply(&body?, info_hash)
     }
 
     async fn resolve_udp(&self, u: &Url) -> anyhow::Result<SocketAddr> {
@@ -375,6 +377,16 @@ impl Net {
     }
 
     async fn udp_scrape(&self, tracker: &Url, info_hash: &[u8; 20]) -> anyhow::Result<Counts> {
+        let got = self.udp_scrape_once(tracker, info_hash).await;
+        riptor_net::ledger::record(
+            riptor_net::ledger::Purpose::Scrape,
+            tracker.host_str().unwrap_or(""),
+            got.is_ok(),
+        );
+        got
+    }
+
+    async fn udp_scrape_once(&self, tracker: &Url, info_hash: &[u8; 20]) -> anyhow::Result<Counts> {
         let addr = self.resolve_udp(tracker).await?;
         let bind: SocketAddr = match (&self.tunnel, addr.is_ipv4(), addr.ip().is_loopback()) {
             (Some(t), _, _) => SocketAddr::new(t.local, 0),

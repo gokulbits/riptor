@@ -1053,13 +1053,13 @@ async fn incomplete_folder_trackers_priorities_and_export() {
     assert_eq!(files[0].priority, riptor_core::FilePriority::Normal);
 
     let out = tmp.path().join("export.torrent");
-    engine.export_torrent(&id, &out).unwrap();
+    engine.export_torrent(&id, &out, false).unwrap();
     assert_eq!(std::fs::read(&out).unwrap().first(), Some(&b'd'));
     let not_torrent = tmp.path().join("notes.txt");
-    assert!(engine.export_torrent(&id, &not_torrent).is_err());
+    assert!(engine.export_torrent(&id, &not_torrent, false).is_err());
     std::fs::write(tmp.path().join("keep.torrent"), b"hello").unwrap();
     assert!(engine
-        .export_torrent(&id, &tmp.path().join("keep.torrent"))
+        .export_torrent(&id, &tmp.path().join("keep.torrent"), false)
         .is_err());
 
     engine.resume(std::slice::from_ref(&id)).unwrap();

@@ -42,7 +42,7 @@ function AddFeedDialog({ onClose, onAdded }: { onClose: () => void; onAdded: (id
   };
   return (
     <Dialog
-      title="Add RSS Feed"
+      title="Add RSS feed"
       onClose={onClose}
       width="max-w-lg"
       footer={
@@ -51,7 +51,7 @@ function AddFeedDialog({ onClose, onAdded }: { onClose: () => void; onAdded: (id
             Cancel
           </button>
           <button className="btn-primary" disabled={!url.trim() || busy} onClick={add}>
-            Add Feed
+            Add feed
           </button>
         </>
       }
@@ -79,7 +79,7 @@ function RenameDialog({ current, onClose, onSave }: { current: string; onClose: 
   const ok = name.trim().length > 0;
   return (
     <Dialog
-      title="Rename Feed"
+      title="Rename feed"
       onClose={onClose}
       width="max-w-sm"
       footer={
@@ -154,7 +154,7 @@ function RulesDialog({ view, categories, onClose, onChanged }: { view: View; cat
 
   return (
     <Dialog
-      title="RSS Download Rules"
+      title="RSS download rules"
       onClose={onClose}
       width="max-w-4xl"
       footer={
@@ -167,7 +167,7 @@ function RulesDialog({ view, categories, onClose, onChanged }: { view: View; cat
             Close
           </button>
           <button className="btn-primary" disabled={!rule.name.trim() || !rule.must_contain.trim()} onClick={save}>
-            Save Rule
+            Save rule
           </button>
         </>
       }
@@ -188,7 +188,7 @@ function RulesDialog({ view, categories, onClose, onChanged }: { view: View; cat
             </button>
           ))}
           <button className="btn-ghost w-full justify-start text-sm" onClick={() => setRule(NEW_RULE)}>
-            <Plus size={14} /> New Rule
+            <Plus size={14} /> New rule
           </button>
         </nav>
         <div className="min-w-0 flex-1 space-y-3">
@@ -201,15 +201,15 @@ function RulesDialog({ view, categories, onClose, onChanged }: { view: View; cat
             </div>
           </div>
           <Field
-            label="Must Contain"
+            label="Must contain"
             hint={rule.use_regex ? "A regular expression, case-insensitive." : "Every word must appear (any order, any case). Use | between alternatives, e.g. show 1080p | show 2160p."}
           >
             <input className="input font-mono text-xs" value={rule.must_contain} onChange={(e) => set({ must_contain: e.target.value })} />
           </Field>
-          <Field label="Must Not Contain" hint="Titles matching this are skipped.">
+          <Field label="Must not contain" hint="Titles matching this are skipped.">
             <input className="input font-mono text-xs" value={rule.must_not_contain} onChange={(e) => set({ must_not_contain: e.target.value })} />
           </Field>
-          <Toggle checked={rule.use_regex} onChange={(v) => set({ use_regex: v })} label="Use Regular Expressions" />
+          <Toggle checked={rule.use_regex} onChange={(v) => set({ use_regex: v })} label="Use regular expressions" />
           <div className="grid grid-cols-2 gap-3">
             <Field label="Category">
               <select className="input" value={rule.category ?? ""} onChange={(e) => set({ category: e.target.value || null })}>
@@ -221,7 +221,7 @@ function RulesDialog({ view, categories, onClose, onChanged }: { view: View; cat
                 ))}
               </select>
             </Field>
-            <Field label="Save Folder" hint="Empty: the category's folder or the default.">
+            <Field label="Save folder" hint="Empty: the category's folder or the default.">
               <div className="flex gap-1">
                 <input className="input min-w-0 flex-1 text-xs" value={rule.save_path ?? ""} onChange={(e) => set({ save_path: e.target.value.trim() || null })} />
                 <button type="button" className="btn-ghost px-2" onClick={pickFolder} aria-label="Choose folder">
@@ -230,7 +230,7 @@ function RulesDialog({ view, categories, onClose, onChanged }: { view: View; cat
               </div>
             </Field>
           </div>
-          <Toggle checked={rule.start_paused} onChange={(v) => set({ start_paused: v })} label="Add Stopped" hint="Torrents containing programs are always added stopped." />
+          <Toggle checked={rule.start_paused} onChange={(v) => set({ start_paused: v })} label="Add stopped" hint="Torrents containing programs are always added stopped." />
           <div>
             <span className="label">Feeds</span>
             <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
@@ -361,7 +361,7 @@ export function RssView({ categories }: { categories: string[] }) {
           <Toggle
             checked={view.options.auto_download}
             onChange={(v) => run(api.rssSetOptions({ ...view.options, auto_download: v }))}
-            label="Download Rules"
+            label="Download rules"
             hint={`${view.rules.filter((r) => r.enabled).length} enabled`}
           />
           <label className="flex items-center gap-2 text-xs text-muted">
@@ -441,7 +441,7 @@ export function RssView({ categories }: { categories: string[] }) {
                 <span className="min-w-0 flex-1 truncate text-xs text-muted">{article.title}</span>
                 {article.page && (
                   <button className="btn-ghost py-1 text-xs" onClick={() => api.openWebUrl(article.page!)}>
-                    <ExternalLink size={13} /> Open Page
+                    <ExternalLink size={13} /> Open page
                   </button>
                 )}
                 <button className="btn-primary py-1 text-xs" onClick={() => download(article)}>

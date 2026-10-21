@@ -1,5 +1,4 @@
-//! Queueing after libtorrent's auto-manage rules. Seeds go by least seeding
-//! time; slow torrents can run without holding a slot.
+//! Queueing after libtorrent's auto-manage rules; seeds go where the swarm needs them most.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +18,19 @@ pub struct QueuePrefs {
     /// Bytes/s.
     pub ul_rate_threshold: u64,
     pub inactivity_timer_secs: u64,
+    /// Seed slots go first to torrents with few other seeders.
+    pub prefer_rare: bool,
+}
+
+/// How much a swarm needs another seed: lower runs first.
+pub fn need(swarm_seeds: Option<u32>) -> u8 {
+    match swarm_seeds {
+        // Counts include us, so 1-2 means we're the last or nearly.
+        Some(0..=2) => 0,
+        Some(3..=10) => 1,
+        None => 2,
+        Some(_) => 3,
+    }
 }
 
 impl Default for QueuePrefs {
@@ -32,6 +44,7 @@ impl Default for QueuePrefs {
             dl_rate_threshold: 2 * 1024,
             ul_rate_threshold: 2 * 1024,
             inactivity_timer_secs: 60,
+            prefer_rare: true,
         }
     }
 }
@@ -121,7 +134,14 @@ pub fn plan(
         .filter(|t| t.intent == Intent::Started && t.finished)
         .copied()
         .collect();
-    seeding.sort_by_key(|t| (t.seeding_time, t.id));
+    seeding.sort_by_key(|t| {
+        let need = if q.prefer_rare {
+            need(t.swarm_seeds)
+        } else {
+            0
+        };
+        (need, t.seeding_time, t.id)
+    });
 
     for (list, class) in [(downloading, &mut downs), (seeding, &mut ups)] {
         for t in list {
@@ -258,6 +278,50 @@ mod tests {
         ts[2].seeding_time = 300;
         let acts = run(&ts, &limits(5, 2, 5), &[]);
         assert_eq!(acts, vec![Action::Start { id: 1 }, Action::Start { id: 2 }]);
+    }
+
+    #[test]
+    fn seed_slots_go_where_the_swarm_needs_them() {
+        let mut ts = vec![seed(0), seed(1), seed(2), seed(3)];
+        stopped_all(&mut ts);
+        ts[0].swarm_seeds = Some(500);
+        ts[1].swarm_seeds = None;
+        ts[2].swarm_seeds = Some(1); // we're the only seed
+        ts[3].swarm_seeds = Some(6);
+        // Least seeding time would have picked 0 and 1.
+        ts[2].seeding_time = 9_000;
+        ts[3].seeding_time = 5_000;
+        let acts = run(&ts, &limits(5, 2, 5), &[]);
+        assert_eq!(acts, vec![Action::Start { id: 2 }, Action::Start { id: 3 }]);
+
+        // Equal need: the old order (least seeded first).
+        ts[2].swarm_seeds = Some(500);
+        ts[3].swarm_seeds = Some(500);
+        ts[1].swarm_seeds = Some(500);
+        let acts = run(&ts, &limits(5, 2, 5), &[]);
+        assert_eq!(acts, vec![Action::Start { id: 0 }, Action::Start { id: 1 }]);
+
+        // Switched off: seeding time only.
+        ts[2].swarm_seeds = Some(1);
+        let q = QueuePrefs {
+            prefer_rare: false,
+            ..limits(5, 2, 5)
+        };
+        assert_eq!(
+            run(&ts, &q, &[]),
+            vec![Action::Start { id: 0 }, Action::Start { id: 1 }]
+        );
+
+        // A running well-seeded torrent gives its slot to a rare one.
+        let mut ts = vec![seed(0), seed(1)];
+        ts[0].swarm_seeds = Some(300);
+        ts[1].running = false;
+        ts[1].swarm_seeds = Some(2);
+        ts[1].seeding_time = 99_999;
+        assert_eq!(
+            run(&ts, &limits(5, 1, 5), &[]),
+            vec![Action::Start { id: 1 }, Action::Queue { id: 0 }]
+        );
     }
 
     #[test]
