@@ -7,11 +7,30 @@
 !define RIPTOR_HOOKS_DIR "${__FILEDIR__}"
 ; Windows shows this file name when the uninstaller asks for admin rights.
 !define RIPTOR_UNINSTALLER "Uninstall Riptor.exe"
+; Before 0.1.4 the publisher was "riptor", which names the key holding the install folder.
+!define RIPTOR_OLD_KEY "Software\riptor\Riptor"
+!define RIPTOR_KEY "Software\gokulbits\Riptor"
+!define MUI_CUSTOMFUNCTION_GUIINIT RiptorFindOldInstall
+
+; Runs before the upgrade page, which needs the old folder to uninstall the old version.
+Function RiptorFindOldInstall
+  Push $0
+  ReadRegStr $0 SHCTX "${RIPTOR_KEY}" ""
+  ${If} $0 == ""
+    ReadRegStr $0 SHCTX "${RIPTOR_OLD_KEY}" ""
+    ${IfThen} $0 != "" ${|} WriteRegStr SHCTX "${RIPTOR_KEY}" "" $0 ${|}
+  ${EndIf}
+  Pop $0
+FunctionEnd
 
 !macro NSIS_HOOK_POSTINSTALL
   Delete "$INSTDIR\${RIPTOR_UNINSTALLER}"
   Rename "$INSTDIR\uninstall.exe" "$INSTDIR\${RIPTOR_UNINSTALLER}"
   WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\${RIPTOR_UNINSTALLER}$\""
+  DeleteRegKey SHCTX "${RIPTOR_OLD_KEY}"
+  DeleteRegKey /ifempty SHCTX "Software\riptor"
+  DeleteRegValue HKCU "${RIPTOR_OLD_KEY}" "Installer Language"
+  DeleteRegKey /ifempty HKCU "${RIPTOR_OLD_KEY}"
 
   SetRegView 64
   ReadRegStr $R0 HKLM "SOFTWARE\OpenVPN" "exe_path"

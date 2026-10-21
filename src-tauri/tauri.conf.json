@@ -53,6 +53,7 @@
       "rpm"
     ],
     "category": "Utility",
+    "publisher": "gokulbits",
     "shortDescription": "Lightweight BitTorrent client",
     "icon": [
       "icons/32x32.png",
