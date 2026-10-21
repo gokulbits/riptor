@@ -99,7 +99,7 @@ cargo bench -p riptor-storage
    - Done: per-machine NSIS setup bundling the OpenVPN MSI and embeddable Python, .deb/.rpm with `openvpn`/`python3`/`bubblewrap` + polkit policy, SHA-256 sums in CI, About page and log viewer.
    - Test the installers on clean machines (OpenVPN install, helper prompt, file/magnet registration).
    - Optional signing (the user chose not to Authenticode-sign).
-   - Set the `TAURI_SIGNING_PRIVATE_KEY` repository secret (from `~/.tauri/riptor-updater.key` on the dev machine) before the next tag, or the Windows bundle job fails; then test an update between two releases.
+   - The `TAURI_SIGNING_PRIVATE_KEY` repository secret is set (from `~/.tauri/riptor-updater.key`) and a manual run's `.exe.sig` verified against the bundled public key (2026-10-21). Still to test: an update between two releases.
    - Try headless mode on real Linux (only built in CI).
    - Keep the setup under 20 MB (19.3 MB for 0.1.2).
 4. **Engine:** web seeds, runtime per-torrent limits, force recheck, moving files, orphan cleanup, RSS with rules, the incomplete folder, file priorities, extra trackers and `.torrent` export are done.

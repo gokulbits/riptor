@@ -320,7 +320,7 @@ Done: profile import and sanitizing, the elevated helper, the OpenVPN management
 
 ### Packaging and release
 Done: the Windows setup with OpenVPN and Python bundled, `.deb` and `.rpm` packages (with headless mode), checksums, draft releases from CI, in-app updates on Windows, an About page and a log viewer.
-- [ ] Set the `TAURI_SIGNING_PRIVATE_KEY` repository secret before the next tag, and try an update from one release to the next.
+- [ ] Try an in-app update from one release to the next (CI signs the setup; the signature was checked against the app's key on 2026-10-21).
 - [ ] Try headless mode (`riptord`, `riptor-cli`) on real Linux.
 - [ ] Test the installers on clean Windows and Linux machines.
 - [ ] Code signing (optional).
