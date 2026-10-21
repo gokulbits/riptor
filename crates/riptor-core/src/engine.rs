@@ -581,6 +581,8 @@ impl Engine {
         );
         drop(records);
         self.statistics.lock().torrents_added += 1;
+        // Checked on the next tick, before the queue can start it.
+        *self.last_disk_check.lock() = None;
         self.persist_now()?;
         info!("added {}", p.name);
         Ok(hash.as_string())
@@ -1479,6 +1481,7 @@ impl Engine {
         self.session()
             .set_banned(new.banned_ips.iter().copied().collect());
         self.storage.reconfigure(new.storage.clone());
+        *self.last_disk_check.lock() = None;
         self.apply_limits();
         let current = self.network();
         if new.vpn_required && current == NetworkMode::Normal {
