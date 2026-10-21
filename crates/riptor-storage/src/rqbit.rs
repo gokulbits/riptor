@@ -16,11 +16,13 @@ use parking_lot::RwLock;
 use crate::layout::{Layout, RawFile};
 use crate::store::{Shared, Store};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TorrentRoot {
     pub path: PathBuf,
     /// We created it, so it may be removed when empty.
     pub owned: bool,
+    /// File index -> relative path (`/`-separated) chosen by the user; sanitized like any other.
+    pub renames: std::collections::BTreeMap<usize, String>,
 }
 
 #[derive(Clone)]
@@ -59,11 +61,21 @@ impl CachedStorageFactory {
 }
 
 pub fn layout_for(root: &TorrentRoot, metadata: &TorrentMetadata) -> anyhow::Result<Layout> {
-    let raw = metadata.info.iter_file_details().map(|fd| RawFile {
-        components: fd.filename.iter_components().collect(),
-        len: fd.len,
-        padding: fd.attrs().padding,
-    });
+    let raw = metadata
+        .info
+        .iter_file_details()
+        .enumerate()
+        .map(|(i, fd)| RawFile {
+            components: match root.renames.get(&i) {
+                Some(r) => r
+                    .split('/')
+                    .map(|c| std::borrow::Cow::Owned(c.to_string()))
+                    .collect(),
+                None => fd.filename.iter_components().collect(),
+            },
+            len: fd.len,
+            padding: fd.attrs().padding,
+        });
     let layout = Layout::new(
         &root.path,
         root.owned,

@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, Check, Database, Gauge, HardDrive, Loader2, Network, ShieldAlert, ShieldCheck, ShieldOff } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Database, Download, Gauge, HardDrive, Loader2, Network, ShieldAlert, ShieldCheck, ShieldOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { PublicIpView } from "../../components/PublicIp";
 import { api, errorText } from "../../lib/ipc";
@@ -114,8 +114,9 @@ function VpnIndicator() {
   );
 }
 
-export function StatusBar({ onToggleAlt }: { onToggleAlt: () => void }) {
+export function StatusBar({ onToggleAlt, onUpdate }: { onToggleAlt: () => void; onUpdate: () => void }) {
   const g = useApp((s) => s.global);
+  const update = useApp((s) => s.update);
   const count = useApp((s) => s.torrents.size);
   const hitRate =
     g && g.read_cache.hits + g.read_cache.misses > 0
@@ -137,6 +138,11 @@ export function StatusBar({ onToggleAlt }: { onToggleAlt: () => void }) {
       )}
       <VpnIndicator />
       <span className="flex-1" />
+      {update && (
+        <button className="flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-accent hover:bg-raised" onClick={onUpdate} title="Install the new version">
+          <Download size={12} /> Update to {update.version}
+        </button>
+      )}
       <FreeSpace />
       <button
         onClick={onToggleAlt}

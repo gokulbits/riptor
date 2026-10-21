@@ -17,7 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 import { PublicIpView } from "../../components/PublicIp";
 import { Field, Toggle } from "../../components/ui";
 import { api, errorText, events } from "../../lib/ipc";
-import type { VpnPrefs, VpnProfile, VpnStatus } from "../../lib/types";
+import type { LeakCheck, VpnPrefs, VpnProfile, VpnStatus } from "../../lib/types";
 import { useApp } from "../../stores/app";
 
 const OPENVPN_URL = "https://openvpn.net/community-downloads/";
@@ -29,6 +29,55 @@ const PHASE_LABEL: Record<VpnStatus["phase"], string> = {
   reconnecting: "Reconnecting…",
   error: "Error",
 };
+
+/** Compares the address through the tunnel with the normal one. */
+function LeakCheckCard() {
+  const toast = useApp((s) => s.toast);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<LeakCheck | null>(null);
+  const run = async () => {
+    setBusy(true);
+    try {
+      setResult(await api.leakCheck());
+    } catch (e) {
+      toast("error", errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const row = (k: string, v: React.ReactNode) => (
+    <div className="flex gap-2">
+      <span className="w-44 shrink-0 text-muted">{k}</span>
+      <span className="min-w-0 select-text font-mono text-xs">{v}</span>
+    </div>
+  );
+  return (
+    <div className="card space-y-2 p-3 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="flex-1 font-medium">Leak Check</span>
+        <button className="btn-ghost border border-border text-xs" onClick={run} disabled={busy}>
+          {busy ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} Run Check
+        </button>
+      </div>
+      <p className="text-xs text-muted">Asks an IP lookup service for your address twice: through the tunnel and over your normal connection.</p>
+      {result && (
+        <div className="space-y-1">
+          <p className={clsx("font-medium", result.passed ? "text-ok" : "text-danger")}>{result.passed ? "No leaks found" : "Problems found"}</p>
+          {row("Trackers and peers see", result.vpn_ip ?? "unknown")}
+          {row("Your normal address", result.normal_ip ?? "unknown")}
+          {row("Name lookups via tunnel", result.tunnel_dns ? "yes" : "no")}
+          {row("Torrent traffic bound to", result.adapter)}
+          {row("Kill switch", result.kill_switch ? "on" : "off")}
+          {result.notes.map((n) => (
+            <p key={n} className="flex items-start gap-1.5 text-xs text-warn">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" /> {n}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function StatusCard({ status, killSwitch, onDisconnect }: { status: VpnStatus; killSwitch: boolean; onDisconnect: () => void }) {
   const network = useApp((s) => s.global?.network);
@@ -285,6 +334,7 @@ export function VpnView() {
     <div className="h-full overflow-auto">
       <div className="mx-auto max-w-3xl space-y-5 p-6">
         <StatusCard status={status} killSwitch={killSwitch} onDisconnect={disconnect} />
+        {status.phase === "connected" && <LeakCheckCard />}
 
         {openvpn === false && (
           <div className="card flex items-start gap-3 border-warn/50 p-3 text-sm">

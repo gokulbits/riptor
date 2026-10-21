@@ -166,6 +166,7 @@ const STATE_LABEL: Record<TorrentState, string> = {
   stalled_up: "Seeding",
   queued: "Queued",
   stopped: "Stopped",
+  no_space: "No Space",
   error: "Error",
 };
 
@@ -178,6 +179,7 @@ const STATE_COLOR: Record<TorrentState, string> = {
   stalled_up: "text-ok/70",
   queued: "text-muted",
   stopped: "text-muted",
+  no_space: "text-danger",
   error: "text-danger",
 };
 

@@ -28,7 +28,8 @@ import { useShallow } from "zustand/react/shallow";
 import { api, errorText, events } from "../lib/ipc";
 import { parseLinks } from "../lib/links";
 import { applyTheme, resolveTheme } from "../lib/themes";
-import type { Source } from "../lib/types";
+import type { Source, WhenDone } from "../lib/types";
+import { Dialog } from "../components/ui";
 import { loadPref, savePref, useApp, visibleTorrents } from "../stores/app";
 import { AddDialog } from "../features/torrents/AddDialog";
 import { ContextMenu, type MenuItem } from "../features/torrents/ContextMenu";
@@ -70,6 +71,44 @@ function useTheme() {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, [theme, accent]);
+}
+
+/** The countdown before sleeping or shutting down, with a way out. */
+function WhenDoneCountdown() {
+  const [c, setC] = useState<{ action: WhenDone; left: number } | null>(null);
+  useEffect(() => {
+    const un = events.whenDone((e) => setC({ action: e.action, left: e.seconds }));
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
+  useEffect(() => {
+    if (!c) return;
+    if (c.left <= 0) return setC(null);
+    const t = setTimeout(() => setC({ ...c, left: c.left - 1 }), 1000);
+    return () => clearTimeout(t);
+  }, [c]);
+  if (!c) return null;
+  const cancel = () => {
+    api.whenDoneCancel().catch(() => {});
+    setC(null);
+  };
+  return (
+    <Dialog
+      title="Downloads Finished"
+      onClose={cancel}
+      width="max-w-sm"
+      footer={
+        <button className="btn-primary" onClick={cancel}>
+          Cancel
+        </button>
+      }
+    >
+      <p className="text-sm">
+        {c.action === "shutdown" ? "Shutting down" : "Going to sleep"} in {c.left} s.
+      </p>
+    </Dialog>
+  );
 }
 
 function Toasts() {
@@ -134,6 +173,10 @@ export default function App() {
       }),
       events.externalAdd((items) => queueAdds(items)),
       events.vpn((v) => useApp.getState().setVpn(v)),
+      events.updateAvailable((u) => {
+        useApp.getState().setUpdate(u);
+        toast("info", `Riptor ${u.version} is available. Open About to install it.`);
+      }),
       getCurrentWebview().onDragDropEvent((ev) => {
         if (ev.payload.type !== "drop") return;
         const files = ev.payload.paths.filter((p) => p.toLowerCase().endsWith(".torrent"));
@@ -321,6 +364,23 @@ export default function App() {
     }
   };
 
+  const importFromClient = async () => {
+    const dir = await open({
+      directory: true,
+      title: "Choose the folder of .torrent and .fastresume files from your other client",
+    });
+    if (typeof dir !== "string") return;
+    actions.toast("info", "Importing… existing files are checked, not downloaded again.");
+    try {
+      const r = await api.importTorrents(dir);
+      const parts = [`${r.added} added`, r.already_present && `${r.already_present} already here`, r.skipped && `${r.skipped} skipped`];
+      actions.toast(r.failed.length ? "warning" : "success", `Import: ${parts.filter(Boolean).join(", ")}.`);
+      for (const f of r.failed.slice(0, 3)) actions.toast("warning", f);
+    } catch (e) {
+      actions.toast("error", errorText(e));
+    }
+  };
+
   const exportSelected = async (ids: string[]) => {
     const fileName = (id: string) => `${(s.torrents.get(id)?.name ?? id).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")}.torrent`;
     if (ids.length === 1) {
@@ -446,6 +506,7 @@ export default function App() {
         onLogs={() => setModal({ kind: "logs" })}
         onResumeAll={() => run(api.resume([...s.torrents.keys()]))}
         onStopAll={() => run(api.stop([...s.torrents.keys()]))}
+        onImport={importFromClient}
         onAbout={() => setModal({ kind: "about" })}
       />
       {view === "search" ? (
@@ -480,6 +541,7 @@ export default function App() {
       )}
       <StatusBar
         onToggleAlt={() => run(api.setAltSpeed(!useApp.getState().global?.alt_speed))}
+        onUpdate={() => setModal({ kind: "about" })}
       />
 
       {menu && selected.length > 0 && <ContextMenu x={menu.x} y={menu.y} items={menuItems()} onClose={() => setMenu(null)} />}
@@ -504,6 +566,7 @@ export default function App() {
       {modal?.kind === "category" && <CategoryDialog onClose={() => setModal(null)} onSaved={refreshCategories} />}
       {modal?.kind === "limits" && limitTargets.length > 0 && <ShareLimitsDialog torrents={limitTargets} onClose={() => setModal(null)} />}
       {modal?.kind === "tags" && tagTargets.length > 0 && <TagsDialog torrents={tagTargets} onClose={() => setModal(null)} />}
+      <WhenDoneCountdown />
       <Toasts />
     </div>
   );

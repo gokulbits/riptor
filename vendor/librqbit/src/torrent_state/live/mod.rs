@@ -238,6 +238,18 @@ impl TorrentStateLive {
     // RIPTOR PATCH: web seeds (BEP 19), as pseudo-peers.
 
     /// (piece, offset, length)
+    // RIPTOR PATCH: add a peer by hand, and drop banned ones.
+    pub fn add_peer(&self, addr: std::net::SocketAddr) -> crate::Result<bool> {
+        self.add_peer_if_not_seen(addr)
+    }
+
+    pub fn drop_peers_where(&self, f: impl Fn(&std::net::SocketAddr) -> bool) {
+        let gone: Vec<PeerHandle> = self.peers.states.iter().map(|e| *e.key()).filter(|a| f(a)).collect();
+        for h in gone {
+            self.peers.drop_peer(h);
+        }
+    }
+
     pub fn webseed_acquire(&self, handle: PeerHandle) -> Option<(ValidPieceIndex, u64, u32)> {
         if self.is_finished() {
             return None;
@@ -767,7 +779,7 @@ impl TorrentStateLive {
                 continue;
             }
 
-            if session.blocklist.has(addr.ip()) {
+            if session.blocklist.has(addr.ip()) || session.is_banned(addr.ip()) {
                 session
                     .stats
                     .counters

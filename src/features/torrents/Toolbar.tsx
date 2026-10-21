@@ -9,6 +9,9 @@ import {
   Link2,
   MoreHorizontal,
   PackagePlus,
+  FolderInput,
+  Power,
+  Check,
   Rss,
   Pause,
   Play,
@@ -24,6 +27,8 @@ import { useShallow } from "zustand/react/shallow";
 import { ContextMenu } from "./ContextMenu";
 import { ThemePicker } from "../../components/ThemePicker";
 import { useApp } from "../../stores/app";
+import { api } from "../../lib/ipc";
+import type { WhenDone } from "../../lib/types";
 
 export function Toolbar(props: {
   onAddFile: () => void;
@@ -40,8 +45,10 @@ export function Toolbar(props: {
   onAbout: () => void;
   onResumeAll: () => void;
   onStopAll: () => void;
+  onImport: () => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [whenDone, setWhenDone] = useState<WhenDone>("nothing");
   const { selection, search, setSearch, view, setView } = useApp(
     useShallow((s) => ({ selection: s.selection, search: s.search, setSearch: s.setSearch, view: s.view, setView: s.setView })),
   );
@@ -127,6 +134,7 @@ export function Toolbar(props: {
         aria-haspopup="menu"
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
+          api.whenDoneGet().then(setWhenDone, () => {});
           setMenu({ x: r.right - 180, y: r.bottom + 4 });
         }}
       >
@@ -140,7 +148,23 @@ export function Toolbar(props: {
           items={[
             { label: "Resume all", icon: <Play size={14} />, onClick: props.onResumeAll },
             { label: "Stop all", icon: <Pause size={14} />, onClick: props.onStopAll },
+            {
+              label: "When downloads finish",
+              icon: <Power size={14} />,
+              children: (
+                [
+                  ["nothing", "Do nothing"],
+                  ["sleep", "Sleep"],
+                  ["shutdown", "Shut down"],
+                ] as [WhenDone, string][]
+              ).map(([a, label]) => ({
+                label,
+                icon: whenDone === a ? <Check size={14} /> : undefined,
+                onClick: () => api.whenDoneSet(a).catch(() => {}),
+              })),
+            },
             "sep",
+            { label: "Import from another client…", icon: <FolderInput size={14} />, onClick: props.onImport },
             { label: "Logs", icon: <ScrollText size={14} />, onClick: props.onLogs },
             { label: "About Riptor", icon: <Info size={14} />, onClick: props.onAbout },
           ]}

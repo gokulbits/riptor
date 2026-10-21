@@ -88,6 +88,7 @@ async fn transfer_between_two_sessions_with_cached_storage() {
             TorrentRoot {
                 path: content.clone(),
                 owned: false,
+                ..Default::default()
             },
         );
         let seeder = session(tmp.path(), &seed_factory).await;
@@ -121,6 +122,7 @@ async fn transfer_between_two_sessions_with_cached_storage() {
             TorrentRoot {
                 path: leech_root.clone(),
                 owned: true,
+                ..Default::default()
             },
         );
         let leecher = session(tmp.path(), &leech_factory).await;
@@ -910,9 +912,17 @@ async fn watched_folder_adds_and_renames() {
     })
     .await
     .unwrap();
-    settings.watched_folder = Some(data_dir.clone());
+    settings.watched_folders = vec![riptor_core::WatchedFolder {
+        path: data_dir.clone(),
+        category: None,
+        save_path: None,
+    }];
     assert!(engine.update_settings(settings.clone()).await.is_err());
-    settings.watched_folder = Some(watch.clone());
+    settings.watched_folders = vec![riptor_core::WatchedFolder {
+        path: watch.clone(),
+        category: None,
+        save_path: None,
+    }];
     engine.update_settings(settings).await.unwrap();
 
     let mut events = engine.subscribe();
@@ -1071,5 +1081,209 @@ async fn incomplete_folder_trackers_priorities_and_export() {
             sha(&content.join(p))
         );
     }
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn downloads_wait_while_the_drive_is_nearly_full() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source");
+    let content = source.join("content");
+    make_content(&content);
+    let created = create_torrent(
+        &content,
+        CreateTorrentOptions {
+            name: Some("content"),
+            trackers: vec![],
+            piece_length: Some(256 * 1024),
+        },
+        &BlockingSpawner::new(4),
+    )
+    .await
+    .unwrap();
+    let (addr, hits) = range_server(source.clone()).await;
+    let torrent = with_url_list(
+        &created.as_bytes().unwrap(),
+        &[format!("http://{addr}/good/")],
+    );
+    let torrent_file = tmp.path().join("web.torrent");
+    std::fs::write(&torrent_file, torrent).unwrap();
+
+    let downloads = tmp.path().join("downloads");
+    let data_dir = tmp.path().join("data");
+    // More than any test machine has free.
+    let settings = Settings {
+        min_free_mib: Some(1024 * 1024),
+        ..quiet_settings(&downloads)
+    };
+    riptor_core::state_file::save(&data_dir.join("settings.json"), &settings).unwrap();
+    let engine = Engine::start(EngineConfig { data_dir }).await.unwrap();
+    engine.allow_local_web_seeds();
+    let mut events = engine.subscribe();
+    let id = engine
+        .add_direct(Source::File(torrent_file), AddParams::default())
+        .await
+        .unwrap();
+    wait_for(&mut events, &id, "held for space", |t| {
+        t.state == TorrentState::NoSpace
+    })
+    .await;
+    for _ in 0..3 {
+        wait_for(&mut events, &id, "still held", |t| {
+            t.state == TorrentState::NoSpace
+        })
+        .await;
+    }
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "nothing may download"
+    );
+
+    let mut s = engine.settings();
+    s.min_free_mib = None;
+    engine.update_settings(s).await.unwrap();
+    wait_for(&mut events, &id, "download once there's room", complete).await;
+    let files = engine.files(&id).unwrap();
+    assert!(
+        files.iter().all(|f| f.ready == f.size),
+        "every file ready from the start"
+    );
+    let map = engine.piece_map(&id, 50).unwrap();
+    assert_eq!(map.have, map.total);
+    assert!(map.buckets.iter().all(|b| *b == 255));
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn files_can_be_renamed_and_still_verify() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source");
+    let content = source.join("content");
+    make_content(&content);
+    let created = create_torrent(
+        &content,
+        CreateTorrentOptions {
+            name: Some("content"),
+            trackers: vec![],
+            piece_length: Some(256 * 1024),
+        },
+        &BlockingSpawner::new(4),
+    )
+    .await
+    .unwrap();
+    let (addr, _) = range_server(source.clone()).await;
+    let torrent = with_url_list(
+        &created.as_bytes().unwrap(),
+        &[format!("http://{addr}/good/")],
+    );
+    let torrent_file = tmp.path().join("web.torrent");
+    std::fs::write(&torrent_file, torrent).unwrap();
+    let downloads = tmp.path().join("downloads");
+    let data_dir = tmp.path().join("data");
+    riptor_core::state_file::save(&data_dir.join("settings.json"), &quiet_settings(&downloads))
+        .unwrap();
+    let engine = Engine::start(EngineConfig { data_dir }).await.unwrap();
+    engine.allow_local_web_seeds();
+    let mut events = engine.subscribe();
+    let id = engine
+        .add_direct(Source::File(torrent_file), AddParams::default())
+        .await
+        .unwrap();
+    wait_for(&mut events, &id, "download", complete).await;
+
+    let files = engine.files(&id).unwrap();
+    let (a, b) = (&files[0], &files[1]);
+    let before = sha(&downloads.join("content").join(&a.path));
+    for bad in ["../escape.bin", "con", "a/../../b", "", "x<y>.bin"] {
+        assert!(
+            engine
+                .rename_files(&id, &[(a.index, bad.into())])
+                .await
+                .is_err(),
+            "{bad:?}"
+        );
+    }
+    assert!(
+        engine
+            .rename_files(&id, &[(a.index, b.path.replace('\\', "/"))])
+            .await
+            .is_err(),
+        "two files with one name"
+    );
+
+    engine
+        .rename_files(&id, &[(a.index, "renamed/first.bin".into())])
+        .await
+        .unwrap();
+    let moved = downloads.join("content").join("renamed").join("first.bin");
+    assert_eq!(sha(&moved), before);
+    assert!(!downloads.join("content").join(&a.path).exists());
+    let t = wait_for(&mut events, &id, "recheck after rename", complete).await;
+    assert!(t.progress >= 1.0);
+    let after = engine.files(&id).unwrap();
+    assert_eq!(after[0].path.replace('\\', "/"), "renamed/first.bin");
+
+    // Trackers, peers and bans.
+    let tr = vec!["udp://tracker.example:1337/announce".to_string()];
+    engine.set_trackers(&id, &tr).await.unwrap();
+    assert_eq!(engine.trackers(&id).unwrap(), tr);
+    assert!(engine
+        .set_trackers(&id, &["javascript:alert(1)".into()])
+        .await
+        .is_err());
+    for bad in ["nope", "0.0.0.0:6881", "203.0.113.5:0", "224.0.0.1:6881"] {
+        assert!(engine.add_peer(&id, bad).is_err(), "{bad}");
+    }
+    let ip: std::net::IpAddr = "203.0.113.9".parse().unwrap();
+    engine.ban_peer(ip).await.unwrap();
+    engine.ban_peer(ip).await.unwrap();
+    assert_eq!(engine.settings().banned_ips, vec![ip]);
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn imported_torrents_find_their_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("old-client-downloads");
+    let content = source.join("content");
+    make_content(&content);
+    let created = create_torrent(
+        &content,
+        CreateTorrentOptions {
+            name: Some("content"),
+            trackers: vec![],
+            piece_length: Some(256 * 1024),
+        },
+        &BlockingSpawner::new(4),
+    )
+    .await
+    .unwrap();
+    let backup = tmp.path().join("resume-files");
+    std::fs::create_dir_all(&backup).unwrap();
+    std::fs::write(backup.join("abc.torrent"), created.as_bytes().unwrap()).unwrap();
+    let save = source.to_string_lossy().into_owned();
+    std::fs::write(
+        backup.join("abc.fastresume"),
+        format!("d6:pausedi0e9:save_path{}:{save}e", save.len()),
+    )
+    .unwrap();
+    std::fs::write(backup.join("orphan.fastresume"), b"d9:save_path1:xe").unwrap();
+
+    let data_dir = tmp.path().join("data");
+    riptor_core::state_file::save(
+        &data_dir.join("settings.json"),
+        &quiet_settings(&tmp.path().join("downloads")),
+    )
+    .unwrap();
+    let engine = Engine::start(EngineConfig { data_dir }).await.unwrap();
+    let mut events = engine.subscribe();
+    let report = engine.import_from(&backup).await.unwrap();
+    assert_eq!((report.added, report.skipped), (1, 1), "{report:?}");
+    let id = created.info_hash().as_string();
+    // No peers or web seeds: only the existing files can complete it.
+    wait_for(&mut events, &id, "existing data recognised", complete).await;
+    let again = engine.import_from(&backup).await.unwrap();
+    assert_eq!(again.already_present, 1);
     engine.shutdown().await.unwrap();
 }

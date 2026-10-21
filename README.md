@@ -51,8 +51,14 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - Queueing: limits on active downloads, uploads and torrents, with "don't count slow torrents", force start and a manual queue order.
 - Global and alternative speed limits, with a weekly schedule for the alternative ones. Per-torrent limits can change while it runs.
 - Categories with default folders, and tags. Move a torrent, downloaded or still downloading, to another folder, optionally whenever its category changes.
-- Force recheck, copy magnet link, export the `.torrent` file, and a watched folder that adds `.torrent` files saved there.
-- File priorities (High, Normal, Low) on top of choosing which files to download. Open finished files (never programs) or show them in their folder.
+- Force recheck, copy magnet link, export the `.torrent` file, and watched folders (each with its own category and save folder) that add `.torrent` files saved there.
+- File priorities (High, Normal, Low) on top of choosing which files to download. Open finished files (never programs) or show them in their folder. Audio and video can be played while they download, once their start is on disk.
+- Rename files and folders inside a torrent; the files move on disk.
+- Edit a torrent's trackers and re-announce, add peers by address, ban peers, and load an IP blocklist from a URL or a local file.
+- A piece map showing which parts are downloaded.
+- Downloads pause by themselves when their drive runs low on space (1 GiB by default) and resume when there's room.
+- When downloads finish, Riptor can put the computer to sleep or shut it down (with a minute to cancel).
+- Import torrents from another client's folder of `.torrent` and `.fastresume` files; existing data is checked, not downloaded again.
 - A folder for incomplete downloads: torrents download there and move to their save folder when complete.
 - Trackers that are added to every new public torrent, and an option to add new torrents stopped.
 - RSS and Atom feeds, with download rules (words or regular expressions, per feed, with a category and folder) that add matching torrents automatically. Feeds are fetched through the VPN when it's on, and torrents with programs are always added stopped.
@@ -77,6 +83,7 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - Only Riptor's sockets are bound to the tunnel. The tunnel never becomes your computer's default route.
 - Searches, seed and peer lookups, plugin requests and `.torrent` links you add go through the tunnel too. Indexers on your own machine or LAN are reached directly.
 - Kill switch: while it's on and the VPN is down, there's no DHT, no listening port, no trackers, no peers and no searches.
+- A leak check compares the address trackers and peers see with your normal one, and checks name lookups go through the tunnel.
 - UPnP and local peer discovery are switched off while the VPN is in use. Optional NAT-PMP port forwarding is available if your provider supports it.
 - The status bar shows whether the VPN is connected and the public IP peers see. The IP is masked until you click the eye icon.
 
@@ -89,6 +96,8 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - Window size and position, sort order and panel layout are remembered.
 - 9 themes, "follow system", and custom accent colours.
 - An About page and a log viewer. Logs stay in memory, with tracker passkeys and URL parameters masked.
+- In-app updates on Windows: Riptor checks GitHub for a new version and installs it after verifying its signature. On Linux, updates come from your package manager.
+- Headless mode on Linux: `riptord` runs Riptor without a window and `riptor-cli` controls it over a private local socket (no network port).
 - "Open with" and default-app registration for `.torrent` files and `magnet:` links.
 
 ## Installation
@@ -156,6 +165,21 @@ Plugins are third-party code, so Riptor shows each one's source and SHA-256 befo
 3. If the profile needs a login, enter the OpenVPN username and password. Many providers issue these separately from your account login. They are stored in your system's credential store.
 4. Select **Connect** and approve the administrator prompt. Creating the tunnel adapter needs administrator rights.
 5. Turn on the **kill switch** to make sure torrents never run outside the VPN.
+
+### Headless mode (Linux)
+The Linux packages include `riptord`, which runs Riptor without a window, and `riptor-cli` to control it. Its data lives in `~/.local/share/riptor-headless`, separate from the desktop app.
+
+```bash
+systemctl --user enable --now riptord
+```
+```bash
+riptor-cli add 'magnet:?xt=urn:btih:…' --dir ~/Downloads
+```
+```bash
+riptor-cli list
+```
+
+The VPN needs the desktop app, so headless mode has no VPN.
 
 ### Backups
 In **Settings › Backup & restore**, create a `.riptorbackup` file of your torrents, settings, categories and statistics, then restore it on any Riptor installation. Add a password for real protection: without one, the file is only tamper-evident.
@@ -240,8 +264,9 @@ npx tsc -b --noEmit
    ```bash
    cargo build --release -p riptor-vpn-helper
    ```
-3. Copy `target/release/riptor-vpn-helper(.exe)` to `src-tauri/binaries/`, named `Riptor VPN Service-<target-triple>.exe` on Windows (the admin prompt shows that name) or `riptor-vpn-helper-<target-triple>` on Linux. Find your target triple with `rustc -vV`.
-4. Build. On Windows:
+3. Copy `target/release/riptor-vpn-helper(.exe)` to `src-tauri/binaries/`, named `Riptor VPN Service-<target-triple>.exe` on Windows (the admin prompt shows that name) or `riptor-vpn-helper-<target-triple>` on Linux. Find your target triple with `rustc -vV`. On Linux, also build `cargo build --release -p riptor-daemon` and copy `riptord` and `riptor-cli` there as `riptord-<target-triple>` and `riptor-cli-<target-triple>`.
+4. On Windows, the setup is signed for the in-app updater: set `TAURI_SIGNING_PRIVATE_KEY` to the updater key (its content or path) before building. CI reads it from the repository secret of the same name.
+5. Build. On Windows:
    ```bash
    npx tauri build --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.bundle.windows.conf.json
    ```
@@ -260,8 +285,8 @@ To cut a release:
    ```bash
    git tag -a v0.1.2 -m "Riptor 0.1.2" && git push origin v0.1.2
    ```
-3. CI creates a **draft** release with the installers and `SHA256SUMS.txt`, after checking that the files match the tag and the checksums from the build jobs.
-4. Review the draft and publish it.
+3. CI creates a **draft** release with the installers, `SHA256SUMS.txt` and `latest.json` (what the in-app updater reads), after checking that the files match the tag and the checksums from the build jobs.
+4. Review the draft and publish it. Installed copies offer the update once it's published.
 
 Tags containing a hyphen (for example `v0.2.0-beta.1`) become pre-releases.
 
@@ -275,6 +300,8 @@ crates/
   riptor-search/      Search providers, Torznab, plugin runner and Python shim, tracker scrapes
   riptor-vpn/         VPN profile sanitizers, OpenVPN management protocol, NAT-PMP
   riptor-vpn-helper/  The small elevated program that starts OpenVPN
+  riptor-rss/         RSS and Atom feeds and download rules
+  riptor-daemon/      Headless mode for Linux: riptord and riptor-cli
 src-tauri/            Desktop app: IPC commands, tray, file associations, VPN manager, installers
 src/                  React UI
 isolation/            Tauri isolation hook (IPC allowlist)
@@ -288,17 +315,19 @@ The main remaining items.
 
 ### VPN
 Done: profile import and sanitizing, the elevated helper, the OpenVPN management client, Windows adapter binding, the kill switch and watchdog, NAT-PMP, the VPN page, the status indicator with a public-IP check, tracker and DHT lookups through the tunnel, WireGuard on Linux, a private Unix socket for OpenVPN management on Linux, and a security review.
-- [ ] Finish the end-to-end test with a real VPN provider. Verified on Windows: connecting with a provider OpenVPN profile works, Riptor appears with the VPN IP while other apps keep the normal IP, and the default route is untouched. Still to check: the IP trackers see, and that nothing leaks when the tunnel drops.
+- [ ] Finish the end-to-end test with a real VPN provider. Verified on Windows: connecting with a provider OpenVPN profile works, Riptor appears with the VPN IP while other apps keep the normal IP, the default route is untouched, and OpenVPN stops with Riptor. Still to check: the in-app leak check against a real provider, and that nothing leaks when the tunnel drops.
 - [ ] Test WireGuard and the Unix management socket on real Linux (so far only type-checked and built in CI).
 
 ### Packaging and release
-Done: the Windows setup with OpenVPN and Python bundled, `.deb` and `.rpm` packages, checksums, draft releases from CI, an About page and a log viewer.
+Done: the Windows setup with OpenVPN and Python bundled, `.deb` and `.rpm` packages (with headless mode), checksums, draft releases from CI, in-app updates on Windows, an About page and a log viewer.
+- [ ] Set the `TAURI_SIGNING_PRIVATE_KEY` repository secret before the next tag, and try an update from one release to the next.
+- [ ] Try headless mode (`riptord`, `riptor-cli`) on real Linux.
 - [ ] Test the installers on clean Windows and Linux machines.
 - [ ] Code signing (optional).
 - [ ] Keep the Windows setup under 20 MB (19.3 MB for 0.1.2).
 
 ### Engine and storage
-Done: web seeds (BEP 19), runtime per-torrent speed limits, force recheck, moving a torrent's files, and removing leftover session entries.
+Done: web seeds (BEP 19), runtime per-torrent speed limits, force recheck, moving and renaming a torrent's files, a free-space guard, editable trackers, peer bans, a piece map, play-while-downloading, importing from other clients, and removing leftover session entries.
 - [ ] Download and seed a large public torrent end to end on a real network.
 - [ ] Storage benchmark: the download path now measures the same as plain file I/O (medians within 1%), but results are noisy; re-check on a fast NVMe drive.
 

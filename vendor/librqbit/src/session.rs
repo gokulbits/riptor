@@ -140,6 +140,8 @@ pub struct Session {
 
     pub blocklist: IpRanges,
     pub allowlist: Option<IpRanges>,
+    /// RIPTOR PATCH: peers banned by hand.
+    pub(crate) banned: RwLock<std::collections::HashSet<std::net::IpAddr>>,
 
     // Monitoring / tracing / logging
     pub(crate) stats: Arc<SessionStats>,
@@ -465,6 +467,8 @@ pub struct SessionOptions {
     pub ratelimits: LimitsConfig,
 
     pub blocklist_url: Option<String>,
+    /// RIPTOR PATCH: a local blocklist file, used instead of `blocklist_url`.
+    pub blocklist_file: Option<PathBuf>,
     pub allowlist_url: Option<String>,
 
     // The list of tracker URLs to always use for each torrent.
@@ -494,6 +498,7 @@ impl Default for SessionOptions {
             bind_device_name: None,
             bind_local_ip: None,
             dns_resolver: None,
+            blocklist_file: None,
             disable_trackers: false,
             fastresume: false,
             persistence: None,
@@ -752,7 +757,12 @@ impl Session {
                 .context("error creating stream connector")?,
             );
 
-            let blocklist = if let Some(blocklist_url) = opts.blocklist_url {
+            let blocklist = if let Some(path) = opts.blocklist_file {
+                info!(path = ?path, "loading p2p blocklist file");
+                IpRanges::load_from_file(&path)
+                    .await
+                    .with_context(|| format!("error reading blocklist {}", path.display()))?
+            } else if let Some(blocklist_url) = opts.blocklist_url {
                 info!(url = blocklist_url, "loading p2p blocklist");
                 let bl = IpRanges::load_from_url(&blocklist_url)
                     .await
@@ -827,6 +837,7 @@ impl Session {
                 _disable_upload: opts.disable_upload,
                 blocklist,
                 allowlist,
+                banned: RwLock::new(Default::default()),
                 lsd,
             });
 
@@ -930,7 +941,7 @@ impl Session {
             .unwrap_or_else(|| Duration::from_secs(10));
 
         let incoming_ip = addr.ip();
-        if self.blocklist.has(incoming_ip) {
+        if self.blocklist.has(incoming_ip) || self.is_banned(incoming_ip) {
             self.stats
                 .counters
                 .blocked_incoming
@@ -1389,6 +1400,7 @@ impl Session {
                 false,
             ));
             let handle = Arc::new(ManagedTorrent {
+                trackers_override: RwLock::new(None),
                 locked: RwLock::new(ManagedTorrentLocked {
                     paused: opts.paused,
                     state: ManagedTorrentState::Initializing(initializing),
@@ -1524,6 +1536,23 @@ impl Session {
         Ok(())
     }
 
+    // RIPTOR PATCH: banned peers, checked with the blocklist.
+    pub fn is_banned(&self, ip: std::net::IpAddr) -> bool {
+        self.banned.read().contains(&ip)
+    }
+
+    /// Replaces the list and drops connected peers that are on it.
+    pub fn set_banned(&self, ips: std::collections::HashSet<std::net::IpAddr>) {
+        *self.banned.write() = ips.clone();
+        self.with_torrents(|it| {
+            for (_, t) in it {
+                if let Some(live) = t.live() {
+                    live.drop_peers_where(|a| ips.contains(&a.ip()));
+                }
+            }
+        });
+    }
+
     pub fn make_peer_rx_managed_torrent(
         self: &Arc<Self>,
         t: &Arc<ManagedTorrent>,
@@ -1532,7 +1561,7 @@ impl Session {
         let is_private = t.with_metadata(|m| m.info.info().private).unwrap_or(false);
         self.make_peer_rx(
             t.info_hash(),
-            t.shared().trackers.iter().cloned().collect(),
+            t.trackers(),
             announce,
             t.shared().options.force_tracker_interval,
             t.shared().options.initial_peers.clone(),

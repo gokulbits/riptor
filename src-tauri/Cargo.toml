@@ -37,6 +37,7 @@ getrandom = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+tauri-plugin-updater = "2"
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_Threading", "Win32_System_Registry"] }
 
 # tauri-plugin-deep-link 2.6.2 initialises rust-ini's ParseOption with only

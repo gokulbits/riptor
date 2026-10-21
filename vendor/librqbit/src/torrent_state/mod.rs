@@ -209,11 +209,43 @@ pub struct ManagedTorrent {
     pub metadata: ArcSwapOption<TorrentMetadata>,
     pub(crate) state_change_notify: Notify,
     pub(crate) locked: RwLock<ManagedTorrentLocked>,
+    /// RIPTOR PATCH: trackers edited at runtime; used from the next start.
+    pub(crate) trackers_override: RwLock<Option<Vec<url::Url>>>,
 }
 
 impl ManagedTorrent {
     pub fn id(&self) -> TorrentId {
         self.shared.id
+    }
+
+    // RIPTOR PATCH: editable trackers.
+    pub fn trackers(&self) -> Vec<url::Url> {
+        match &*self.trackers_override.read() {
+            Some(t) => t.clone(),
+            None => self.shared.trackers.iter().cloned().collect(),
+        }
+    }
+
+    pub fn set_trackers(&self, trackers: Vec<url::Url>) {
+        *self.trackers_override.write() = Some(trackers);
+    }
+
+    // RIPTOR PATCH: which pieces are on disk, for the piece map.
+    pub fn have_pieces(&self) -> Option<Vec<bool>> {
+        // The bitfield is padded to whole bytes.
+        let bits = |c: &crate::chunk_tracker::ChunkTracker| {
+            let n = c.get_lengths().total_pieces() as usize;
+            c.get_have_pieces().as_slice().iter().take(n).map(|x| *x).collect()
+        };
+        self.with_state(|s| match s {
+            ManagedTorrentState::Live(l) => l
+                .lock_read("have_pieces")
+                .get_chunks()
+                .ok()
+                .map(bits),
+            ManagedTorrentState::Paused(p) => Some(bits(&p.chunk_tracker)),
+            _ => None,
+        })
     }
 
     pub fn name(&self) -> Option<String> {

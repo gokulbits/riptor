@@ -147,6 +147,24 @@ const NEVER_OPEN_EXTS: &[&str] = &[
     "pptm",
 ];
 
+const MEDIA_EXTS: &[&str] = &[
+    "mkv", "mp4", "m4v", "avi", "mov", "webm", "wmv", "ts", "m2ts", "mpg", "mpeg", "flv", "ogv",
+    "mp3", "flac", "ogg", "opus", "m4a", "wav", "aac", "wma",
+];
+
+/// Audio and video, which players can start before the file is complete.
+pub fn is_media(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| MEDIA_EXTS.contains(&ext))
+}
+
+/// How much of a media file must be on disk before it can be opened.
+pub fn stream_threshold(len: u64) -> u64 {
+    (16 * 1024 * 1024).min(len / 20).max(1)
+}
+
 /// Files the user may open with their default app from inside Riptor.
 pub fn safe_to_open(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
@@ -172,6 +190,18 @@ pub fn magnet_link(info_hash: &str, name: &str, trackers: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn media_can_open_early() {
+        assert!(super::is_media("Show.S01E01.MKV"));
+        assert!(!super::is_media("setup.exe"));
+        assert_eq!(
+            super::stream_threshold(10 * 1024 * 1024 * 1024),
+            16 * 1024 * 1024
+        );
+        assert_eq!(super::stream_threshold(100 * 1024 * 1024), 5 * 1024 * 1024);
+        assert_eq!(super::stream_threshold(0), 1);
+    }
+
     #[test]
     fn only_harmless_files_open() {
         for ok in ["movie.MKV", "a/b/song.flac", "book.pdf", "notes.txt"] {

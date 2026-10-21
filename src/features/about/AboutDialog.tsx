@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Dialog } from "../../components/ui";
 import { api } from "../../lib/ipc";
 import logo from "../../../app-icon.svg";
+import { Updates } from "./Updates";
 
 const REPO = "https://github.com/gokulbits/riptor";
 
@@ -48,6 +49,7 @@ export function AboutDialog({ onClose, onLogs }: { onClose: () => void; onLogs: 
           {link("Report A Problem", `${REPO}/issues`)}
           {link("Licenses", `${REPO}/blob/main/THIRD-PARTY-NOTICES.md`)}
         </div>
+        <Updates />
         <p className="text-xs text-muted">MIT License. Built on librqbit, Tauri and React.</p>
       </div>
     </Dialog>

@@ -132,12 +132,8 @@ impl JsonSessionPersistenceStore {
         // restore path is correct and the check is lifted. See vendor/PATCHES.md.
 
         let st = SerializedTorrent {
-            trackers: torrent
-                .shared()
-                .trackers
-                .iter()
-                .map(|u| u.to_string())
-                .collect(),
+            // RIPTOR PATCH: edited trackers persist.
+            trackers: torrent.trackers().iter().map(|u| u.to_string()).collect(),
             info_hash: torrent.info_hash(),
             // we don't serialize this here, but to a file instead.
             torrent_bytes: Default::default(),

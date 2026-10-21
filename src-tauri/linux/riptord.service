@@ -1,0 +1,13 @@
+[Unit]
+Description=Riptor headless BitTorrent service
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/riptord
+Restart=on-failure
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target

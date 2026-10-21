@@ -13,6 +13,19 @@ pub enum Transport {
     TcpAndUtp,
 }
 
+/// A folder whose `.torrent` files are added automatically.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchedFolder {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub category: Option<String>,
+    /// `None`: the category's folder, else the default.
+    #[serde(default)]
+    pub save_path: Option<PathBuf>,
+}
+
+const MAX_WATCHED: usize = 20;
+
 /// One column of the torrent list, in display order.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnPref {
@@ -97,14 +110,23 @@ pub struct Settings {
     pub alt_ul_limit_kib: Option<u32>,
     pub alt_speed_enabled: bool,
     pub alt_schedule: AltSchedule,
-    /// `.torrent` files saved here are added automatically.
+    /// Older single folder; `migrate` moves it into `watched_folders`.
     pub watched_folder: Option<PathBuf>,
+    pub watched_folders: Vec<WatchedFolder>,
     /// Downloads live here until complete, then move to their save folder.
     pub incomplete_dir: Option<PathBuf>,
     /// Added to every new torrent that isn't private.
     pub extra_trackers: Vec<String>,
     /// New torrents start stopped (the add dialog's default, the watched folder, RSS).
     pub add_stopped: bool,
+    /// Look for a new version shortly after start (Windows).
+    pub check_updates: bool,
+    /// Pause downloads when their drive has less free; `None` = never.
+    pub min_free_mib: Option<u64>,
+    /// Used instead of `blocklist_url` when set.
+    pub blocklist_file: Option<PathBuf>,
+    /// Peers banned by hand, for every torrent.
+    pub banned_ips: Vec<std::net::IpAddr>,
     /// `socks5://[user:pass@]host:port` for peer connections.
     pub proxy_url: Option<String>,
     pub blocklist_url: Option<String>,
@@ -143,9 +165,14 @@ impl Default for Settings {
             alt_speed_enabled: false,
             alt_schedule: AltSchedule::default(),
             watched_folder: None,
+            watched_folders: Vec::new(),
             incomplete_dir: None,
             extra_trackers: Vec::new(),
             add_stopped: false,
+            check_updates: true,
+            min_free_mib: Some(1024),
+            blocklist_file: None,
+            banned_ips: Vec::new(),
             proxy_url: None,
             blocklist_url: None,
             anonymous_mode: false,
@@ -161,6 +188,22 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Brings settings from older versions up to date.
+    pub fn migrate(&mut self) {
+        if let Some(p) = self.watched_folder.take() {
+            if !self.watched_folders.iter().any(|w| w.path == p) {
+                self.watched_folders.insert(
+                    0,
+                    WatchedFolder {
+                        path: p,
+                        category: None,
+                        save_path: None,
+                    },
+                );
+            }
+        }
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.download_dir.is_absolute(),
@@ -196,6 +239,31 @@ impl Settings {
         if let Some(w) = &self.watched_folder {
             anyhow::ensure!(w.is_absolute(), "watched folder must be an absolute path");
         }
+        anyhow::ensure!(
+            self.watched_folders.len() <= MAX_WATCHED,
+            "too many watched folders"
+        );
+        let mut seen = std::collections::HashSet::new();
+        for w in &self.watched_folders {
+            anyhow::ensure!(
+                w.path.is_absolute(),
+                "watched folders must be absolute paths"
+            );
+            anyhow::ensure!(seen.insert(&w.path), "{} is listed twice", w.path.display());
+            if let Some(p) = &w.save_path {
+                anyhow::ensure!(p.is_absolute(), "save folders must be absolute paths");
+            }
+            if let Some(c) = &w.category {
+                anyhow::ensure!(
+                    !c.trim().is_empty()
+                        && c.len() <= 64
+                        && !c
+                            .chars()
+                            .any(|ch| ch.is_control() || matches!(ch, '/' | '\\')),
+                    "invalid category for a watched folder"
+                );
+            }
+        }
         if let Some(d) = &self.incomplete_dir {
             anyhow::ensure!(
                 d.is_absolute(),
@@ -206,6 +274,17 @@ impl Settings {
             self.extra_trackers.len() <= MAX_EXTRA_TRACKERS,
             "too many trackers"
         );
+        anyhow::ensure!(
+            self.min_free_mib.is_none_or(|m| m <= 1024 * 1024),
+            "free space limit above 1 TiB"
+        );
+        if let Some(f) = &self.blocklist_file {
+            anyhow::ensure!(
+                f.is_absolute(),
+                "the blocklist file must be an absolute path"
+            );
+        }
+        anyhow::ensure!(self.banned_ips.len() <= 10_000, "too many banned peers");
         for t in &self.extra_trackers {
             anyhow::ensure!(valid_tracker(t), "not a tracker URL: {t}");
         }
@@ -244,6 +323,7 @@ impl Settings {
             || self.peer_limit != other.peer_limit
             || self.proxy_url != other.proxy_url
             || self.blocklist_url != other.blocklist_url
+            || self.blocklist_file != other.blocklist_file
             || self.anonymous_mode != other.anonymous_mode
     }
 }
@@ -367,6 +447,35 @@ mod tests {
             watched_folder: Some("relative".into()),
             ..Default::default()
         };
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn the_old_watched_folder_moves_into_the_list() {
+        let dir = std::env::temp_dir();
+        let mut s: Settings = serde_json::from_value(serde_json::json!({
+            "download_dir": dir,
+            "watched_folder": dir.join("in"),
+        }))
+        .unwrap();
+        s.migrate();
+        assert_eq!(s.watched_folder, None);
+        assert_eq!(s.watched_folders.len(), 1);
+        assert_eq!(s.watched_folders[0].path, dir.join("in"));
+        s.validate().unwrap();
+        let w = |p: &str| WatchedFolder {
+            path: p.into(),
+            category: None,
+            save_path: None,
+        };
+        s.watched_folders.push(s.watched_folders[0].clone());
+        assert!(s.validate().is_err(), "duplicates");
+        s.watched_folders = vec![w("relative")];
+        assert!(s.validate().is_err());
+        s.watched_folders = vec![WatchedFolder {
+            category: Some("a/b".into()),
+            ..s.watched_folders[0].clone()
+        }];
         assert!(s.validate().is_err());
     }
 }

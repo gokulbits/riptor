@@ -251,7 +251,7 @@ pub async fn reveal_torrent_file(
     id: String,
     index: usize,
 ) -> Res<()> {
-    let (path, _) = engine(&state).await?.file_path(&id, index).map_err(err)?;
+    let (path, _, _) = engine(&state).await?.file_path(&id, index).map_err(err)?;
     if !path.is_file() {
         return Err("this file hasn't been created yet".into());
     }
@@ -268,7 +268,7 @@ pub async fn open_torrent_file(
     id: String,
     index: usize,
 ) -> Res<()> {
-    let (path, complete) = engine(&state).await?.file_path(&id, index).map_err(err)?;
+    let (path, len, ready) = engine(&state).await?.file_path(&id, index).map_err(err)?;
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -278,8 +278,12 @@ pub async fn open_torrent_file(
             "Riptor doesn't open programs or files that can run code; use Show in folder".into(),
         );
     }
-    if !complete || !path.is_file() {
-        return Err("this file isn't fully downloaded yet".into());
+    // Audio and video can start playing before the rest arrives.
+    let enough = ready >= len
+        || (riptor_core::input::is_media(&name)
+            && ready >= riptor_core::input::stream_threshold(len));
+    if !enough || !path.is_file() {
+        return Err("this file isn't downloaded far enough to open yet".into());
     }
     app.opener()
         .open_path(path.to_string_lossy(), None::<&str>)
@@ -819,4 +823,108 @@ pub fn autostart_get() -> bool {
 #[tauri::command]
 pub fn autostart_set(enabled: bool) -> Res<()> {
     crate::autostart::set(enabled).map_err(err)
+}
+
+#[tauri::command]
+pub fn update_supported() -> bool {
+    crate::updater::SUPPORTED
+}
+
+#[tauri::command]
+pub async fn update_check(app: AppHandle) -> Res<Option<crate::updater::UpdateInfo>> {
+    crate::updater::check(&app).await.map_err(err)
+}
+
+/// Riptor exits once the installer starts.
+#[tauri::command]
+pub async fn update_install(app: AppHandle) -> Res<()> {
+    crate::updater::install(&app).await.map_err(err)
+}
+
+#[tauri::command]
+pub fn when_done_get(state: State<'_, crate::when_done::WhenDone>) -> crate::when_done::Action {
+    state.get()
+}
+
+#[tauri::command]
+pub fn when_done_set(
+    state: State<'_, crate::when_done::WhenDone>,
+    action: crate::when_done::Action,
+) {
+    state.set(action);
+}
+
+/// Stops a running countdown and turns the action off.
+#[tauri::command]
+pub fn when_done_cancel(state: State<'_, crate::when_done::WhenDone>) {
+    state.set(crate::when_done::Action::Nothing);
+}
+
+#[tauri::command]
+pub async fn torrent_pieces(
+    state: State<'_, AppState>,
+    id: String,
+    buckets: usize,
+) -> Res<riptor_core::PieceMap> {
+    engine(&state).await?.piece_map(&id, buckets).map_err(err)
+}
+
+/// `changes`: (file index, new path relative to the torrent's folder, `/` between folders).
+#[tauri::command]
+pub async fn rename_files(
+    state: State<'_, AppState>,
+    id: String,
+    changes: Vec<(usize, String)>,
+) -> Res<()> {
+    engine(&state)
+        .await?
+        .rename_files(&id, &changes)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn set_trackers(
+    state: State<'_, AppState>,
+    id: String,
+    trackers: Vec<String>,
+) -> Res<()> {
+    engine(&state)
+        .await?
+        .set_trackers(&id, &trackers)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn reannounce(state: State<'_, AppState>, ids: Vec<String>) -> Res<()> {
+    engine(&state).await?.reannounce(&ids).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn add_peer(state: State<'_, AppState>, id: String, addr: String) -> Res<()> {
+    engine(&state).await?.add_peer(&id, &addr).map_err(err)
+}
+
+#[tauri::command]
+pub async fn ban_peer(state: State<'_, AppState>, ip: String) -> Res<()> {
+    let ip: std::net::IpAddr = ip
+        .trim()
+        .parse()
+        .map_err(|_| "not an IP address".to_string())?;
+    engine(&state).await?.ban_peer(ip).await.map_err(err)
+}
+
+/// `path` comes from the folder picker.
+#[tauri::command]
+pub async fn import_torrents(
+    state: State<'_, AppState>,
+    path: PathBuf,
+) -> Res<riptor_core::import::ImportReport> {
+    engine(&state).await?.import_from(&path).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn vpn_leak_check(state: State<'_, AppState>) -> Res<riptor_core::LeakCheck> {
+    engine(&state).await?.leak_check().await.map_err(err)
 }

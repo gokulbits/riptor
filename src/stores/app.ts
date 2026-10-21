@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api, errorText } from "../lib/ipc";
-import type { ColumnPref, GlobalStats, PublicIp, Source, TorrentState, TorrentSummary, VpnStatus } from "../lib/types";
+import type { ColumnPref, GlobalStats, PublicIp, Source, TorrentState, TorrentSummary, UpdateInfo, VpnStatus } from "../lib/types";
 
 export type StatusFilter =
   | "all"
@@ -96,6 +96,8 @@ interface AppState {
   tag: string | null;
   /** Tracker host; "" means torrents without trackers. */
   tracker: string | null;
+  /** A newer version found by the update check. */
+  update: UpdateInfo | null;
   search: string;
   sort: { key: SortKey; desc: boolean };
 
@@ -122,6 +124,7 @@ interface AppState {
   setCategory: (c: string | null | undefined) => void;
   setTag: (t: string | null) => void;
   setTracker: (t: string | null) => void;
+  setUpdate: (u: UpdateInfo | null) => void;
   setSearch: (s: string) => void;
   setSort: (key: SortKey) => void;
   setView: (v: "transfers" | "search" | "rss" | "vpn") => void;
@@ -149,6 +152,7 @@ export const useApp = create<AppState>()((set, get) => ({
   category: undefined,
   tag: null,
   tracker: null,
+  update: null,
   search: "",
   sort: loadSort(),
   view: "transfers",
@@ -216,6 +220,7 @@ export const useApp = create<AppState>()((set, get) => ({
   setCategory: (category) => set({ category }),
   setTag: (tag) => set({ tag }),
   setTracker: (tracker) => set({ tracker }),
+  setUpdate: (update) => set({ update }),
   setSearch: (search) => set({ search }),
   setSort: (key) =>
     set((s) => {

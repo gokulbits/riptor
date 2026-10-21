@@ -1,10 +1,10 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import clsx from "clsx";
-import { FolderOpen, Loader2 } from "lucide-react";
+import { FolderOpen, Loader2, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Dialog, Field, OptionalNumber, Toggle } from "../../components/ui";
 import { api, errorText } from "../../lib/ipc";
-import type { Settings } from "../../lib/types";
+import type { Settings, WatchedFolder } from "../../lib/types";
 import { useApp } from "../../stores/app";
 import { AssociationSection } from "./AssociationSection";
 import { BackupSection } from "./BackupSection";
@@ -42,6 +42,48 @@ function FolderInput({ value, onChange, placeholder }: { value: string; onChange
         }}
       >
         <FolderOpen size={15} />
+      </button>
+    </div>
+  );
+}
+
+function WatchedFolders({ value, onChange }: { value: WatchedFolder[]; onChange: (v: WatchedFolder[]) => void }) {
+  const [categories, setCategories] = useState<string[]>([]);
+  useEffect(() => {
+    api.categories().then((c) => setCategories(Object.keys(c)), () => {});
+  }, []);
+  const edit = (i: number, p: Partial<WatchedFolder>) => onChange(value.map((w, j) => (j === i ? { ...w, ...p } : w)));
+  const add = async () => {
+    const d = await open({ directory: true, title: "Watch this folder" });
+    if (typeof d === "string" && !value.some((w) => w.path === d)) onChange([...value, { path: d, category: null, save_path: null }]);
+  };
+  return (
+    <div className="space-y-2">
+      {value.map((w, i) => (
+        <div key={w.path} className="space-y-1.5 rounded-md border border-border p-2">
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate font-mono text-xs" title={w.path}>
+              {w.path}
+            </span>
+            <button className="btn-ghost p-1 hover:text-danger" onClick={() => onChange(value.filter((_, j) => j !== i))} aria-label={`Stop watching ${w.path}`}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <select className="input text-xs" value={w.category ?? ""} onChange={(e) => edit(i, { category: e.target.value || null })} aria-label="Category">
+              <option value="">No category</option>
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <FolderInput value={w.save_path ?? ""} placeholder="Default save folder" onChange={(v) => edit(i, { save_path: v.trim() || null })} />
+          </div>
+        </div>
+      ))}
+      <button className="btn-ghost border border-border text-xs" onClick={add}>
+        <Plus size={13} /> Add Folder
       </button>
     </div>
   );
@@ -182,8 +224,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 checked={s.add_stopped}
                 onChange={(v) => set({ add_stopped: v })}
                 label="Add New Torrents Stopped"
-                hint="The add dialog starts with this ticked; the watched folder and RSS rules follow it too."
+                hint="The add dialog starts with this ticked; watched folders and RSS rules follow it too."
               />
+              <Field
+                label="Pause Downloads Below This Much Free Space (MiB)"
+                hint="Checked on the drive each download saves to. They resume once there's room again. Empty turns it off."
+              >
+                <OptionalNumber value={s.min_free_mib} onChange={(v) => set({ min_free_mib: v })} min={1} placeholder="Never" />
+              </Field>
               <Toggle
                 checked={s.move_on_category_change}
                 onChange={(v) => set({ move_on_category_change: v })}
@@ -199,17 +247,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </Group>
           )}
           {section === "downloads" && (
-            <Group title="Watched Folder">
-              <Field
-                label="Add Torrents Saved To This Folder"
-                hint="Checked every few seconds. Added files are renamed to .added, unreadable ones to .invalid. Leave empty to turn it off."
-              >
-                <FolderInput
-                  value={s.watched_folder ?? ""}
-                  placeholder="Off"
-                  onChange={(v) => set({ watched_folder: v.trim() || null })}
-                />
-              </Field>
+            <Group title="Watched Folders">
+              <p className="text-xs text-muted">
+                .torrent files saved to these folders are added automatically, with the folder's category and save folder. Checked every few
+                seconds; added files are renamed to .added, unreadable ones to .invalid.
+              </p>
+              <WatchedFolders value={s.watched_folders} onChange={(v) => set({ watched_folders: v, watched_folder: null })} />
             </Group>
           )}
           {section === "downloads" && (
@@ -510,6 +553,20 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 />
               </Group>
               <Group title="IP Blocklist">
+                <Field label="Blocklist File" hint="A local .p2p, .dat or plain list; used instead of the URL when set.">
+                  <div className="flex gap-1">
+                    <input className="input font-mono text-xs" value={s.blocklist_file ?? ""} placeholder="None" onChange={(e) => set({ blocklist_file: e.target.value.trim() || null })} />
+                    <button
+                      className="btn-ghost border border-border"
+                      onClick={async () => {
+                        const f = await open({ multiple: false });
+                        if (typeof f === "string") set({ blocklist_file: f });
+                      }}
+                    >
+                      <FolderOpen size={15} />
+                    </button>
+                  </div>
+                </Field>
                 <Field label="Blocklist URL" hint="https only. Peers on the list are never connected.">
                   <input
                     className="input font-mono text-xs"
@@ -518,6 +575,22 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     placeholder="https://…"
                   />
                 </Field>
+              </Group>
+              <Group title="Banned Peers">
+                {s.banned_ips.length === 0 ? (
+                  <p className="text-xs text-muted">None. Ban a peer from a torrent's Peers tab.</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {s.banned_ips.map((ip) => (
+                      <li key={ip} className="flex items-center gap-2 text-xs">
+                        <span className="flex-1 font-mono">{ip}</span>
+                        <button className="btn-ghost py-0.5 text-xs" onClick={() => set({ banned_ips: s.banned_ips.filter((x) => x !== ip) })}>
+                          Unban
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </Group>
               <p className="rounded-md bg-raised p-3 text-xs text-muted">
                 Peer traffic is not encrypted (the engine does not support BitTorrent protocol encryption). Use the VPN feature or a

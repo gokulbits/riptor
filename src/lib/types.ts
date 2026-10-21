@@ -19,6 +19,7 @@ export type TorrentState =
   | "stalled_up"
   | "queued"
   | "stopped"
+  | "no_space"
   | "error";
 
 export interface TorrentSummary {
@@ -80,6 +81,31 @@ export interface FileEntry {
   selected: boolean;
   executable: boolean;
   priority: FilePriority;
+  ready: number;
+  media: boolean;
+}
+
+export interface LeakCheck {
+  vpn_ip: string | null;
+  normal_ip: string | null;
+  tunnel_dns: boolean;
+  adapter: string;
+  kill_switch: boolean;
+  passed: boolean;
+  notes: string[];
+}
+
+export interface ImportReport {
+  added: number;
+  already_present: number;
+  skipped: number;
+  failed: string[];
+}
+
+export interface PieceMap {
+  total: number;
+  have: number;
+  buckets: number[];
 }
 
 export type FilePriority = "low" | "normal" | "high";
@@ -194,9 +220,14 @@ export interface Settings {
   alt_speed_enabled: boolean;
   alt_schedule: AltSchedule;
   watched_folder: string | null;
+  watched_folders: WatchedFolder[];
   incomplete_dir: string | null;
   extra_trackers: string[];
   add_stopped: boolean;
+  check_updates: boolean;
+  min_free_mib: number | null;
+  blocklist_file: string | null;
+  banned_ips: string[];
   proxy_url: string | null;
   blocklist_url: string | null;
   anonymous_mode: boolean;
@@ -422,6 +453,20 @@ export interface VpnPrefs {
   port_forwarding: boolean;
   auto_connect: boolean;
   last_profile: string | null;
+}
+
+export interface WatchedFolder {
+  path: string;
+  category: string | null;
+  save_path: string | null;
+}
+
+export type WhenDone = "nothing" | "sleep" | "shutdown";
+
+export interface UpdateInfo {
+  version: string;
+  notes: string | null;
+  date: string | null;
 }
 
 export interface RssOptions {

@@ -1,0 +1,30 @@
+[package]
+name = "riptor-daemon"
+description = "Headless Riptor for Linux: the riptord service and the riptor-cli client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "riptord"
+path = "src/bin/riptord.rs"
+
+[[bin]]
+name = "riptor-cli"
+path = "src/bin/riptor-cli.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+riptor-core = { path = "../riptor-core" }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
+[dev-dependencies]
+tempfile.workspace = true

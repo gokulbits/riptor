@@ -51,6 +51,9 @@ pub struct Record {
     /// Files not listed are normal priority.
     #[serde(default)]
     pub file_priority: BTreeMap<usize, FilePriority>,
+    /// Files the user renamed: index -> relative path.
+    #[serde(default)]
+    pub renames: BTreeMap<usize, String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +93,8 @@ pub enum TorrentState {
     StalledUp,
     Queued,
     Stopped,
+    /// Held until its drive has room again.
+    NoSpace,
     Error,
 }
 
@@ -152,6 +157,59 @@ pub struct FileEntry {
     pub executable: bool,
     #[serde(default)]
     pub priority: FilePriority,
+    /// Bytes on disk, unbroken, from the start of the file.
+    #[serde(default)]
+    pub ready: u64,
+    /// Audio or video: can be opened before it's complete.
+    #[serde(default)]
+    pub media: bool,
+}
+
+/// The VPN leak check's findings.
+#[derive(Clone, Debug, Serialize)]
+pub struct LeakCheck {
+    /// What trackers and peers see: Riptor's sockets are pinned to the tunnel.
+    pub vpn_ip: Option<String>,
+    /// The rest of the computer's address.
+    pub normal_ip: Option<String>,
+    pub tunnel_dns: bool,
+    pub adapter: String,
+    pub kill_switch: bool,
+    pub passed: bool,
+    pub notes: Vec<String>,
+}
+
+/// Which parts are on disk, squashed into `buckets` (0-255 each).
+#[derive(Clone, Debug, Serialize)]
+pub struct PieceMap {
+    pub total: usize,
+    pub have: usize,
+    pub buckets: Vec<u8>,
+}
+
+impl PieceMap {
+    pub fn new(have: &[bool], buckets: usize) -> Self {
+        let total = have.len();
+        let n = buckets.clamp(1, 1000).min(total.max(1));
+        let buckets = (0..n)
+            .map(|b| {
+                let (lo, hi) = (
+                    b * total / n,
+                    ((b + 1) * total / n).max(b * total / n + 1).min(total),
+                );
+                let span = &have[lo.min(total)..hi];
+                if span.is_empty() {
+                    return 0;
+                }
+                (span.iter().filter(|x| **x).count() * 255 / span.len()) as u8
+            })
+            .collect();
+        Self {
+            total,
+            have: have.iter().filter(|x| **x).count(),
+            buckets,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -217,4 +275,20 @@ pub enum NoticeLevel {
 pub struct PublicIp {
     pub ip: String,
     pub via_vpn: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn piece_map_squashes_pieces_into_buckets() {
+        let have = [true, true, false, false, true, false, true, true];
+        let m = PieceMap::new(&have, 4);
+        assert_eq!((m.total, m.have), (8, 5));
+        assert_eq!(m.buckets, vec![255, 0, 127, 255]);
+        // Never more buckets than pieces, and an empty torrent is fine.
+        assert_eq!(PieceMap::new(&have, 100).buckets.len(), 8);
+        assert_eq!(PieceMap::new(&[], 10).buckets, vec![0]);
+    }
 }

@@ -5,7 +5,9 @@ mod elevate;
 mod logs;
 mod rss;
 mod tray;
+mod updater;
 mod vpn;
+mod when_done;
 
 use std::sync::Arc;
 
@@ -72,7 +74,10 @@ fn pump_events(app: AppHandle, engine: Arc<Engine>) {
                                 .body(name)
                                 .show();
                         }
-                        Event::Tick { global, .. } => tray::update(&app, global),
+                        Event::Tick { global, torrents } => {
+                            tray::update(&app, global);
+                            app.state::<when_done::WhenDone>().on_tick(&app, torrents);
+                        }
                         _ => {}
                     }
                     let _ = app.emit("riptor://event", ev);
@@ -94,7 +99,10 @@ pub fn run() {
         .with(logs::Capture)
         .init();
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    let app = builder
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Launching Riptor again brings back a window hidden in the tray.
             tray::show_main(app);
@@ -140,6 +148,8 @@ pub fn run() {
             });
 
             tray::create(&handle)?;
+            updater::init(&handle);
+            handle.manage(when_done::WhenDone::default());
             if autostart::started_minimized() {
                 if let Some(w) = handle.get_webview_window("main") {
                     let _ = w.hide();
@@ -188,6 +198,20 @@ pub fn run() {
                         let feeds = Arc::new(riptor_rss::Rss::open(&data_dir_rss));
                         let _ = handle.state::<AppState>().rss.set(feeds.clone());
                         rss::spawn(handle.clone(), engine.clone(), feeds);
+                        if updater::SUPPORTED && engine.settings().check_updates {
+                            let h = handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                                match updater::check(&h).await {
+                                    Ok(Some(u)) => {
+                                        info!("update available: {}", u.version);
+                                        let _ = h.emit("riptor://update-available", u);
+                                    }
+                                    Ok(None) => {}
+                                    Err(e) => tracing::warn!("update check failed: {e:#}"),
+                                }
+                            });
+                        }
                         pump_events(handle.clone(), engine.clone());
                         let _ = handle.state::<AppState>().engine.set(engine);
                         let _ = handle.emit("riptor://ready", ());
@@ -218,8 +242,22 @@ pub fn run() {
             commands::set_files,
             commands::set_file_priority,
             commands::autostart_get,
+            commands::when_done_get,
+            commands::when_done_set,
+            commands::when_done_cancel,
+            commands::update_supported,
+            commands::update_check,
+            commands::update_install,
             commands::autostart_set,
             commands::reveal_torrent_file,
+            commands::torrent_pieces,
+            commands::rename_files,
+            commands::set_trackers,
+            commands::import_torrents,
+            commands::vpn_leak_check,
+            commands::reannounce,
+            commands::add_peer,
+            commands::ban_peer,
             commands::open_torrent_file,
             commands::export_torrent,
             commands::rss_view,
@@ -334,6 +372,15 @@ pub fn quit(handle: &AppHandle) {
     });
     let handle = handle.clone();
     tauri::async_runtime::spawn(async move {
+        shut_down(&handle).await;
+        std::process::exit(0);
+    });
+}
+
+/// Stops the VPN and the engine; also used before an update installs.
+pub async fn shut_down(handle: &AppHandle) {
+    const LIMIT: std::time::Duration = std::time::Duration::from_secs(8);
+    {
         if let Some(v) = handle.state::<AppState>().vpn.get().cloned() {
             if tokio::time::timeout(std::time::Duration::from_secs(3), v.shutdown())
                 .await
@@ -351,8 +398,7 @@ pub fn quit(handle: &AppHandle) {
         }
         // Otherwise Windows leaves a dead icon in the tray.
         let _ = handle.remove_tray_by_id(tray::TRAY_ID);
-        std::process::exit(0);
-    });
+    }
 }
 
 #[cfg(test)]

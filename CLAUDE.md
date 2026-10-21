@@ -82,6 +82,10 @@ cargo bench -p riptor-storage
 - **Web seeds** (`webseed.rs`): workers per torrent, managed from `tick()`, fetch whole pieces over HTTP and hand them to the librqbit `webseed_*` patch. Tests call `Engine::allow_local_web_seeds()` to use a loopback server.
 - **RSS** (`crates/riptor-rss`, `src-tauri/src/rss.rs`): feeds are parsed with quick-xml (no entity expansion, size/depth/item caps) and stored in `<data>/rss.json` with seen-ids so a rule fires once per article. A minute ticker refreshes due feeds through `Engine::web_client` (VPN-aware) and adds picks via `preview` + `add`; anything with programs is added stopped.
 - **Incomplete folder / file priority:** `Record::move_on_complete` sends a finished download through `reattach` to its save folder (queued from `tick()`, run by the ticker). File priority reorders librqbit's file list (`set_file_priority_levels` patch), applied once per live state.
+- **Renames** (`Record::renames`, `TorrentRoot::renames`): per-file relative paths applied in `layout_for` before the usual sanitizing; renaming runs through `reattach` like a move. Restored backups keep only renames that pass `clean_rel_path`.
+- **Free-space guard:** `check_disk_space` in `tick()` holds unfinished torrents (`TorrentState::NoSpace`) below `min_free_mib` and the scheduler skips their starts.
+- **Updater** (`src-tauri/src/updater.rs`, Windows only): tauri-plugin-updater driven from Rust; the webview gets no updater permission. CI signs the setup with `TAURI_SIGNING_PRIVATE_KEY` and publishes `latest.json`; the public key is in `tauri.conf.json`, the private key is never in the repo.
+- **Headless** (`crates/riptor-daemon`): `riptord` + `riptor-cli` over a 0600 Unix socket in a 0700 runtime dir; no network control interface, ever.
 - **Bencode:** `vendor/librqbit-bencode` caps nesting and uses checked integers. Never remove those patches; peers send bencode.
 
 ## What's left to do (priority order)
@@ -94,10 +98,13 @@ cargo bench -p riptor-storage
 3. **Packaging:**
    - Done: per-machine NSIS setup bundling the OpenVPN MSI and embeddable Python, .deb/.rpm with `openvpn`/`python3`/`bubblewrap` + polkit policy, SHA-256 sums in CI, About page and log viewer.
    - Test the installers on clean machines (OpenVPN install, helper prompt, file/magnet registration).
-   - Optional signing.
+   - Optional signing (the user chose not to Authenticode-sign).
+   - Set the `TAURI_SIGNING_PRIVATE_KEY` repository secret (from `~/.tauri/riptor-updater.key` on the dev machine) before the next tag, or the Windows bundle job fails; then test an update between two releases.
+   - Try headless mode on real Linux (only built in CI).
    - Keep the setup under 20 MB (19.3 MB for 0.1.2).
 4. **Engine:** web seeds, runtime per-torrent limits, force recheck, moving files, orphan cleanup, RSS with rules, the incomplete folder, file priorities, extra trackers and `.torrent` export are done.
    - Try RSS against real feeds.
+   - Renames, trackers editing, peer bans, the free-space guard, play-while-downloading, the piece map and import are done; try import with a real client's resume folder.
    - A real-network download/seed check (e.g. Debian netinst). Needs the user's OK.
    - Storage download path: the benchmark now shows the store level with plain I/O (noisy; re-check on fast NVMe).
 5. **Search:**
