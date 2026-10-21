@@ -25,6 +25,7 @@ Please do **not** open a public issue. Use GitHub's private vulnerability report
 | Tracker scrapes for search results | The result picks the trackers and `.torrent` URL, so loopback, private, link-local and other non-public addresses are refused after DNS resolution and on redirects. Replies are size-capped, time-limited and parsed by librqbit's strict bencode parser; work per search is capped. Scraping reveals the looked-up torrents to those trackers and can be turned off. |
 | Torznab responses | `quick-xml`, which never resolves external entities. Size caps. Mutation tests cover Torznab, Internet Archive replies, plugin results and scrapes. |
 | VPN profiles (`.ovpn`, WireGuard `.conf`) | Script and plugin directives (`up`, `down`, `plugin`, `PostUp`, …) are rejected, because they would run as admin or root. The privileged helper re-validates every profile and takes only a fixed set of requests. |
+| Peer country list (opt-in) | Downloaded from db-ip.com over https only when "Show peer countries" is on, through the VPN when it's on and never while the kill switch holds traffic; recorded in the connections ledger. Size- and row-capped and strictly parsed (sorted, non-overlapping ranges, two-letter codes), and refused whole if anything is off. Lookups happen locally; turning the option off deletes the list. Mutation tests cover the parser. |
 | Deep links (`magnet:`) | Always open the add dialog. Nothing is added silently. |
 
 ## Hardening

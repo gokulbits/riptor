@@ -22,7 +22,11 @@ export function Dialog({
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close.current();
+    // Only the topmost dialog closes, so a dialog opened from another one doesn't take both down.
+    const onKey = (e: KeyboardEvent) => {
+      const all = document.querySelectorAll('[role="dialog"]');
+      if (e.key === "Escape" && all[all.length - 1] === ref.current) close.current();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);

@@ -134,6 +134,33 @@ fn checksum_files_and_file_names_from_hostile_torrents_never_panic() {
     }
 }
 
+#[test]
+fn mutated_country_lists_never_panic() {
+    let base = b"1.0.0.0,1.0.0.255,AU\n1.0.1.0,1.0.3.255,CN\n2001:200::,2001:200:ffff::,JP\n8.8.8.0,8.8.8.255,US\n".to_vec();
+    let mut rng = rand::rngs::StdRng::seed_from_u64(29);
+    for _ in 0..5_000 {
+        let mut b = base.clone();
+        for _ in 0..rng.random_range(1..6) {
+            if b.is_empty() {
+                break;
+            }
+            let i = rng.random_range(0..b.len());
+            match rng.random_range(0..4) {
+                0 => b[i] = rng.random(),
+                1 => b.truncate(i),
+                2 => b.insert(i, b"0123456789.:,\nAZaf"[rng.random_range(0..18)]),
+                _ => {
+                    b.remove(i);
+                }
+            }
+        }
+        if let Ok(db) = riptor_core::geoip::GeoDb::parse(&b[..]) {
+            let _ = db.lookup("8.8.8.8".parse().unwrap());
+            let _ = db.lookup("2001:200::1".parse().unwrap());
+        }
+    }
+}
+
 /// The whole add-dialog path, file to preview, on mutated torrents.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn previews_of_mutated_torrents_fail_cleanly() {

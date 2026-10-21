@@ -41,9 +41,8 @@ import { CategoryDialog, MagnetDialog, RemoveDialog, ShareLimitsDialog, TagsDial
 import { StatusBar } from "../features/torrents/StatusBar";
 import { Toolbar } from "../features/torrents/Toolbar";
 import { loadColumnPrefs, TorrentTable } from "../features/torrents/TorrentTable";
-import { SettingsDialog } from "../features/settings/SettingsDialog";
+import { SettingsDialog, type Section } from "../features/settings/SettingsDialog";
 import { StatsDialog } from "../features/stats/StatsDialog";
-import { AboutDialog } from "../features/about/AboutDialog";
 import { LogsDialog } from "../features/about/LogsDialog";
 import { ConnectionsDialog } from "../features/about/ConnectionsDialog";
 import { CreateTorrentDialog } from "../features/create/CreateTorrentDialog";
@@ -54,12 +53,11 @@ import { RssView } from "../features/rss/RssView";
 type Modal =
   | { kind: "magnet" }
   | { kind: "remove"; ids: string[] }
-  | { kind: "settings" }
+  | { kind: "settings"; section?: Section }
   | { kind: "stats" }
   | { kind: "create" }
   | { kind: "logs" }
   | { kind: "connections" }
-  | { kind: "about" }
   | { kind: "category" }
   | { kind: "limits"; ids: string[] }
   | { kind: "tags"; ids: string[] }
@@ -536,7 +534,7 @@ export default function App() {
         onResumeAll={() => run(api.resume([...s.torrents.keys()]))}
         onStopAll={() => run(api.stop([...s.torrents.keys()]))}
         onImport={importFromClient}
-        onAbout={() => setModal({ kind: "about" })}
+        onAbout={() => setModal({ kind: "settings", section: "about" })}
       />
       {view === "search" ? (
         <div className="min-h-0 flex-1">
@@ -570,7 +568,7 @@ export default function App() {
       )}
       <StatusBar
         onToggleAlt={() => run(api.setAltSpeed(!useApp.getState().global?.alt_speed))}
-        onUpdate={() => setModal({ kind: "about" })}
+        onUpdate={() => setModal({ kind: "settings", section: "about" })}
       />
 
       {menu && selected.length > 0 && <ContextMenu x={menu.x} y={menu.y} items={menuItems()} onClose={() => setMenu(null)} />}
@@ -581,6 +579,7 @@ export default function App() {
       {modal?.kind === "remove" && <RemoveDialog ids={modal.ids} onClose={() => setModal(null)} />}
       {modal?.kind === "settings" && (
         <SettingsDialog
+          initialSection={modal.section}
           onClose={() => {
             setModal(null);
             // A restore may have brought back a different layout.
@@ -592,7 +591,6 @@ export default function App() {
       {modal?.kind === "create" && <CreateTorrentDialog onClose={() => setModal(null)} />}
       {modal?.kind === "logs" && <LogsDialog onClose={() => setModal(null)} />}
       {modal?.kind === "connections" && <ConnectionsDialog onClose={() => setModal(null)} />}
-      {modal?.kind === "about" && <AboutDialog onClose={() => setModal(null)} onLogs={() => setModal({ kind: "logs" })} />}
       {modal?.kind === "category" && <CategoryDialog onClose={() => setModal(null)} onSaved={refreshCategories} />}
       {modal?.kind === "limits" && limitTargets.length > 0 && <ShareLimitsDialog torrents={limitTargets} onClose={() => setModal(null)} />}
       {modal?.kind === "tags" && tagTargets.length > 0 && <TagsDialog torrents={tagTargets} onClose={() => setModal(null)} />}

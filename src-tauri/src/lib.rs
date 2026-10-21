@@ -227,6 +227,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
+            commands::about_info,
+            commands::country_status,
             commands::recent_logs,
             commands::create_torrent,
             commands::create_torrent_progress,

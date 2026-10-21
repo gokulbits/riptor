@@ -439,7 +439,24 @@ interface PeerRow {
   fetched: number;
   uploaded: number;
   kind: string;
+  country: string | null;
 }
+
+// Full country names for the code tooltip; Intl can be missing data on some systems.
+const regionNames = (() => {
+  try {
+    return new Intl.DisplayNames(undefined, { type: "region" });
+  } catch {
+    return null;
+  }
+})();
+const countryName = (code: string) => {
+  try {
+    return regionNames?.of(code) ?? code;
+  } catch {
+    return code;
+  }
+};
 
 function Peers({ t }: { t: TorrentSummary }) {
   const [rows, setRows] = useState<PeerRow[]>([]);
@@ -459,6 +476,7 @@ function Peers({ t }: { t: TorrentSummary }) {
               fetched: Number(p?.counters?.fetched_bytes ?? 0),
               uploaded: Number(p?.counters?.uploaded_bytes ?? 0),
               kind: String(p?.conn_kind ?? ""),
+              country: typeof p?.country === "string" && /^[A-Z]{2}$/.test(p.country) ? p.country : null,
             })),
           );
         })
@@ -481,6 +499,7 @@ function Peers({ t }: { t: TorrentSummary }) {
       },
       (e) => toast("error", errorText(e)),
     );
+  const countries = rows.some((p) => p.country);
   const ip = (addr: string) => addr.replace(/^\[?([^\]]+?)\]?:\d+$/, "$1");
   return (
     <div>
@@ -503,6 +522,7 @@ function Peers({ t }: { t: TorrentSummary }) {
           <thead className="sticky top-0 bg-panel text-left text-xs text-muted">
             <tr>
               <th className="px-3 py-1.5 font-medium">Address</th>
+              {countries && <th className="w-16 px-2 py-1.5 font-medium">Country</th>}
               <th className="px-2 py-1.5 font-medium">Client</th>
               <th className="px-2 py-1.5 font-medium">Conn</th>
               <th className="px-2 py-1.5 text-right font-medium">Downloaded</th>
@@ -514,6 +534,11 @@ function Peers({ t }: { t: TorrentSummary }) {
             {sorted.map((p) => (
               <tr key={p.addr} className="hover:bg-raised">
                 <td className="px-3 py-1 font-mono text-xs">{p.addr}</td>
+                {countries && (
+                  <td className="px-2" title={p.country ? countryName(p.country) : "Unknown"}>
+                    {p.country ? <span className="rounded bg-raised px-1.5 py-0.5 font-mono text-xs">{p.country}</span> : <span className="text-muted">–</span>}
+                  </td>
+                )}
                 <td className="max-w-0 truncate px-2">{p.client}</td>
                 <td className="px-2 text-muted">{p.kind}</td>
                 <td className="px-2 text-right tabular-nums">{formatBytes(p.fetched)}</td>
@@ -537,6 +562,7 @@ function Peers({ t }: { t: TorrentSummary }) {
           </tbody>
         </table>
       )}
+      {countries && sorted.length > 0 && <p className="px-3 py-1.5 text-xxs text-muted">IP geolocation by DB-IP (db-ip.com)</p>}
     </div>
   );
 }

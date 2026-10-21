@@ -321,6 +321,7 @@ export interface Settings {
   data_cap: DataCap | null;
   scrub_days: number | null;
   scrub_mib_per_sec: number;
+  peer_countries: boolean;
   close_to_tray: boolean;
   columns: ColumnPref[];
   storage: StorageConfig;
@@ -616,6 +617,26 @@ export interface DataCap {
 export interface NetInfo {
   metered: boolean | null;
   names: string[];
+}
+
+export interface CountryStatus {
+  enabled: boolean;
+  ready: boolean;
+  /** Unix seconds. */
+  updated: number | null;
+  error: string | null;
+  attribution: string;
+}
+
+export interface AboutInfo {
+  version: string;
+  tauri: string;
+  webview: string | null;
+  librqbit: string;
+  os: string;
+  arch: string;
+  python: string;
+  openvpn_installed: boolean;
 }
 
 export type FilePreview =

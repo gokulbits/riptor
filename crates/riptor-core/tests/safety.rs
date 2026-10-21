@@ -479,3 +479,40 @@ async fn files_another_torrent_has_are_reused() {
     assert_eq!(std::fs::read(first.join("movie.bin")).unwrap(), big);
     engine.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_country_list_loads_only_when_turned_on() {
+    use std::io::Write;
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    // A copy already downloaded, so nothing goes to the network.
+    let cache = riptor_core::geoip::cache_file(&data);
+    std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(b"1.0.0.0,1.0.0.255,AU\n").unwrap();
+    std::fs::write(&cache, gz.finish().unwrap()).unwrap();
+
+    let engine = engine(&data, quiet_settings(&tmp.path().join("downloads"))).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert!(!engine.country_status().ready, "off by default");
+
+    let mut s = engine.settings();
+    s.peer_countries = true;
+    engine.update_settings(s).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !engine.country_status().ready {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("the cached list loads");
+    assert!(engine.country_status().attribution.contains("DB-IP"));
+
+    // Off again: gone from memory and disk.
+    let mut s = engine.settings();
+    s.peer_countries = false;
+    engine.update_settings(s).await.unwrap();
+    assert!(!engine.country_status().ready);
+    assert!(!cache.exists());
+    engine.shutdown().await.unwrap();
+}

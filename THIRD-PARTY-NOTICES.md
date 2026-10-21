@@ -37,3 +37,13 @@ not affect any other Python on the computer.
 
 On Linux, the `.deb` and `.rpm` packages depend on the distribution's
 `python3` (and `bubblewrap`, which sandboxes plugins).
+
+## DB-IP country data (downloaded only when turned on)
+
+When "Show peer countries" is on, Riptor downloads the free "IP to Country
+Lite" list from https://db-ip.com and keeps it in its data folder. It is not
+shipped with Riptor.
+
+- Attribution: IP geolocation by DB-IP (https://db-ip.com)
+- License: Creative Commons Attribution 4.0 International
+  (https://creativecommons.org/licenses/by/4.0/)

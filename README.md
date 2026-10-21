@@ -55,6 +55,7 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - File priorities (High, Normal, Low) on top of choosing which files to download. Open finished files (never programs) or show them in their folder. Audio and video can be played while they download, once their start is on disk.
 - Rename files and folders inside a torrent; the files move on disk.
 - Edit a torrent's trackers and re-announce, add peers by address, ban peers, and load an IP blocklist from a URL or a local file.
+- See which country each peer is in (off until you turn it on). Riptor downloads DB-IP's free country list once a month, through the VPN when it's on, and looks addresses up on your computer.
 - A piece map showing which parts are downloaded.
 - Downloads pause by themselves when their drive runs low on space (1 GiB by default) and resume when there's room.
 - When downloads finish, Riptor can put the computer to sleep or shut it down (with a minute to cancel).
@@ -108,7 +109,7 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - The status bar shows free space where downloads go; click either speed to pick a global limit.
 - Window size and position, sort order and panel layout are remembered.
 - 9 themes, "follow system", and custom accent colours.
-- An About page and a log viewer. Logs stay in memory, with tracker passkeys and URL parameters masked.
+- An About section in Settings (version, authors, thanks, licenses and the versions of the software Riptor uses, ready to paste into a bug report) and a log viewer. Logs stay in memory, with tracker passkeys and URL parameters masked.
 - In-app updates on Windows: Riptor checks GitHub for a new version and installs it after verifying its signature. On Linux, updates come from your package manager.
 - Headless mode on Linux: `riptord` runs Riptor without a window and `riptor-cli` controls it over a private local socket (no network port).
 - "Open with" and default-app registration for `.torrent` files and `magnet:` links.
@@ -337,7 +338,7 @@ Done: profile import and sanitizing, the elevated helper, the OpenVPN management
 - [ ] Try metered detection and network names through NetworkManager on real Linux (only built in CI).
 
 ### Packaging and release
-Done: the Windows setup with OpenVPN and Python bundled, `.deb` and `.rpm` packages (with headless mode), checksums, draft releases from CI, in-app updates on Windows, an About page and a log viewer.
+Done: the Windows setup with OpenVPN and Python bundled, `.deb` and `.rpm` packages (with headless mode), checksums, draft releases from CI, in-app updates on Windows, an About section in Settings and a log viewer.
 - [ ] Try an in-app update from one release to the next (CI signs the setup; the signature was checked against the app's key on 2026-10-21).
 - [ ] Try headless mode (`riptord`, `riptor-cli`) on real Linux.
 - [ ] Test the installers on clean Windows and Linux machines.
@@ -345,7 +346,7 @@ Done: the Windows setup with OpenVPN and Python bundled, `.deb` and `.rpm` packa
 - [ ] Keep the Windows setup under 20 MB (19.3 MB for 0.1.2).
 
 ### Engine and storage
-Done: web seeds (BEP 19), runtime per-torrent speed limits, force recheck, moving and renaming a torrent's files, a free-space guard, editable trackers, peer bans, a piece map, play-while-downloading, importing from other clients, and removing leftover session entries.
+Done: web seeds (BEP 19), runtime per-torrent speed limits, force recheck, moving and renaming a torrent's files, a free-space guard, editable trackers, peer bans, peer countries, a piece map, play-while-downloading, importing from other clients, and removing leftover session entries.
 - [ ] Download and seed a large public torrent end to end on a real network.
 - [ ] Storage benchmark: the download path now measures the same as plain file I/O (medians within 1%), but results are noisy; re-check on a fast NVMe drive.
 
@@ -359,7 +360,7 @@ Done: a weekly schedule for the alternative speed limits, a watched folder, movi
 - [ ] Update the pinned embedded Python with each Python security release (3.14.8 is current).
 
 ### Security and quality
-Done: fake-release warnings, checksum-file checks, passkey stripping, safe preview, the connections ledger, the swarm leak check, the untrusted-networks rule, and hostile-input tests for torrents, bencode, backups, Torznab and Internet Archive replies, plugin results, tracker scrapes, VPN profiles, checksum files and passkey stripping. They found and fixed a stack overflow on deeply nested bencode, integer overflow in bencode numbers, and a crash on non-ASCII dates in search results.
+Done: fake-release warnings, checksum-file checks, passkey stripping, safe preview, the connections ledger, the swarm leak check, the untrusted-networks rule, and hostile-input tests for torrents, bencode, backups, Torznab and Internet Archive replies, plugin results, tracker scrapes, VPN profiles, checksum files, passkey stripping and country lists. They found and fixed a stack overflow on deeply nested bencode, integer overflow in bencode numbers, and a crash on non-ASCII dates in search results.
 - [ ] Check for dependency updates regularly and upgrade by hand. Advisories already fail CI.
 - [ ] Do a security review before each release.
 - [ ] Privately report the Windows path-escape issue and the bencode crashes to upstream librqbit (see `vendor/PATCHES.md`).
@@ -385,6 +386,7 @@ Bug reports, ideas and pull requests are welcome.
 - [librqbit](https://github.com/ikatson/rqbit), the BitTorrent engine Riptor is built on.
 - [Tauri](https://tauri.app/), [React](https://react.dev/) and [Tailwind CSS](https://tailwindcss.com/) for the desktop shell and UI.
 - [OpenVPN Community](https://openvpn.net/community/) and [Python](https://www.python.org/), bundled with the Windows setup under their own licenses. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- [IP geolocation by DB-IP](https://db-ip.com) (CC BY 4.0) for peer countries.
 
 ## License
 

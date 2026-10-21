@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AboutInfo,
   AddParams,
   AssociationStatus,
   BackupSummary,
   Connection,
+  CountryStatus,
   CreateOptions,
   LogLine,
   RestoreOptions,
@@ -163,6 +165,8 @@ export const api = {
   networkInfo: () => invoke<NetInfo | null>("network_info"),
   checkData: (ids: string[]) => invoke<void>("check_data", { ids }),
   previewFile: (id: string, index: number) => invoke<FilePreview>("preview_file", { id, index }),
+  aboutInfo: () => invoke<AboutInfo>("about_info"),
+  countryStatus: () => invoke<CountryStatus>("country_status"),
 };
 
 export const events = {

@@ -27,6 +27,7 @@ impl Engine {
         match job {
             Job::VpnAddress => self.look_up_vpn_address().await,
             Job::NetInfo => self.refresh_net_info().await,
+            Job::Countries => self.refresh_countries().await,
             Job::Scrub(h) => {
                 let _one_at_a_time = self.disk_job.lock().await;
                 self.scrub(h).await

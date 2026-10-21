@@ -5,18 +5,17 @@ import { api, errorText, events } from "../../lib/ipc";
 import { formatBytes } from "../../lib/format";
 import { useApp } from "../../stores/app";
 
-export function Updates() {
+/** Auto-check is part of the Settings form, so it saves with the rest. */
+export function Updates({ auto, onAuto }: { auto: boolean; onAuto: (v: boolean) => void }) {
   const toast = useApp((s) => s.toast);
   const update = useApp((s) => s.update);
   const setUpdate = useApp((s) => s.setUpdate);
   const [supported, setSupported] = useState<boolean | null>(null);
-  const [auto, setAuto] = useState<boolean | null>(null);
   const [state, setState] = useState<"idle" | "checking" | "current" | "installing">("idle");
   const [progress, setProgress] = useState<{ done: number; total: number | null } | null>(null);
 
   useEffect(() => {
     api.updateSupported().then(setSupported, () => setSupported(false));
-    api.settings().then((s) => setAuto(s.check_updates), () => {});
     const un = events.updateProgress(setProgress);
     return () => {
       un.then((f) => f());
@@ -49,16 +48,6 @@ export function Updates() {
       toast("error", errorText(e));
     }
   };
-  const setAutoCheck = async (v: boolean) => {
-    try {
-      const s = await api.settings();
-      await api.updateSettings({ ...s, check_updates: v });
-      setAuto(v);
-    } catch (e) {
-      toast("error", errorText(e));
-    }
-  };
-
   return (
     <div className="w-full space-y-2 rounded-md bg-raised p-3 text-left">
       {update ? (
@@ -85,7 +74,7 @@ export function Updates() {
           {state === "current" && <span className="text-xs text-muted">Riptor is up to date.</span>}
         </div>
       )}
-      <Toggle checked={!!auto} disabled={auto === null} onChange={setAutoCheck} label="Check automatically when Riptor starts" />
+      <Toggle checked={auto} onChange={onAuto} label="Check automatically when Riptor starts" />
     </div>
   );
 }

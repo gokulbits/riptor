@@ -18,7 +18,7 @@ const APP_COMMANDS = new Set([
   "set_file_priority", "export_torrent", "reveal_torrent_file", "open_torrent_file", "torrent_pieces", "rename_files", "set_trackers", "import_torrents", "vpn_leak_check", "reannounce", "add_peer", "ban_peer",
   "rss_view", "rss_articles", "rss_add_feed", "rss_remove_feed", "rss_rename_feed", "rss_mark_read",
   "rss_refresh", "rss_set_options", "rss_save_rule", "rss_delete_rule", "rss_preview_rule",
-  "verify_checksums", "torrent_safety", "connections", "connections_clear", "swarm_view", "release_leak_hold", "network_info", "check_data", "preview_file",
+  "verify_checksums", "torrent_safety", "connections", "connections_clear", "swarm_view", "release_leak_hold", "network_info", "check_data", "preview_file", "about_info", "country_status",
 ]);
 const PLUGIN_PREFIXES = ["plugin:event|", "plugin:window|", "plugin:webview|", "plugin:app|", "plugin:path|"];
 const PLUGIN_COMMANDS = new Set(["plugin:dialog|open", "plugin:dialog|save", "plugin:dialog|message", "plugin:dialog|ask", "plugin:dialog|confirm"]);

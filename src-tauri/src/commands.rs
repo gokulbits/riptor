@@ -314,6 +314,39 @@ pub fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+#[derive(serde::Serialize)]
+pub struct AboutInfo {
+    version: &'static str,
+    tauri: &'static str,
+    webview: Option<String>,
+    librqbit: &'static str,
+    os: &'static str,
+    arch: &'static str,
+    python: &'static str,
+    openvpn_installed: bool,
+}
+
+/// Versions for Settings › About.
+#[tauri::command]
+pub fn about_info() -> AboutInfo {
+    AboutInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        tauri: tauri::VERSION,
+        webview: tauri::webview_version().ok(),
+        // Vendored; see vendor/PATCHES.md.
+        librqbit: "9.0.1",
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        python: riptor_search::pyembed::VERSION,
+        openvpn_installed: crate::vpn::openvpn_installed(),
+    }
+}
+
+#[tauri::command]
+pub async fn country_status(state: State<'_, AppState>) -> Res<riptor_core::CountryStatus> {
+    Ok(engine(&state).await?.country_status())
+}
+
 #[tauri::command]
 pub fn recent_logs() -> Vec<crate::logs::LogLine> {
     crate::logs::recent()

@@ -8,6 +8,7 @@ pub mod create;
 pub mod dedupe;
 pub mod dns;
 mod engine;
+pub mod geoip;
 pub mod import;
 pub mod input;
 pub mod model;
@@ -33,7 +34,8 @@ mod watch;
 mod webseed;
 
 pub use engine::{
-    BackupSummary, Engine, EngineConfig, QueueMove, RestoreOptions, RestoreReport, SwarmView,
+    BackupSummary, CountryStatus, Engine, EngineConfig, QueueMove, RestoreOptions, RestoreReport,
+    SwarmView,
 };
 pub use input::Source;
 pub use model::*;

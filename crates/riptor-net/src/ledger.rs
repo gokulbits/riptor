@@ -24,6 +24,7 @@ pub enum Purpose {
     Update,
     Python,
     VpnServer,
+    CountryData,
 }
 
 impl Purpose {
@@ -43,6 +44,7 @@ impl Purpose {
             Purpose::Update => "update",
             Purpose::Python => "python",
             Purpose::VpnServer => "vpn_server",
+            Purpose::CountryData => "country_data",
         }
     }
 }

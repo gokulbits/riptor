@@ -4,12 +4,13 @@ import { FolderOpen, Loader2, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Dialog, Field, OptionalNumber, Toggle } from "../../components/ui";
 import { api, errorText } from "../../lib/ipc";
-import type { DataCap, NetInfo, Settings, WatchedFolder } from "../../lib/types";
+import type { CountryStatus, DataCap, NetInfo, Settings, WatchedFolder } from "../../lib/types";
 import { useApp } from "../../stores/app";
+import { AboutSection } from "./AboutSection";
 import { AssociationSection } from "./AssociationSection";
 import { BackupSection } from "./BackupSection";
 
-type Section = "downloads" | "connection" | "speed" | "bittorrent" | "storage" | "privacy" | "apps" | "backup";
+export type Section = "downloads" | "connection" | "speed" | "bittorrent" | "storage" | "privacy" | "apps" | "backup" | "about";
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "downloads", label: "Downloads" },
@@ -20,6 +21,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "privacy", label: "Privacy & Security" },
   { id: "apps", label: "Default App" },
   { id: "backup", label: "Backup & Restore" },
+  { id: "about", label: "About" },
 ];
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -232,6 +234,41 @@ function DataUse({ s, set }: { s: Settings; set: (patch: Partial<Settings>) => v
   );
 }
 
+/** Country codes next to peers, from DB-IP's free list. */
+function PeerCountries({ s, set }: { s: Settings; set: (patch: Partial<Settings>) => void }) {
+  const [status, setStatus] = useState<CountryStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.countryStatus().then((v) => alive && setStatus(v), () => {});
+    load();
+    const t = window.setInterval(load, 3000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, []);
+  const saved = status?.enabled;
+  let line: string | null = null;
+  if (s.peer_countries && saved) {
+    if (status?.ready && status.updated) line = `Country list downloaded ${new Date(status.updated * 1000).toLocaleDateString()}.`;
+    else if (status?.error) line = `Couldn't get the country list: ${status.error}`;
+    else line = "Getting the country list…";
+  } else if (s.peer_countries) line = "The country list is downloaded once you save.";
+  else if (saved) line = "Saving turns this off and deletes the downloaded list.";
+  return (
+    <>
+      <Toggle
+        checked={s.peer_countries}
+        onChange={(v) => set({ peer_countries: v })}
+        label="Show peer countries"
+        hint="Downloads a free country list (about 4.5 MB) from db-ip.com, through the VPN when it's on, and refreshes it monthly. Lookups happen on this computer."
+      />
+      {line && <p className={clsx("text-xs", status?.error && s.peer_countries ? "text-danger" : "text-muted")}>{line}</p>}
+      {s.peer_countries && <p className="text-xs text-muted">{status?.attribution ?? "IP geolocation by DB-IP"}</p>}
+    </>
+  );
+}
+
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <fieldset className="space-y-3">
@@ -241,10 +278,10 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+export function SettingsDialog({ onClose, initialSection = "downloads" }: { onClose: () => void; initialSection?: Section }) {
   const toast = useApp((s) => s.toast);
   const [s, setS] = useState<Settings | null>(null);
-  const [section, setSection] = useState<Section>("downloads");
+  const [section, setSection] = useState<Section>(initialSection);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -287,7 +324,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         </>
       }
     >
-      <div className="flex min-h-[26rem] gap-6">
+      {/* Fixed height so switching sections doesn't resize the dialog; the section scrolls instead. */}
+      <div className="flex h-[min(40rem,calc(90vh-9rem))] gap-6">
         <nav className="w-44 shrink-0 space-y-0.5">
           {SECTIONS.map((x) => (
             <button
@@ -302,7 +340,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </button>
           ))}
         </nav>
-        <div className="flex-1 space-y-6">
+        <div key={section} className="-mr-2 min-w-0 flex-1 space-y-6 overflow-y-auto pr-2">
           {section === "downloads" && (
             <Group title="Saving">
               <Field label="Default download folder">
@@ -410,6 +448,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   label="Web seeds"
                   hint="Also download from HTTP servers a torrent lists. Off while a proxy or anonymous mode is in use. Local and private addresses are never contacted."
                 />
+                <PeerCountries s={s} set={set} />
                 <Field label="Max peers per torrent">
                   <OptionalNumber value={s.peer_limit} onChange={(v) => set({ peer_limit: v })} min={1} />
                 </Field>
@@ -681,6 +720,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             </Group>
           )}
 
+          {section === "about" && <AboutSection checkUpdates={s.check_updates} onCheckUpdates={(v) => set({ check_updates: v })} />}
           {section === "apps" && <AssociationSection />}
           {section === "backup" && <BackupSection onSettingsRestored={() => api.settings().then(setS)} />}
 

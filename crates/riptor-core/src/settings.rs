@@ -166,6 +166,8 @@ pub struct Settings {
     pub scrub_days: Option<u32>,
     /// How fast the background check may read.
     pub scrub_mib_per_sec: u32,
+    /// Download DB-IP's country list to show where peers are; off until turned on.
+    pub peer_countries: bool,
     /// Closing the window hides it; Quit is in the tray menu.
     pub close_to_tray: bool,
     /// Empty means the default layout.
@@ -214,6 +216,7 @@ impl Default for Settings {
             data_cap: None,
             scrub_days: Some(30),
             scrub_mib_per_sec: 32,
+            peer_countries: false,
             close_to_tray: true,
             columns: Vec::new(),
             storage: StorageConfig::default(),

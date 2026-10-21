@@ -35,9 +35,12 @@ use crate::settings::{Settings, Transport};
 use crate::stats::{self, Statistics, StatsReport};
 use crate::{backup, motw, paths, state_file, webseed};
 
+mod countries;
 mod data_check;
 mod hold;
 mod reuse;
+
+pub use countries::CountryStatus;
 mod safety;
 mod swarm_ip;
 
@@ -63,6 +66,7 @@ enum Job {
     VpnAddress,
     NetInfo,
     Scrub(Id20),
+    Countries,
 }
 
 pub struct EngineConfig {
@@ -146,6 +150,7 @@ pub struct Engine {
     leak_hold: Mutex<Option<String>>,
     net_info: Mutex<Option<crate::netinfo::NetInfo>>,
     scrubbing: Mutex<HashMap<Id20, Arc<crate::scrub::Progress>>>,
+    geo: Mutex<countries::GeoState>,
 }
 
 #[derive(Default)]
@@ -292,6 +297,7 @@ impl Engine {
             leak_hold: Mutex::new(None),
             net_info: Mutex::new(None),
             scrubbing: Mutex::new(HashMap::new()),
+            geo: Mutex::new(Default::default()),
         });
         engine.apply_limits();
         engine.forget_orphans().await;
@@ -1523,9 +1529,11 @@ impl Engine {
     pub fn peers(&self, id: &str) -> anyhow::Result<serde_json::Value> {
         let t = self.handle(&parse_hash(id)?)?;
         match t.live() {
-            Some(live) => Ok(serde_json::to_value(
-                live.per_peer_stats_snapshot(Default::default()),
-            )?),
+            Some(live) => {
+                let mut v = serde_json::to_value(live.per_peer_stats_snapshot(Default::default()))?;
+                self.add_countries(&mut v);
+                Ok(v)
+            }
             None => Ok(serde_json::Value::Null),
         }
     }
@@ -1594,6 +1602,11 @@ impl Engine {
         let old = self.settings();
         if old.alt_schedule != new.alt_schedule {
             *self.alt_window.lock() = None;
+        }
+        if old.peer_countries && !new.peer_countries {
+            self.forget_countries();
+        } else if !old.peer_countries && new.peer_countries {
+            self.geo.lock().tried = None;
         }
         state_file::save(&self.data_dir.join("settings.json"), &new)?;
         *self.settings.write() = new.clone();
@@ -2375,6 +2388,9 @@ impl Engine {
             if let Err(e) = self.persist_now() {
                 warn!("saving torrent state failed: {e:#}");
             }
+        }
+        if n % 10 == 3 {
+            self.schedule_countries();
         }
         if n % 60 == 30 {
             self.schedule_data_check();
