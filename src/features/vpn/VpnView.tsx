@@ -324,7 +324,7 @@ export function VpnView() {
               hint={
                 prefs.last_profile
                   ? "Reconnects the profile you used last. Windows asks for administrator rights each time."
-                  : "Connect a profile once first; Riptor then reconnects it at startup."
+                  : "Connects your profile if you have just one ready, otherwise the one you connect next. Windows asks for administrator rights each time."
               }
             />
           </div>

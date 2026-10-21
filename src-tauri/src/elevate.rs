@@ -2,14 +2,18 @@
 
 use std::path::Path;
 
+/// An elevated helper that keeps running; dropping this doesn't stop it.
+pub struct Elevated {
+    #[cfg(windows)]
+    process: isize,
+    #[cfg(not(windows))]
+    child: std::process::Child,
+}
+
 #[cfg(windows)]
 #[allow(unsafe_code)]
-pub fn run(exe: &Path, args: &[String]) -> anyhow::Result<i32> {
+pub fn start(exe: &Path, args: &[String]) -> anyhow::Result<Elevated> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, WaitForSingleObject, INFINITE,
-    };
     use windows_sys::Win32::UI::Shell::{
         ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
     };
@@ -35,7 +39,7 @@ pub fn run(exe: &Path, args: &[String]) -> anyhow::Result<i32> {
     info.lpParameters = params.as_ptr();
     info.nShow = 0; // SW_HIDE
 
-    // SAFETY: the strings outlive the call; the handle is closed below.
+    // SAFETY: the strings outlive the call; Elevated closes the handle.
     let ok = unsafe { ShellExecuteExW(&mut info) };
     if ok == 0 {
         let e = std::io::Error::last_os_error();
@@ -46,15 +50,60 @@ pub fn run(exe: &Path, args: &[String]) -> anyhow::Result<i32> {
         return Err(e.into());
     }
     anyhow::ensure!(!info.hProcess.is_null(), "no process handle from UAC");
-    let mut code = 1u32;
-    // SAFETY: we own hProcess until CloseHandle.
-    unsafe {
-        if WaitForSingleObject(info.hProcess, INFINITE) == WAIT_OBJECT_0 {
-            GetExitCodeProcess(info.hProcess, &mut code);
+    Ok(Elevated {
+        process: info.hProcess as isize,
+    })
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+impl Elevated {
+    /// `None` while it's still running.
+    pub fn exit_code(&mut self) -> Option<i32> {
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+        let h = self.process as windows_sys::Win32::Foundation::HANDLE;
+        let mut code = 1u32;
+        // SAFETY: we own the handle until Drop.
+        unsafe {
+            if WaitForSingleObject(h, 0) != WAIT_OBJECT_0 {
+                return None;
+            }
+            GetExitCodeProcess(h, &mut code);
         }
-        CloseHandle(info.hProcess);
+        Some(code as i32)
     }
-    Ok(code as i32)
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+impl Drop for Elevated {
+    fn drop(&mut self) {
+        // SAFETY: the handle from ShellExecuteExW, closed once.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.process as _) };
+    }
+}
+
+#[cfg(not(windows))]
+pub fn start(exe: &Path, args: &[String]) -> anyhow::Result<Elevated> {
+    let child = std::process::Command::new("/usr/bin/pkexec")
+        .arg(exe)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .spawn()?;
+    Ok(Elevated { child })
+}
+
+#[cfg(not(windows))]
+impl Elevated {
+    /// `None` while it's still running. pkexec's own 126/127 mean the prompt was declined.
+    pub fn exit_code(&mut self) -> Option<i32> {
+        match self.child.try_wait() {
+            Ok(Some(s)) => Some(s.code().unwrap_or(1)),
+            Ok(None) => None,
+            Err(_) => Some(1),
+        }
+    }
 }
 
 /// Linux: keeps the helper running with piped stdin/stdout (WireGuard).
@@ -67,17 +116,4 @@ pub fn spawn(exe: &Path, args: &[String]) -> std::io::Result<tokio::process::Chi
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
-}
-
-#[cfg(not(windows))]
-pub fn run(exe: &Path, args: &[String]) -> anyhow::Result<i32> {
-    let status = std::process::Command::new("/usr/bin/pkexec")
-        .arg(exe)
-        .args(args)
-        .status()?;
-    match status.code() {
-        Some(126) | Some(127) => anyhow::bail!("administrator permission was declined"),
-        Some(c) => Ok(c),
-        None => anyhow::bail!("helper was killed"),
-    }
 }

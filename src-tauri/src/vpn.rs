@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{bail, Context};
 use parking_lot::Mutex;
 use riptor_core::{Engine, NetworkMode, VpnBinding};
-use riptor_vpn::mgmt::{self, Line};
+use riptor_vpn::mgmt::{self, ConnectWatch, Line, Verdict};
 use riptor_vpn::natpmp;
 use riptor_vpn::profiles::{Kind, Profile, ProfileStore};
 use serde::{Deserialize, Serialize};
@@ -83,6 +83,7 @@ pub struct VpnManager {
     status: Mutex<VpnStatus>,
     conn: tokio::sync::Mutex<Option<Conn>>,
     prefs: Mutex<VpnPrefs>,
+    alive: Mutex<Option<std::fs::File>>,
 }
 
 /// One at a time: OpenVPN 2.7 can drop or mix up commands sent together.
@@ -110,6 +111,82 @@ impl Commands {
         let c = self.queue.pop_front()?;
         self.waiting = true;
         Some(c)
+    }
+}
+
+type Halves = (Box<dyn AsyncRead + Send + Unpin>, Writer);
+
+/// Waits for OpenVPN's management interface, or for the helper to give up.
+async fn connect_management(
+    helper: &mut crate::elevate::Elevated,
+    #[cfg_attr(target_os = "linux", allow(unused_variables))] port: u16,
+) -> anyhow::Result<Halves> {
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(code) = helper.exit_code() {
+            bail!("{}", helper_failure(code));
+        }
+        #[cfg(target_os = "linux")]
+        let attempt = {
+            let uid = rustix::process::getuid().as_raw();
+            let path = format!("/run/riptor-vpn-sock/{uid}/mgmt.sock");
+            tokio::net::UnixStream::connect(&path).await.map(|s| {
+                let (r, w) = s.into_split();
+                (
+                    Box::new(r) as Box<dyn AsyncRead + Send + Unpin>,
+                    Box::new(w) as Writer,
+                )
+            })
+        };
+        #[cfg(not(target_os = "linux"))]
+        let attempt = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .map(|s| {
+                let (r, w) = s.into_split();
+                (
+                    Box::new(r) as Box<dyn AsyncRead + Send + Unpin>,
+                    Box::new(w) as Writer,
+                )
+            });
+        match attempt {
+            Ok(halves) => return Ok(halves),
+            Err(e) if started.elapsed() > MANAGEMENT_WAIT => {
+                return Err(
+                    anyhow::Error::from(e).context("OpenVPN didn't open its management interface")
+                )
+            }
+            Err(_) => tokio::time::sleep(Duration::from_millis(250)).await,
+        }
+    }
+}
+
+const MANAGEMENT_WAIT: Duration = Duration::from_secs(20);
+
+fn helper_failure(code: i32) -> String {
+    match code {
+        0 => "OpenVPN stopped before Riptor could talk to it".into(),
+        2 => "the VPN helper was started incorrectly".into(),
+        3 => "the profile was rejected by the VPN helper".into(),
+        4 => "OpenVPN isn't installed".into(),
+        5 => "OpenVPN failed to start (is another VPN using the adapter?)".into(),
+        126 | 127 if cfg!(not(windows)) => "administrator permission was declined".into(),
+        c => format!("the VPN helper failed (code {c})"),
+    }
+}
+
+/// The profile used last, or the only one that's ready if none has been used yet.
+fn startup_profile(
+    last: Option<&str>,
+    profiles: &[Profile],
+    ready: impl Fn(&Profile) -> bool,
+) -> Option<String> {
+    let usable: Vec<&Profile> = profiles.iter().filter(|p| ready(p)).collect();
+    if let Some(p) = last.and_then(|id| usable.iter().find(|p| p.id == id)) {
+        return Some(p.id.clone());
+    }
+    match usable.as_slice() {
+        [only] => Some(only.id.clone()),
+        _ => None,
     }
 }
 
@@ -241,7 +318,27 @@ impl VpnManager {
             status: Mutex::new(VpnStatus::default()),
             conn: tokio::sync::Mutex::new(None),
             prefs: Mutex::new(prefs),
+            alive: Mutex::new(None),
         }))
+    }
+
+    /// Held for Riptor's lifetime; the helper stops OpenVPN once it's released.
+    fn alive_lock(&self) -> anyhow::Result<PathBuf> {
+        let path = self.dir.join("vpn-alive.lock");
+        let mut held = self.alive.lock();
+        if held.is_none() {
+            std::fs::create_dir_all(&self.dir)?;
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&path)?;
+            f.try_lock()
+                .map_err(|e| anyhow::anyhow!("locking {}: {e}", path.display()))?;
+            *held = Some(f);
+        }
+        Ok(path)
     }
 
     pub fn store(&self) -> &ProfileStore {
@@ -290,7 +387,15 @@ impl VpnManager {
 
     pub fn auto_connect(self: &Arc<Self>) {
         let p = self.prefs();
-        let Some(id) = p.last_profile.filter(|_| p.auto_connect) else {
+        if !p.auto_connect {
+            return;
+        }
+        let profiles = self.store.list();
+        let ready = |pr: &Profile| {
+            pr.app_only_supported() && (!pr.needs_credentials || self.store.has_credentials(&pr.id))
+        };
+        let Some(id) = startup_profile(p.last_profile.as_deref(), &profiles, ready) else {
+            info!("VPN auto-connect is on, but there's no profile ready to connect");
             return;
         };
         let me = self.clone();
@@ -378,39 +483,15 @@ impl VpnManager {
             cfg_path.to_string_lossy().into_owned(),
             endpoint,
             pw_path.to_string_lossy().into_owned(),
+            self.alive_lock()?.to_string_lossy().into_owned(),
         ];
-        let code =
-            tokio::task::spawn_blocking(move || crate::elevate::run(&helper, &args)).await??;
+        // The helper stays running as OpenVPN's parent, so it shows under Riptor.
+        let mut helper =
+            tokio::task::spawn_blocking(move || crate::elevate::start(&helper, &args)).await??;
+        let connected = connect_management(&mut helper, port).await;
         let _ = std::fs::remove_file(&cfg_path);
         let _ = std::fs::remove_file(&pw_path);
-        match code {
-            0 => {}
-            3 => bail!("the profile was rejected by the VPN helper"),
-            4 => bail!("OpenVPN isn't installed"),
-            5 => bail!("OpenVPN failed to start (is another VPN using the adapter?)"),
-            c => bail!("the VPN helper failed (code {c})"),
-        }
-
-        let (read, write): (Box<dyn AsyncRead + Send + Unpin>, Writer) = {
-            #[cfg(target_os = "linux")]
-            {
-                let uid = rustix::process::getuid().as_raw();
-                let path = format!("/run/riptor-vpn-sock/{uid}/mgmt.sock");
-                let stream = tokio::net::UnixStream::connect(&path)
-                    .await
-                    .context("connecting to OpenVPN")?;
-                let (r, w) = stream.into_split();
-                (Box::new(r), Box::new(w))
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
-                    .await
-                    .context("connecting to OpenVPN")?;
-                let (r, w) = stream.into_split();
-                (Box::new(r), Box::new(w))
-            }
-        };
+        let (read, write) = connected?;
         // The password prompt arrives immediately, so the writer must exist first.
         let mut conn = self.conn.lock().await;
         *conn = Some(Conn {
@@ -463,6 +544,8 @@ impl VpnManager {
         let mut line = String::new();
         let mut watchdog: Option<tokio::task::JoinHandle<()>> = None;
         let mut cmds = Commands::default();
+        let mut watch = ConnectWatch::default();
+        let mut stopping = false;
         loop {
             line.clear();
             match next_line(&mut r, &mut line).await {
@@ -480,10 +563,32 @@ impl VpnManager {
             if let Line::State { state, .. } = &parsed {
                 info!("VPN state: {state}");
             }
+            // Give up as soon as the attempt can't work, instead of waiting for the timeout.
+            let connecting = matches!(self.status.lock().phase, Phase::Connecting);
+            let always = matches!(
+                parsed,
+                Line::AuthFailed(_) | Line::Fatal(_) | Line::Log { fatal: true, .. }
+            );
+            match watch.on(&parsed) {
+                Some(Verdict::Failed(m)) if (connecting || always) && !stopping => {
+                    warn!("VPN connect failed: {m}");
+                    stopping = true;
+                    self.set_status(|s| {
+                        s.phase = Phase::Error;
+                        s.message = Some(m);
+                    });
+                    self.send("signal SIGTERM\n").await;
+                }
+                Some(Verdict::Retrying(m)) if connecting => {
+                    self.set_status(|s| s.message = Some(m))
+                }
+                _ => {}
+            }
             match parsed {
                 Line::ManagementPassword => {
                     cmds.push(format!("{password}\n"));
                     cmds.push("state on\n".into());
+                    cmds.push("log on\n".into());
                     cmds.push("hold release\n".into());
                 }
                 Line::Hold => cmds.push("hold release\n".into()),
@@ -506,17 +611,6 @@ impl VpnManager {
                         self.send("signal SIGTERM\n").await;
                     }
                 },
-                Line::AuthFailed => {
-                    self.set_status(|s| {
-                        s.phase = Phase::Error;
-                        s.message = Some("The VPN rejected the username or password (many providers use separate OpenVPN credentials, not your account login)".into());
-                    });
-                    self.send("signal SIGTERM\n").await;
-                }
-                Line::Fatal(m) => self.set_status(|s| {
-                    s.phase = Phase::Error;
-                    s.message = Some(m);
-                }),
                 Line::State {
                     state, local_ip, ..
                 } => match (state.as_str(), local_ip) {
@@ -555,7 +649,7 @@ impl VpnManager {
                     }
                     _ => {}
                 },
-                Line::Other => {}
+                Line::AuthFailed(_) | Line::Fatal(_) | Line::Log { .. } | Line::Other => {}
             }
             if let Some(c) = cmds.next() {
                 self.send(&c).await;
@@ -746,6 +840,39 @@ mod tests {
         drop(ours);
         line.clear();
         assert_eq!(next_line(&mut r, &mut line).await.unwrap(), 0);
+    }
+
+    #[test]
+    fn startup_profile_prefers_the_last_one_then_the_only_one() {
+        let p = |id: &str, creds: bool| Profile {
+            id: id.into(),
+            name: id.into(),
+            kind: Kind::OpenVpn,
+            config: String::new(),
+            needs_credentials: creds,
+            servers: Vec::new(),
+            removed: Vec::new(),
+            dns: Vec::new(),
+            created: 0,
+        };
+        let all = [p("a", false), p("b", false), p("needs-login", true)];
+        let ready = |pr: &Profile| !pr.needs_credentials;
+        assert_eq!(
+            startup_profile(Some("b"), &all, ready).as_deref(),
+            Some("b")
+        );
+        // Never used: ambiguous with two ready profiles.
+        assert_eq!(startup_profile(None, &all, ready), None);
+        assert_eq!(
+            startup_profile(None, &all[1..], ready).as_deref(),
+            Some("b")
+        );
+        // The last one was deleted or lost its login: fall back to the only ready one.
+        assert_eq!(
+            startup_profile(Some("gone"), &all[1..], ready).as_deref(),
+            Some("b")
+        );
+        assert_eq!(startup_profile(Some("needs-login"), &all[2..], ready), None);
     }
 
     #[test]

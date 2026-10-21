@@ -1,12 +1,15 @@
-//! Elevated VPN helper: `openvpn <config> <port|unix> <password-file>` or `wireguard <config>` (Linux).
+//! Elevated VPN helper: `openvpn <config> <port|unix> <password-file> <alive-lock>` or `wireguard <config>` (Linux).
 #![forbid(unsafe_code)]
 
 #[cfg(target_os = "linux")]
 mod linux;
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, ensure};
 
@@ -23,12 +26,12 @@ mod code {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
-        Some("openvpn") if args.len() == 4 => openvpn(&args[1], &args[2], &args[3]),
+        Some("openvpn") if args.len() == 5 => openvpn(&args[1], &args[2], &args[3], &args[4]),
         #[cfg(target_os = "linux")]
         Some("wireguard") if args.len() == 2 => wireguard(&args[1]),
         _ => {
             eprintln!(
-                "usage: riptor-vpn-helper openvpn <config> <management-port | unix> <password-file>"
+                "usage: riptor-vpn-helper openvpn <config> <management-port | unix> <password-file> <alive-lock>"
             );
             std::process::exit(code::USAGE);
         }
@@ -75,7 +78,11 @@ fn wireguard(config: &str) -> Res {
     linux::wireguard(&sanitized.config, &exe).map_err(|e| (code::START_FAILED, anyhow::anyhow!(e)))
 }
 
-fn openvpn(config: &str, port: &str, pw_file: &str) -> Res {
+/// Riptor keeps this file locked while it runs.
+const ALIVE_FILE: &str = "vpn-alive.lock";
+
+fn openvpn(config: &str, port: &str, pw_file: &str, alive: &str) -> Res {
+    let alive = open_alive(alive).map_err(fail(code::USAGE))?;
     let mgmt = match port {
         #[cfg(target_os = "linux")]
         "unix" => {
@@ -140,47 +147,78 @@ fn openvpn(config: &str, port: &str, pw_file: &str) -> Res {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW | DETACHED_PROCESS
-        cmd.creation_flags(0x0800_0000 | 0x0000_0008);
+        // CREATE_NO_WINDOW; not detached, so it stays under Riptor in Task Manager.
+        cmd.creation_flags(0x0800_0000);
     }
-    let child = cmd
-        .spawn()
-        .map_err(|e| (code::START_FAILED, anyhow::anyhow!("starting OpenVPN: {e}")))?;
-    let _ = std::fs::write(dir.join(PID_FILE), child.id().to_string());
-
-    // Once the management interface is up OpenVPN has read the files.
-    let ready = match &mgmt {
-        Mgmt::Tcp(port) => {
-            let started = Instant::now();
-            loop {
-                if std::net::TcpStream::connect_timeout(
-                    &([127, 0, 0, 1], *port).into(),
-                    Duration::from_millis(300),
-                )
-                .is_ok()
-                {
-                    break true;
-                }
-                if started.elapsed() > Duration::from_secs(15) {
-                    break false;
-                }
-                std::thread::sleep(Duration::from_millis(200));
-            }
-        }
-        #[cfg(target_os = "linux")]
-        Mgmt::Unix { uid, path } => {
-            linux::claim_socket(path, *uid, Duration::from_secs(15)).is_ok()
+    let cleanup = |dir: &Path| {
+        let _ = std::fs::remove_file(&pw_path);
+        let _ = std::fs::remove_file(&cfg_path);
+        let _ = std::fs::remove_file(dir.join(PID_FILE));
+    };
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            cleanup(&dir);
+            return Err((code::START_FAILED, anyhow::anyhow!("starting OpenVPN: {e}")));
         }
     };
-    let _ = std::fs::remove_file(&pw_path);
-    let _ = std::fs::remove_file(&cfg_path);
-    if !ready {
-        return Err((
-            code::START_FAILED,
-            anyhow::anyhow!("OpenVPN did not open its management port"),
-        ));
+    let _ = std::fs::write(dir.join(PID_FILE), child.id().to_string());
+
+    #[cfg(target_os = "linux")]
+    if let Mgmt::Unix { uid, path } = &mgmt {
+        if let Err(e) = linux::claim_socket(path, *uid, Duration::from_secs(15)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            cleanup(&dir);
+            return Err((code::START_FAILED, e.into()));
+        }
     }
-    Ok(())
+
+    let status = supervise(&mut child, alive);
+    cleanup(&dir);
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err((
+            code::START_FAILED,
+            anyhow::anyhow!("OpenVPN exited with {s}"),
+        )),
+        Err(e) => Err((code::START_FAILED, e.into())),
+    }
+}
+
+/// Runs until OpenVPN exits, and stops it if Riptor goes away first.
+fn supervise(child: &mut Child, alive: File) -> std::io::Result<std::process::ExitStatus> {
+    let gone = Arc::new(AtomicBool::new(false));
+    {
+        let gone = gone.clone();
+        // Riptor holds an exclusive lock for as long as it runs; the OS drops it even on a crash.
+        std::thread::spawn(move || {
+            let _ = alive.lock_shared();
+            gone.store(true, Ordering::SeqCst);
+        });
+    }
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if gone.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            return child.wait();
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
+/// Riptor's lock file: a plain file, never a link.
+fn open_alive(p: &str) -> anyhow::Result<File> {
+    let path = Path::new(p);
+    ensure!(
+        path.is_absolute() && path.file_name().is_some_and(|n| n == ALIVE_FILE),
+        "bad lock file"
+    );
+    let meta = std::fs::symlink_metadata(path)?;
+    ensure!(meta.file_type().is_file(), "lock file is not a plain file");
+    Ok(File::open(path)?)
 }
 
 const PID_FILE: &str = "openvpn.pid";
