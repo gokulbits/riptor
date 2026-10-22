@@ -2154,9 +2154,11 @@ impl Engine {
     }
 
     pub async fn shutdown(&self) -> anyhow::Result<()> {
-        let r = self.persist().await;
+        // The last save; a tick still running afterwards writes nothing.
+        let queued = self.queue_state();
+        let r = self.saver.close().await;
         self.session().stop().await;
-        r
+        queued.and(r)
     }
 
     // ---------------------------------------------------------------- tick

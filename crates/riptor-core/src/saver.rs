@@ -23,12 +23,17 @@ struct Inner {
     // One writer at a time; pending is taken only while holding it, so older bytes never land last.
     turn: Mutex<()>,
     background: AtomicBool,
+    // Shut down: nothing more is written.
+    closed: AtomicBool,
     writes: AtomicU64,
 }
 
 impl Saver {
     /// Latest wins; bytes already on disk are dropped.
     pub fn queue(&self, path: PathBuf, bytes: Vec<u8>) {
+        if self.inner.closed.load(Ordering::Acquire) {
+            return;
+        }
         if self.inner.written.lock().get(&path) == Some(&bytes) {
             self.inner.pending.lock().remove(&path);
             return;
@@ -72,6 +77,18 @@ impl Saver {
         });
     }
 
+    /// Writes what's queued, then ignores anything queued or flushed later.
+    pub async fn close(&self) -> anyhow::Result<()> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let _turn = inner.turn.lock();
+            let r = inner.write_pending();
+            inner.closed.store(true, Ordering::Release);
+            r
+        })
+        .await?
+    }
+
     pub fn writes(&self) -> u64 {
         self.inner.writes.load(Ordering::Relaxed)
     }
@@ -80,6 +97,15 @@ impl Saver {
 impl Inner {
     fn flush(&self) -> anyhow::Result<()> {
         let _turn = self.turn.lock();
+        if self.closed.load(Ordering::Acquire) {
+            self.pending.lock().clear();
+            return Ok(());
+        }
+        self.write_pending()
+    }
+
+    // Callers hold `turn`.
+    fn write_pending(&self) -> anyhow::Result<()> {
         let batch = std::mem::take(&mut *self.pending.lock());
         let mut failed = None;
         let mut rest = batch.into_iter();
@@ -227,5 +253,22 @@ mod tests {
         drop(turn);
         s.flush().await.unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), b"x");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn nothing_is_written_after_close() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("state.json");
+        let s = Saver::default();
+        s.queue(p.clone(), b"final".to_vec());
+        s.close().await.unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"final");
+        s.queue(p.clone(), b"late".to_vec());
+        // A save that slipped in just before closing.
+        s.inner.pending.lock().insert(p.clone(), b"racing".to_vec());
+        s.flush_soon();
+        s.flush().await.unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"final");
+        assert_eq!(s.writes(), 1);
     }
 }
