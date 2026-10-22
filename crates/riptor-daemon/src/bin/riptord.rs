@@ -82,6 +82,8 @@ mod unix {
             .with_writer(std::io::stderr)
             .init();
         let data_dir = args()?;
+        // Falls back to the built-in key where there is no keyring (most servers).
+        riptor_core::history::use_os_key();
         let engine = Engine::start(EngineConfig {
             data_dir: data_dir.clone(),
         })

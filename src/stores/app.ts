@@ -98,6 +98,11 @@ interface AppState {
   tracker: string | null;
   /** A newer version found by the update check. */
   update: UpdateInfo | null;
+  /** Where that update is: found, downloading in the background, or downloaded and ready. */
+  updateStage: "available" | "downloading" | "ready";
+  updateProgress: { done: number; total: number | null } | null;
+  /** The update popup on screen, if any. */
+  updatePopup: "available" | "ready" | null;
   search: string;
   sort: { key: SortKey; desc: boolean };
 
@@ -125,6 +130,9 @@ interface AppState {
   setTag: (t: string | null) => void;
   setTracker: (t: string | null) => void;
   setUpdate: (u: UpdateInfo | null) => void;
+  setUpdateStage: (stage: AppState["updateStage"]) => void;
+  setUpdateProgress: (p: AppState["updateProgress"]) => void;
+  setUpdatePopup: (p: AppState["updatePopup"]) => void;
   setSearch: (s: string) => void;
   setSort: (key: SortKey) => void;
   setView: (v: "transfers" | "search" | "rss" | "vpn") => void;
@@ -153,6 +161,9 @@ export const useApp = create<AppState>()((set, get) => ({
   tag: null,
   tracker: null,
   update: null,
+  updateStage: "available",
+  updateProgress: null,
+  updatePopup: null,
   search: "",
   sort: loadSort(),
   view: "transfers",
@@ -220,7 +231,11 @@ export const useApp = create<AppState>()((set, get) => ({
   setCategory: (category) => set({ category }),
   setTag: (tag) => set({ tag }),
   setTracker: (tracker) => set({ tracker }),
-  setUpdate: (update) => set({ update }),
+  setUpdate: (update) =>
+    set((s) => (s.update?.version === update?.version ? { update } : { update, updateStage: "available", updateProgress: null })),
+  setUpdateStage: (updateStage) => set({ updateStage }),
+  setUpdateProgress: (updateProgress) => set({ updateProgress }),
+  setUpdatePopup: (updatePopup) => set({ updatePopup }),
   setSearch: (search) => set({ search }),
   setSort: (key) =>
     set((s) => {

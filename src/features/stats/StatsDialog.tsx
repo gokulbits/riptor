@@ -106,6 +106,7 @@ export function StatsDialog({ onClose }: { onClose: () => void }) {
   return (
     <Dialog title="Statistics" onClose={onClose} width="max-w-5xl">
       <div className="space-y-3">
+        {s.history_reset && <p className="rounded-md border border-warn/40 bg-warn/10 p-3 text-xs text-fg">{s.history_reset}</p>}
         <div className="grid grid-cols-4 gap-3">
           <Hero label="All-time download" value={formatBytes(a.all_time_download)} sub={`${formatBytes(s.session_download)} this session`} tone="text-accent" />
           <Hero label="All-time upload" value={formatBytes(a.all_time_upload)} sub={`${formatBytes(s.session_upload)} this session`} tone="text-ok" />

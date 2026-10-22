@@ -126,6 +126,8 @@ pub struct Engine {
     /// Serialises session rebuilds and torrent removals.
     admin: tokio::sync::Mutex<()>,
     statistics: Mutex<Statistics>,
+    /// Why the transfer history started from zero this run, if it did.
+    history_note: Option<String>,
     session_tally: Mutex<SessionTally>,
     last_tick_data: Mutex<(Vec<TorrentSummary>, GlobalStats)>,
     web_seeds: Mutex<HashMap<Id20, webseed::Running>>,
@@ -205,12 +207,8 @@ impl Engine {
             settings = Settings::default();
         }
         let state: PersistedState = state_file::load(&data_dir.join("torrents.json"))?;
-        let mut statistics: Statistics = state_file::load(&data_dir.join("statistics.json"))
-            .unwrap_or_else(|e| {
-                warn!("statistics unreadable ({e:#}), starting fresh");
-                Statistics::default()
-            });
-        statistics.sanitize();
+        let (mut statistics, per_torrent, history_note) = load_history(&data_dir);
+        let migrating = per_torrent.is_none();
         statistics.sessions += 1;
         if statistics.first_started == 0 {
             statistics.first_started = unix_now();
@@ -233,6 +231,19 @@ impl Engine {
                     records.insert(h, r);
                 }
                 Err(e) => warn!("dropping corrupt torrent record: {e:#}"),
+            }
+        }
+        // The sealed numbers win over whatever torrents.json says.
+        if let Some(per_torrent) = &per_torrent {
+            for r in records.values_mut() {
+                let h = per_torrent
+                    .get(&r.info_hash.to_ascii_lowercase())
+                    .copied()
+                    .unwrap_or_default();
+                r.all_time_download = h.downloaded;
+                r.all_time_upload = h.uploaded;
+                r.active_time = h.active_time;
+                r.seeding_time = h.seeding_time;
             }
         }
 
@@ -279,6 +290,7 @@ impl Engine {
             saver: Default::default(),
             admin: tokio::sync::Mutex::new(()),
             statistics: Mutex::new(statistics),
+            history_note,
             session_tally: Mutex::new(SessionTally {
                 started: Some(Instant::now()),
                 ..Default::default()
@@ -305,6 +317,14 @@ impl Engine {
         });
         engine.apply_limits();
         engine.forget_orphans().await;
+        // First run with sealing: seal the old numbers now, then drop the plain file.
+        if migrating || engine.history_note.is_some() {
+            engine.persist().await?;
+            let legacy = engine.data_dir.join("statistics.json");
+            if migrating && engine.data_dir.join(crate::history::FILE).exists() {
+                let _ = std::fs::remove_file(legacy);
+            }
+        }
         spawn_ticker(Arc::downgrade(&engine));
         Ok(engine)
     }
@@ -1432,9 +1452,25 @@ impl Engine {
                 }
             }
         }
+        let d = dir.to_path_buf();
+        report.all_time =
+            tokio::task::spawn_blocking(move || crate::import::read_all_time(&d)).await?;
+        if let Some(t) = report.all_time {
+            self.statistics
+                .lock()
+                .set_imported(t.downloaded, t.uploaded);
+            self.persist().await?;
+        }
         info!(
-            "imported {} torrents ({} already here, {} skipped)",
-            report.added, report.already_present, report.skipped
+            "imported {} torrents ({} already here, {} skipped), all-time totals {}",
+            report.added,
+            report.already_present,
+            report.skipped,
+            if report.all_time.is_some() {
+                "included"
+            } else {
+                "not found"
+            }
         );
         Ok(report)
     }
@@ -1707,11 +1743,35 @@ impl Engine {
         }
     }
 
+    fn history_snapshot(&self) -> crate::history::History {
+        let torrents = self
+            .records
+            .read()
+            .values()
+            .map(|r| {
+                let h = crate::history::TorrentHistory {
+                    downloaded: r.all_time_download,
+                    uploaded: r.all_time_upload,
+                    active_time: r.active_time,
+                    seeding_time: r.seeding_time,
+                };
+                (r.info_hash.to_ascii_lowercase(), h)
+            })
+            .collect();
+        crate::history::History {
+            statistics: self.statistics.lock().clone(),
+            torrents,
+        }
+    }
+
     fn queue_state(&self) -> anyhow::Result<()> {
         self.dirty.store(false, Ordering::Relaxed);
-        let stats = state_file::to_bytes(&*self.statistics.lock())?;
-        self.saver
-            .queue(self.data_dir.join("statistics.json"), stats);
+        // Left alone while its key can't be read; the file on disk is still good.
+        if !crate::history::read_only() {
+            let sealed = crate::history::seal(&self.history_snapshot())?;
+            self.saver
+                .queue(self.data_dir.join(crate::history::FILE), sealed);
+        }
         let torrents = state_file::to_bytes(&self.snapshot_state())?;
         self.saver
             .queue(self.data_dir.join("torrents.json"), torrents);
@@ -2055,6 +2115,7 @@ impl Engine {
         let count = |f: &dyn Fn(&TorrentSummary) -> bool| torrents.iter().filter(|t| f(t)).count();
         let cfg = self.storage.config.lock().clone();
         StatsReport {
+            history_reset: self.history_note.clone(),
             all_time_ratio: stats::ratio(all_time.all_time_upload, all_time.all_time_download),
             session_upload: tally.uploaded,
             session_download: tally.downloaded,
@@ -2765,6 +2826,59 @@ fn normalize_queue(records: &mut HashMap<Id20, Record>) {
     for (i, (_, _, h)) in q.into_iter().enumerate() {
         if let Some(r) = records.get_mut(&h) {
             r.queue_pos = Some(i as u32);
+        }
+    }
+}
+
+const HISTORY_REJECTED: &str = "Riptor's statistics and transfer totals were changed outside Riptor, damaged, or came from another computer, so they were reset. Torrents are unaffected.";
+const HISTORY_UNAVAILABLE: &str = "Riptor couldn't reach the system credential store, so statistics and transfer totals can't be shown or saved this session. Restart Riptor to try again.";
+
+/// The sealed history; the old plain files only on an install's first run with sealing.
+/// Per-torrent `None` means the records' own numbers are kept (migration).
+fn load_history(
+    data_dir: &Path,
+) -> (
+    Statistics,
+    Option<BTreeMap<String, crate::history::TorrentHistory>>,
+    Option<String>,
+) {
+    use crate::history::{self, HistoryError};
+    let path = data_dir.join(history::FILE);
+    let legacy = data_dir.join("statistics.json");
+    let reset = |note: &str| {
+        (
+            Statistics::default(),
+            Some(BTreeMap::new()),
+            Some(note.to_string()),
+        )
+    };
+    let bytes = match std::fs::metadata(&path) {
+        Ok(m) if m.len() > history::MAX_FILE_BYTES => None,
+        Ok(_) => std::fs::read(&path).ok(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if legacy.exists() && history::install_has_sealed_history() {
+                // This install seals its history; a plain file now is someone else's.
+                warn!("ignoring statistics.json: this install keeps its history sealed");
+                let _ = std::fs::remove_file(&legacy);
+                return reset(HISTORY_REJECTED);
+            }
+            let mut s: Statistics = state_file::load(&legacy).unwrap_or_else(|e| {
+                warn!("statistics unreadable ({e:#}), starting fresh");
+                Statistics::default()
+            });
+            s.sanitize();
+            return (s, None, None);
+        }
+        Err(_) => None,
+    };
+    match bytes.map(|b| history::open(&b)) {
+        Some(Ok(h)) => (h.statistics, Some(h.torrents), None),
+        Some(Err(HistoryError::KeyUnavailable)) => reset(HISTORY_UNAVAILABLE),
+        _ => {
+            let aside = data_dir.join(format!("{}.rejected-{}", history::FILE, unix_now()));
+            warn!("transfer history rejected; set aside as {aside:?}");
+            let _ = std::fs::rename(&path, &aside);
+            reset(HISTORY_REJECTED)
         }
     }
 }

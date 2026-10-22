@@ -9,6 +9,7 @@ pub mod dedupe;
 pub mod dns;
 mod engine;
 pub mod geoip;
+pub mod history;
 pub mod import;
 pub mod input;
 pub mod model;

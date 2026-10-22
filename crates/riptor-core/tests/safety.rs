@@ -564,8 +564,18 @@ async fn imports_carry_labels_history_and_limits() {
     )
     .unwrap();
 
-    let from = tmp.path().join("other-client");
+    // A portable qBittorrent profile, with its all-time totals (1234567890123 down, 42 up).
+    let profile = tmp.path().join("portable").join("qBittorrent");
+    let from = profile.join("data").join("BT_backup");
     std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(profile.join("config")).unwrap();
+    std::fs::write(
+        profile.join("config").join("qBittorrent-data.ini"),
+        r"[Stats]
+AllStats=@Variant(\0\0\0\x1c\0\0\0\x2\0\0\0\x12\0\x41\0l\0l\0t\0i\0m\0\x65\0\x44\0L\0\0\0\x4\0\0\x1\x1fq\xfb\x4\xcb\0\0\0\x12\0\x41\0l\0l\0t\0i\0m\0\x65\0U\0L\0\0\0\x4\0\0\0\0\0\0\0*)
+",
+    )
+    .unwrap();
     std::fs::write(from.join("abc.torrent"), &torrent).unwrap();
     let s = |v: &str| format!("{}:{v}", v.len());
     let save = downloads.to_string_lossy().into_owned();
@@ -616,7 +626,91 @@ async fn imports_carry_labels_history_and_limits() {
     assert_eq!(Path::new(&t.save_path), content);
 
     // Importing again leaves what Riptor already has alone.
+    let all = engine.statistics().all_time;
+    assert_eq!(report.all_time.map(|t| t.uploaded), Some(42));
+    assert_eq!(
+        engine
+            .import_scan(Some(from.clone()))
+            .await
+            .unwrap()
+            .all_time,
+        report.all_time
+    );
+    assert!(all.all_time_download >= 1_234_567_890_123 && all.all_time_upload >= 42);
+
+    // Importing again leaves what Riptor already has alone, and doesn't count the totals twice.
     let again = engine.import_from(&from).await.unwrap();
     assert_eq!((again.added, again.already_present), (0, 1));
+    let after = engine.statistics().all_time;
+    assert!(
+        after.all_time_download < 2 * 1_234_567_890_123,
+        "counted twice"
+    );
+    assert_eq!(after.all_time_upload, all.all_time_upload);
     engine.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn transfer_history_is_sealed_and_edits_are_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let downloads = tmp.path().join("downloads");
+    let content = downloads.join("content");
+    std::fs::create_dir_all(&content).unwrap();
+    std::fs::write(content.join("a.bin"), vec![1u8; 50_000]).unwrap();
+
+    // An older install's plain statistics are sealed on first start.
+    let old = riptor_core::Statistics {
+        all_time_upload: 777,
+        all_time_download: 555,
+        ..Default::default()
+    };
+    riptor_core::state_file::save(&data.join("statistics.json"), &old).unwrap();
+    let e = engine(&data, quiet_settings(&downloads)).await;
+    assert_eq!(e.statistics().all_time.all_time_upload, 777);
+    assert!(e.statistics().history_reset.is_none());
+    assert!(data.join("history.dat").exists());
+    assert!(
+        !data.join("statistics.json").exists(),
+        "the plain file stays behind"
+    );
+    let id = seed_in_place(&e, &content, &tmp.path().join("c.torrent")).await;
+    e.shutdown().await.unwrap();
+    let sealed = std::fs::read(data.join("history.dat")).unwrap();
+    assert!(!String::from_utf8_lossy(&sealed).contains("777"));
+
+    // Editing torrents.json doesn't change a torrent's totals.
+    let path = data.join("torrents.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let forged = text.replace("\"all_time_upload\": 0", "\"all_time_upload\": 999999");
+    assert_ne!(forged, text);
+    std::fs::write(&path, forged).unwrap();
+    let e = engine(&data, quiet_settings(&downloads)).await;
+    let mut events = e.subscribe();
+    let t = wait_for(&mut events, &id, "the torrent", |_| true).await;
+    assert_eq!(t.uploaded, 0, "an edited total was trusted");
+    assert_eq!(e.statistics().all_time.all_time_upload, 777);
+    e.shutdown().await.unwrap();
+
+    // Any change to the sealed file resets the history, says so, and keeps the torrent.
+    let mut bytes = std::fs::read(data.join("history.dat")).unwrap();
+    let n = bytes.len();
+    bytes[n / 2] ^= 0x20;
+    std::fs::write(data.join("history.dat"), bytes).unwrap();
+    let e = engine(&data, quiet_settings(&downloads)).await;
+    let report = e.statistics();
+    assert_eq!(report.all_time.all_time_upload, 0);
+    assert!(report.history_reset.is_some());
+    assert!(std::fs::read_dir(&data).unwrap().flatten().any(|f| f
+        .file_name()
+        .to_string_lossy()
+        .starts_with("history.dat.rejected-")));
+    let mut events = e.subscribe();
+    wait_for(&mut events, &id, "the torrent after a reset", |_| true).await;
+    e.shutdown().await.unwrap();
+
+    // The fresh history is sealed and accepted next time.
+    let e = engine(&data, quiet_settings(&downloads)).await;
+    assert!(e.statistics().history_reset.is_none());
+    e.shutdown().await.unwrap();
 }

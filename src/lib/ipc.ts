@@ -70,6 +70,8 @@ export const api = {
   updateSupported: () => invoke<boolean>("update_supported"),
   updateCheck: () => invoke<UpdateInfo | null>("update_check"),
   updateInstall: () => invoke<void>("update_install"),
+  /** Resolves once the update is downloaded; `events.updateReady` fires too. */
+  updateDownload: () => invoke<void>("update_download"),
   autostartGet: () => invoke<boolean>("autostart_get"),
   autostartSet: (enabled: boolean) => invoke<void>("autostart_set", { enabled }),
   leakCheck: () => invoke<LeakCheck>("vpn_leak_check"),
@@ -184,6 +186,7 @@ export const events = {
   whenDone: (cb: (c: { action: WhenDone; seconds: number }) => void) =>
     listen<{ action: WhenDone; seconds: number }>("riptor://when-done", (e) => cb(e.payload)),
   updateAvailable: (cb: (u: UpdateInfo) => void) => listen<UpdateInfo>("riptor://update-available", (e) => cb(e.payload)),
+  updateReady: (cb: (u: UpdateInfo) => void) => listen<UpdateInfo>("riptor://update-ready", (e) => cb(e.payload)),
   updateProgress: (cb: (p: { done: number; total: number | null }) => void) =>
     listen<{ done: number; total: number | null }>("riptor://update-progress", (e) => cb(e.payload)),
 };

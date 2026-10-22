@@ -2,6 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, FolderOpen, Loader2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Dialog } from "../../components/ui";
+import { formatBytes } from "../../lib/format";
 import { api, errorText } from "../../lib/ipc";
 import type { ImportReport, ImportScan } from "../../lib/types";
 
@@ -34,7 +35,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
     setScan(null);
     api.importScan(path).then(setScan, (e) => {
       setError(errorText(e));
-      setScan({ dir: path, found: 0, skipped: 0 });
+      setScan({ dir: path, found: 0, skipped: 0, all_time: null });
     });
   };
   useEffect(() => look(null), []);
@@ -58,6 +59,8 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   };
 
   const found = scan?.found ?? 0;
+  const totals = scan?.all_time ?? null;
+  const ready = found > 0 || totals !== null;
   return (
     <Dialog
       title="Import from qBittorrent"
@@ -73,7 +76,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
             <button className="btn-ghost" onClick={onClose}>
               Cancel
             </button>
-            <button className="btn-primary" disabled={!found || busy} onClick={start}>
+            <button className="btn-primary" disabled={!ready || busy} onClick={start}>
               {busy && <Loader2 size={14} className="animate-spin" />}
               {found ? `Import ${plural(found, "torrent")}` : "Import"}
             </button>
@@ -89,6 +92,12 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
           <ul className="space-y-1 text-xs text-muted">
             {report.already_present > 0 && <li>{plural(report.already_present, "was", "were")} already in Riptor and left as they are.</li>}
             {report.skipped > 0 && <li>{plural(report.skipped, "entry", "entries")} had no usable torrent file or save folder.</li>}
+            {report.all_time && (
+              <li>
+                qBittorrent's all-time totals ({formatBytes(report.all_time.downloaded)} downloaded, {formatBytes(report.all_time.uploaded)} uploaded)
+                were added to Riptor's statistics.
+              </li>
+            )}
             {report.failed.map((f) => (
               <li key={f} className="text-danger">
                 {f}
@@ -113,10 +122,17 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
               <p className="flex items-center gap-2 text-xs text-muted">
                 <Loader2 size={13} className="animate-spin" /> Looking…
               </p>
-            ) : scan.dir && found > 0 ? (
+            ) : scan.dir && ready ? (
               <div className="space-y-1">
                 <p className="text-xs">
-                  Found <strong>{plural(found, "torrent")}</strong> to import.
+                  Found <strong>{plural(found, "torrent")}</strong> to import
+                  {totals && (
+                    <>
+                      , and qBittorrent's all-time totals: <strong>{formatBytes(totals.downloaded)}</strong> downloaded,{" "}
+                      <strong>{formatBytes(totals.uploaded)}</strong> uploaded
+                    </>
+                  )}
+                  .
                 </p>
                 <p className="truncate font-mono text-xxs text-muted" title={scan.dir}>
                   {scan.dir}
@@ -136,7 +152,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
           <Step n={3} title="Import">
             <p className="text-xs text-muted">
               Each torrent keeps its save folder, category, tags, downloaded and uploaded totals, seeding time and share limits. Files are
-              checked where they are, not downloaded again. qBittorrent itself isn't changed, and its overall statistics aren't copied.
+              checked where they are, not downloaded again. qBittorrent's all-time totals are added to Riptor's statistics once; importing again won't count them twice. qBittorrent itself isn't changed.
             </p>
           </Step>
         </ol>

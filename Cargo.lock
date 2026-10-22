@@ -5020,6 +5020,7 @@ dependencies = [
  "flate2",
  "futures",
  "hickory-resolver",
+ "keyring",
  "librqbit",
  "librqbit-bencode",
  "librqbit-core",

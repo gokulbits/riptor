@@ -30,9 +30,26 @@ pub struct Statistics {
     pub peak_upload_rate: u64,
     /// Keyed by UTC "YYYY-MM-DD".
     pub daily: BTreeMap<String, DayTotals>,
+    /// qBittorrent's all-time totals already added in, so importing again replaces them.
+    pub imported_download: u64,
+    pub imported_upload: u64,
 }
 
 impl Statistics {
+    /// Adds another client's all-time totals once; a second import replaces the first.
+    pub fn set_imported(&mut self, downloaded: u64, uploaded: u64) {
+        self.all_time_download = self
+            .all_time_download
+            .saturating_sub(self.imported_download)
+            .saturating_add(downloaded);
+        self.all_time_upload = self
+            .all_time_upload
+            .saturating_sub(self.imported_upload)
+            .saturating_add(uploaded);
+        self.imported_download = downloaded;
+        self.imported_upload = uploaded;
+    }
+
     pub fn record_transfer(&mut self, downloaded: u64, uploaded: u64, now_unix: u64) {
         if downloaded == 0 && uploaded == 0 {
             return;
@@ -169,6 +186,8 @@ pub struct StatsReport {
     pub write_buffer_used: usize,
     pub write_buffer_capacity: usize,
     pub disk: riptor_storage::store::MetricsSnapshot,
+    /// Why the history started from zero this run (edited, damaged or unreadable), if it did.
+    pub history_reset: Option<String>,
 }
 
 pub fn ratio(up: u64, down: u64) -> f64 {

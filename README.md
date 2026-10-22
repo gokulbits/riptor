@@ -60,7 +60,7 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - A piece map showing which parts are downloaded.
 - Downloads pause by themselves when their drive runs low on space (1 GiB by default) and resume when there's room.
 - When downloads finish, Riptor can put the computer to sleep or shut it down (with a minute to cancel).
-- Import torrents from qBittorrent (see [Moving from qBittorrent](#moving-from-qbittorrent)), with their category, tags, downloaded and uploaded totals, seeding time and share limits; existing data is checked, not downloaded again. qBittorrent's overall statistics aren't imported.
+- Import torrents from qBittorrent (see [Moving from qBittorrent](#moving-from-qbittorrent)), with their category, tags, downloaded and uploaded totals, seeding time and share limits; existing data is checked, not downloaded again. qBittorrent's all-time totals are added to Riptor's statistics.
 - A folder for incomplete downloads: torrents download there and move to their save folder when complete.
 - Trackers that are added to every new public torrent, and an option to add new torrents stopped.
 - RSS and Atom feeds, with download rules (words or regular expressions, per feed, with a category and folder) that add matching torrents automatically. Feeds are fetched through the VPN when it's on, and torrents with programs are always added stopped.
@@ -111,7 +111,7 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - Window size and position, sort order and panel layout are remembered.
 - 9 themes, "follow system", and custom accent colours.
 - An About section in Settings (version, authors, thanks, licenses and the versions of the software Riptor uses, ready to paste into a bug report) and a log viewer. Logs stay in memory, with tracker passkeys and URL parameters masked.
-- In-app updates on Windows: Riptor checks GitHub for a new version and installs it after verifying its signature. On Linux, updates come from your package manager.
+- In-app updates on Windows: when a new version is out, Riptor shows a popup with its notes and can download it in the background while you keep working; once it is downloaded and its signature checked, Riptor asks before restarting to install it. On Linux, updates come from your package manager.
 - Headless mode on Linux: `riptord` runs Riptor without a window and `riptor-cli` controls it over a private local socket (no network port).
 - "Open with" and default-app registration for `.torrent` files and `magnet:` links.
 
@@ -152,7 +152,7 @@ Riptor can take over your torrents from qBittorrent without downloading anything
 
 1. **In qBittorrent, pause the torrents that are still downloading** (or close qBittorrent). Torrents that are only seeding can keep going.
 2. **In Riptor, open the ⋯ menu and choose Import from qBittorrent.** Riptor finds qBittorrent's torrents by itself and shows how many it found.
-3. **Click Import.** Each torrent keeps its save folder, category, tags, downloaded and uploaded totals, seeding time and share limits. Riptor checks the files where they are.
+3. **Click Import.** Each torrent keeps its save folder, category, tags, downloaded and uploaded totals, seeding time and share limits, and qBittorrent's all-time totals are added to Riptor's statistics. Riptor checks the files where they are.
 4. **When you're happy, remove the torrents in qBittorrent and choose to keep the files.** Don't let both apps download the same torrent at once.
 
 If Riptor can't find them (for example with a portable qBittorrent), click **Choose folder** and pick qBittorrent's `BT_backup` folder:
@@ -160,7 +160,7 @@ If Riptor can't find them (for example with a portable qBittorrent), click **Cho
 - Windows: `%LOCALAPPDATA%qBittorrentBT_backup`
 - Linux: `~/.local/share/qBittorrent/BT_backup`, or `~/.var/app/org.qbittorrent.qBittorrent/data/qBittorrent/BT_backup` for the Flatpak
 
-qBittorrent's overall statistics (its all-time totals) aren't copied.
+Importing again is safe: torrents already in Riptor are left alone and the all-time totals aren't counted twice.
 
 ### Keyboard shortcuts
 
@@ -228,6 +228,7 @@ Security is a core design requirement. In short:
 - **Public IP check:** looked up from `api.ipify.org` (falling back to `ipv4.icanhazip.com`), through the tunnel when the VPN is on. Nothing is sent while the kill switch holds traffic.
 - **Secrets:** API keys and VPN credentials live in the OS credential store, never in files or backups.
 - **Backups:** XChaCha20-Poly1305 authenticated encryption with an optional Argon2id password. Restores re-validate everything.
+- **Statistics:** the all-time statistics and each torrent's transfer totals are sealed with a key kept in your system's credential store, so they can't be edited by hand; a changed or damaged file is set aside and the history starts again from zero (torrents are unaffected). This is tamper-evident, not tamper-proof: someone who extracts the key from their own credential store could still forge it.
 - **App hardening:** no web UI or HTTP API server, a strict content security policy, Tauri's isolation pattern with an IPC allowlist, and least-privilege permissions.
 
 **Known limitations:**

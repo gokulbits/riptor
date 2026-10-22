@@ -171,6 +171,9 @@ pub fn run() {
             let data_dir_vpn = data_dir.clone();
             let data_dir_rss = data_dir.clone();
             tauri::async_runtime::spawn(async move {
+                // The OS credential store can be slow; keep it off the UI thread.
+                let _ =
+                    tauri::async_runtime::spawn_blocking(riptor_core::history::use_os_key).await;
                 match Engine::start(EngineConfig { data_dir }).await {
                     Ok(engine) => {
                         info!("engine started");
@@ -250,6 +253,7 @@ pub fn run() {
             commands::update_supported,
             commands::update_check,
             commands::update_install,
+            commands::update_download,
             commands::autostart_set,
             commands::reveal_torrent_file,
             commands::torrent_pieces,

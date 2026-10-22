@@ -278,3 +278,19 @@ fn mutated_resume_files_never_panic_or_leak_bad_values() {
         }
     }
 }
+
+#[test]
+fn mutated_statistics_files_never_panic() {
+    use riptor_core::import::parse_all_time;
+    let base = br"[Stats]
+AllStats=@Variant(\0\0\0\x1c\0\0\0\x2\0\0\0\x12\0\x41\0l\0l\0t\0i\0m\0\x65\0\x44\0L\0\0\0\x4\0\0\x1\x1fq\xfb\x4\xcb\0\0\0\x12\0\x41\0l\0l\0t\0i\0m\0\x65\0U\0L\0\0\0\x4\0\0\0\0\0\0\0*)
+"
+    .to_vec();
+    assert!(parse_all_time(&base).is_some());
+    let mut rng = rand::rngs::StdRng::seed_from_u64(41);
+    for _ in 0..20_000 {
+        if let Some(t) = parse_all_time(&mutate(&mut rng, &base)) {
+            assert!(t.downloaded <= 1 << 60 && t.uploaded <= 1 << 60);
+        }
+    }
+}

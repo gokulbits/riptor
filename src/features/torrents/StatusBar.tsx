@@ -120,6 +120,8 @@ function VpnIndicator() {
 export function StatusBar({ onToggleAlt, onUpdate }: { onToggleAlt: () => void; onUpdate: () => void }) {
   const g = useApp((s) => s.global);
   const update = useApp((s) => s.update);
+  const stage = useApp((s) => s.updateStage);
+  const progress = useApp((s) => s.updateProgress);
   const count = useApp((s) => s.torrents.size);
   const hitRate =
     g && g.read_cache.hits + g.read_cache.misses > 0
@@ -141,9 +143,15 @@ export function StatusBar({ onToggleAlt, onUpdate }: { onToggleAlt: () => void; 
       )}
       <VpnIndicator />
       <span className="flex-1" />
-      {update && (
-        <button className="flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-accent hover:bg-raised" onClick={onUpdate} title="Install the new version">
-          <Download size={12} /> Update to {update.version}
+      {update && stage === "downloading" && (
+        <span className="flex items-center gap-1" title={`Downloading Riptor ${update.version} in the background`}>
+          <Download size={12} className="animate-pulse" /> Downloading update
+          {progress?.total ? ` ${Math.min(100, Math.floor((100 * progress.done) / progress.total))}%` : "…"}
+        </span>
+      )}
+      {update && stage !== "downloading" && (
+        <button className="flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-accent hover:bg-raised" onClick={onUpdate} title={stage === "ready" ? "Restart Riptor to install the update" : "Download the new version"}>
+          <Download size={12} /> {stage === "ready" ? `Restart to update to ${update.version}` : `Update to ${update.version}`}
         </button>
       )}
       {g?.hold && (

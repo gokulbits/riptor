@@ -889,6 +889,12 @@ pub async fn update_install(app: AppHandle) -> Res<()> {
     crate::updater::install(&app).await.map_err(err)
 }
 
+/// Downloads the update found by the last check; `riptor://update-ready` follows.
+#[tauri::command]
+pub async fn update_download(app: AppHandle) -> Res<()> {
+    crate::updater::download(&app).await.map_err(err)
+}
+
 #[tauri::command]
 pub fn when_done_get(state: State<'_, crate::when_done::WhenDone>) -> crate::when_done::Action {
     state.get()

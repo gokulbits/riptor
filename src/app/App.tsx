@@ -46,6 +46,7 @@ import { StatsDialog } from "../features/stats/StatsDialog";
 import { LogsDialog } from "../features/about/LogsDialog";
 import { ConnectionsDialog } from "../features/about/ConnectionsDialog";
 import { ImportDialog } from "../features/torrents/ImportDialog";
+import { UpdatePopup } from "../features/about/UpdatePopup";
 import { CreateTorrentDialog } from "../features/create/CreateTorrentDialog";
 import { SearchView, useSearchEvents } from "../features/search/SearchView";
 import { VpnView } from "../features/vpn/VpnView";
@@ -178,8 +179,16 @@ export default function App() {
       events.externalAdd((items) => queueAdds(items)),
       events.vpn((v) => useApp.getState().setVpn(v)),
       events.updateAvailable((u) => {
-        useApp.getState().setUpdate(u);
-        toast("info", `Riptor ${u.version} is available. Open About to install it.`);
+        const st = useApp.getState();
+        st.setUpdate(u);
+        if (st.updateStage === "available") st.setUpdatePopup("available");
+      }),
+      events.updateProgress((p) => useApp.getState().setUpdateProgress(p)),
+      events.updateReady((u) => {
+        const st = useApp.getState();
+        st.setUpdate(u);
+        st.setUpdateStage("ready");
+        st.setUpdatePopup("ready");
       }),
       getCurrentWebview().onDragDropEvent((ev) => {
         if (ev.payload.type !== "drop") return;
@@ -200,6 +209,7 @@ export default function App() {
           refreshCategories();
           const startup = await api.takeStartupItems();
           if (startup.length) queueAdds(startup);
+          api.statistics().then((r) => r.history_reset && useApp.getState().toast("warning", r.history_reset), () => {});
           return;
         } catch (e) {
           const msg = errorText(e);
@@ -553,7 +563,10 @@ export default function App() {
       )}
       <StatusBar
         onToggleAlt={() => run(api.setAltSpeed(!useApp.getState().global?.alt_speed))}
-        onUpdate={() => setModal({ kind: "settings", section: "about" })}
+        onUpdate={() => {
+          const st = useApp.getState();
+          if (st.updateStage !== "downloading") st.setUpdatePopup(st.updateStage);
+        }}
       />
 
       {menu && selected.length > 0 && <ContextMenu x={menu.x} y={menu.y} items={menuItems()} onClose={() => setMenu(null)} />}
@@ -580,6 +593,7 @@ export default function App() {
       {modal?.kind === "category" && <CategoryDialog onClose={() => setModal(null)} onSaved={refreshCategories} />}
       {modal?.kind === "limits" && limitTargets.length > 0 && <ShareLimitsDialog torrents={limitTargets} onClose={() => setModal(null)} />}
       {modal?.kind === "tags" && tagTargets.length > 0 && <TagsDialog torrents={tagTargets} onClose={() => setModal(null)} />}
+      <UpdatePopup />
       <WhenDoneCountdown />
       <Toasts />
     </div>

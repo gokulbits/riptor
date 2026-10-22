@@ -1,25 +1,23 @@
-import { Download, Loader2, RefreshCw } from "lucide-react";
+import { Download, Loader2, RefreshCw, RotateCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Toggle } from "../../components/ui";
-import { api, errorText, events } from "../../lib/ipc";
+import { api, errorText } from "../../lib/ipc";
 import { formatBytes } from "../../lib/format";
 import { useApp } from "../../stores/app";
+import { downloadUpdate, installUpdate } from "./UpdatePopup";
 
 /** Auto-check is part of the Settings form, so it saves with the rest. */
 export function Updates({ auto, onAuto }: { auto: boolean; onAuto: (v: boolean) => void }) {
   const toast = useApp((s) => s.toast);
   const update = useApp((s) => s.update);
+  const stage = useApp((s) => s.updateStage);
+  const progress = useApp((s) => s.updateProgress);
   const setUpdate = useApp((s) => s.setUpdate);
   const [supported, setSupported] = useState<boolean | null>(null);
-  const [state, setState] = useState<"idle" | "checking" | "current" | "installing">("idle");
-  const [progress, setProgress] = useState<{ done: number; total: number | null } | null>(null);
+  const [state, setState] = useState<"idle" | "checking" | "current">("idle");
 
   useEffect(() => {
     api.updateSupported().then(setSupported, () => setSupported(false));
-    const un = events.updateProgress(setProgress);
-    return () => {
-      un.then((f) => f());
-    };
   }, []);
 
   if (supported === false) {
@@ -37,34 +35,32 @@ export function Updates({ auto, onAuto }: { auto: boolean; onAuto: (v: boolean) 
       toast("error", errorText(e));
     }
   };
-  const install = async () => {
-    setState("installing");
-    try {
-      // Riptor closes once the installer starts.
-      await api.updateInstall();
-    } catch (e) {
-      setState("idle");
-      setProgress(null);
-      toast("error", errorText(e));
-    }
-  };
+
   return (
     <div className="w-full space-y-2 rounded-md bg-raised p-3 text-left">
       {update ? (
         <>
-          <p className="text-sm font-medium">Riptor {update.version} is available</p>
+          <p className="text-sm font-medium">
+            Riptor {update.version} {stage === "ready" ? "is ready to install" : "is available"}
+          </p>
           {update.notes && <p className="max-h-32 overflow-auto whitespace-pre-wrap text-xs text-muted">{update.notes}</p>}
-          {state === "installing" ? (
+          {stage === "downloading" ? (
             <p className="flex items-center gap-2 text-xs text-muted">
               <Loader2 size={13} className="animate-spin" />
-              {progress ? `Downloading ${formatBytes(progress.done)}${progress.total ? ` of ${formatBytes(progress.total)}` : ""}…` : "Starting…"}
+              {progress
+                ? `Downloading in the background: ${formatBytes(progress.done)}${progress.total ? ` of ${formatBytes(progress.total)}` : ""}`
+                : "Starting the download…"}
             </p>
+          ) : stage === "ready" ? (
+            <button className="btn-primary text-xs" onClick={installUpdate}>
+              <RotateCw size={13} /> Restart and install
+            </button>
           ) : (
-            <button className="btn-primary text-xs" onClick={install}>
-              <Download size={13} /> Install and restart
+            <button className="btn-primary text-xs" onClick={downloadUpdate}>
+              <Download size={13} /> Download in the background
             </button>
           )}
-          <p className="text-xs text-muted">Riptor closes, the installer asks for administrator rights, then Riptor starts again.</p>
+          <p className="text-xs text-muted">Installing closes Riptor, asks for administrator rights, then starts Riptor again.</p>
         </>
       ) : (
         <div className="flex items-center gap-2">

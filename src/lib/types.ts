@@ -166,11 +166,18 @@ export interface LeakCheck {
   notes: string[];
 }
 
+export interface AllTimeTotals {
+  downloaded: number;
+  uploaded: number;
+}
+
 export interface ImportScan {
   /** null when no folder was given and none was found. */
   dir: string | null;
   found: number;
   skipped: number;
+  /** qBittorrent's all-time totals, when its statistics file was found. */
+  all_time: AllTimeTotals | null;
 }
 
 export interface ImportReport {
@@ -178,6 +185,7 @@ export interface ImportReport {
   already_present: number;
   skipped: number;
   failed: string[];
+  all_time: AllTimeTotals | null;
 }
 
 export interface PieceMap {
@@ -353,6 +361,8 @@ export interface Statistics {
   total_uptime_secs: number;
   sessions: number;
   first_started: number;
+  imported_download: number;
+  imported_upload: number;
   peak_download_rate: number;
   peak_upload_rate: number;
   daily: Record<string, DayTotals>;
@@ -370,6 +380,8 @@ export interface DiskMetrics {
 
 export interface StatsReport {
   all_time: Statistics;
+  /** Why the transfer history started from zero this run, if it did. */
+  history_reset: string | null;
   all_time_ratio: number;
   session_upload: number;
   session_download: number;
