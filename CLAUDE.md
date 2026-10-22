@@ -113,7 +113,7 @@ cargo bench -p riptor-storage
    - Optional signing (the user chose not to Authenticode-sign).
    - The `TAURI_SIGNING_PRIVATE_KEY` repository secret is set (from `~/.tauri/riptor-updater.key`) and a manual run's `.exe.sig` verified against the bundled public key (2026-10-21). Still to test: an update between two releases.
    - Try headless mode on real Linux (only built in CI).
-   - Keep the setup under 20 MB (19.3 MB for 0.1.2).
+   - Keep the setup under 20 MiB (20,971,520 bytes): 0.1.5 is 19.79 MiB. Only `riptor.exe` grows (OpenVPN and Python are pinned); the installer stores about 0.29 bytes per byte of it. If the budget runs out, the levers are size-optimizing non-engine dependencies or dropping unused embedded Python modules (sqlite3 alone is about 1.7 MB uncompressed); measure first.
 4. **Engine:** web seeds, runtime per-torrent limits, force recheck, moving files, orphan cleanup, RSS with rules, the incomplete folder, file priorities, extra trackers and `.torrent` export are done.
    - Try RSS against real feeds.
    - Renames, trackers editing, peer bans, the free-space guard, play-while-downloading, the piece map and import are done; try import with a real client's resume folder.
