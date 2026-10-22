@@ -30,6 +30,8 @@ pub struct AppState {
     pub search: OnceCell<Arc<riptor_search::SearchManager>>,
     pub vpn: OnceCell<Arc<vpn::VpnManager>>,
     pub rss: OnceCell<Arc<riptor_rss::Rss>>,
+    /// The remote control server (qBittorrent Web API), when on.
+    pub webui: Arc<parking_lot::Mutex<riptor_webapi::Status>>,
 }
 
 /// Magnet links and existing .torrent files only.
@@ -170,6 +172,7 @@ pub fn run() {
             let data_dir_search = data_dir.clone();
             let data_dir_vpn = data_dir.clone();
             let data_dir_rss = data_dir.clone();
+            let data_dir_webui = data_dir.clone();
             tauri::async_runtime::spawn(async move {
                 // The OS credential store can be slow; keep it off the UI thread.
                 let _ =
@@ -201,6 +204,11 @@ pub fn run() {
                         let feeds = Arc::new(riptor_rss::Rss::open(&data_dir_rss));
                         let _ = handle.state::<AppState>().rss.set(feeds.clone());
                         rss::spawn(handle.clone(), engine.clone(), feeds);
+                        tauri::async_runtime::spawn(riptor_webapi::supervise(
+                            engine.clone(),
+                            data_dir_webui,
+                            handle.state::<AppState>().webui.clone(),
+                        ));
                         if updater::SUPPORTED && engine.settings().check_updates {
                             let h = handle.clone();
                             tauri::async_runtime::spawn(async move {
@@ -254,6 +262,11 @@ pub fn run() {
             commands::update_check,
             commands::update_install,
             commands::update_download,
+            commands::webui_state,
+            commands::webui_set_password,
+            commands::webui_new_api_key,
+            commands::webui_remove_api_key,
+            commands::webui_set_ddns_password,
             commands::autostart_set,
             commands::reveal_torrent_file,
             commands::torrent_pieces,

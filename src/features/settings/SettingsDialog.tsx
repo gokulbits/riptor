@@ -9,8 +9,9 @@ import { useApp } from "../../stores/app";
 import { AboutSection } from "./AboutSection";
 import { AssociationSection } from "./AssociationSection";
 import { BackupSection } from "./BackupSection";
+import { RemoteControlSection } from "./RemoteControlSection";
 
-export type Section = "downloads" | "connection" | "speed" | "bittorrent" | "storage" | "privacy" | "apps" | "backup" | "about";
+export type Section = "downloads" | "connection" | "speed" | "bittorrent" | "storage" | "privacy" | "apps" | "backup" | "remote" | "about";
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "downloads", label: "Downloads" },
@@ -21,6 +22,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "privacy", label: "Privacy & Security" },
   { id: "apps", label: "Default App" },
   { id: "backup", label: "Backup & Restore" },
+  { id: "remote", label: "Remote Control" },
   { id: "about", label: "About" },
 ];
 
@@ -731,6 +733,7 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
           )}
 
           {section === "about" && <AboutSection checkUpdates={s.check_updates} onCheckUpdates={(v) => set({ check_updates: v })} />}
+          {section === "remote" && <RemoteControlSection s={s} set={set} />}
           {section === "apps" && <AssociationSection />}
           {section === "backup" && <BackupSection onSettingsRestored={() => api.settings().then(setS)} />}
 

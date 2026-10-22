@@ -32,7 +32,14 @@ Please do **not** open a public issue. Use GitHub's private vulnerability report
 
 ## Hardening
 
-* No Web UI or HTTP API server, so nothing listens except the BitTorrent ports.
+* Nothing listens except the BitTorrent ports unless remote control is turned on (off by default). Remote control speaks qBittorrent's Web API (`crates/riptor-webapi`):
+  * A password is required to start it (Argon2id hash in its own owner-only file, never in settings or backups); an optional API key is stored only as a SHA-256 hash and shown once.
+  * HTTPS by default with a self-signed certificate Riptor makes (or your own PEM files). Apps set to trust any self-signed certificate are protected from eavesdropping, not from an active man in the middle.
+  * Local-network clients only by default; connections arriving on the VPN tunnel's address are always refused. Banned after 5 failed logins for an hour (configurable), sessions expire after an hour idle, only two password checks run at once.
+  * Every call except login needs a session or the API key; changes must be POSTs; CSRF (Origin/Referer), Host header validation, clickjacking headers and the Secure cookie flag are on by default. X-Forwarded-For is believed only from configured trusted proxies.
+  * Remote shutdown, remote folder browsing and changing preferences are refused. Uploads are capped (64 MiB per request, 50 items, 16 MiB per .torrent) and go through the same parser and save-folder checks as local adds.
+  * Options that weaken this (bypassing authentication for localhost or whitelisted subnets, accepting public clients, UPnP forwarding, plain HTTP) are off by default and warned about in Settings. The UPnP option forwards the port through UPnP only (no NAT-PMP to the router).
+  * Dynamic DNS updates (dyndns2 protocol, https only, no redirects) publish this computer's real public address; its password lives in the same owner-only file.
 * Tauri: strict CSP, minimal capabilities, no shell plugin, and validated command inputs.
 * Secrets (OpenVPN credentials, Torznab API keys) are stored in the OS keyring and redacted from logs.
 * Transfer history (all-time statistics and per-torrent totals) is sealed in `history.dat` with XChaCha20-Poly1305 under a random key in the OS credential store, so hand edits are detected and rejected (the file is set aside, history restarts at zero, and the user is told). It's tamper-evident only: the owner of the machine can read their own credential store, and without one (some Linux servers) Riptor uses a key built into the app. A credential-store failure makes history read-only for the session instead of wiping it. Backups made without a password use a built-in key, so their statistics can be forged too.

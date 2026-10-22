@@ -1,0 +1,33 @@
+[package]
+name = "riptor-webapi"
+description = "qBittorrent-compatible Web API so remote apps can control Riptor (off by default)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+riptor-core = { path = "../riptor-core" }
+anyhow.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+url.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "form", "multipart"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+reqwest.workspace = true
+riptor-net = { path = "../riptor-net" }
+librqbit-upnp = "9.0.1"
+rcgen = "0.14"
+argon2 = "0.6"
+base64 = "0.23"
+sha2 = "0.11"
+rand = "0.10"
+
+[dev-dependencies]
+tempfile.workspace = true
+reqwest = { workspace = true, features = ["multipart"] }

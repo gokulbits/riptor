@@ -7,6 +7,7 @@ import type {
   BackupSummary,
   Connection,
   CountryStatus,
+  WebUiState,
   CreateOptions,
   LogLine,
   RestoreOptions,
@@ -173,6 +174,12 @@ export const api = {
   previewFile: (id: string, index: number) => invoke<FilePreview>("preview_file", { id, index }),
   aboutInfo: () => invoke<AboutInfo>("about_info"),
   countryStatus: () => invoke<CountryStatus>("country_status"),
+  webuiState: () => invoke<WebUiState>("webui_state"),
+  webuiSetPassword: (password: string) => invoke<void>("webui_set_password", { password }),
+  /** Shown once; only its hash is kept. */
+  webuiNewApiKey: () => invoke<string>("webui_new_api_key"),
+  webuiRemoveApiKey: () => invoke<void>("webui_remove_api_key"),
+  webuiSetDdnsPassword: (password: string) => invoke<void>("webui_set_ddns_password", { password }),
 };
 
 export const events = {

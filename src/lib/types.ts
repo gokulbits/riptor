@@ -338,6 +338,7 @@ export interface Settings {
   scrub_days: number | null;
   scrub_mib_per_sec: number;
   peer_countries: boolean;
+  web_ui: WebUiSettings;
   close_to_tray: boolean;
   columns: ColumnPref[];
   storage: StorageConfig;
@@ -649,6 +650,42 @@ export interface PeerInfo {
   uploaded: number;
   /** ISO 3166 code, when peer countries are on. */
   country: string | null;
+}
+
+export interface WebUiSettings {
+  enabled: boolean;
+  /** "*" or one IP address. */
+  address: string;
+  port: number;
+  upnp: boolean;
+  https: boolean;
+  cert_file: string | null;
+  key_file: string | null;
+  username: string;
+  bypass_localhost: boolean;
+  bypass_subnets: boolean;
+  subnet_whitelist: string[];
+  max_failures: number;
+  ban_secs: number;
+  session_timeout_secs: number;
+  clickjacking_protection: boolean;
+  csrf_protection: boolean;
+  secure_cookie: boolean;
+  host_validation: boolean;
+  server_domains: string;
+  custom_headers_enabled: boolean;
+  custom_headers: string;
+  reverse_proxy: boolean;
+  trusted_proxies: string;
+  allow_public: boolean;
+  ddns: { enabled: boolean; update_url: string; domain: string; username: string };
+}
+
+export interface WebUiState {
+  status: { running: boolean; port: number | null; https: boolean; fingerprint: string | null; error: string | null; ddns: string | null };
+  has_password: boolean;
+  has_api_key: boolean;
+  has_ddns_password: boolean;
 }
 
 export interface CountryStatus {

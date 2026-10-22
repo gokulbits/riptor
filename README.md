@@ -113,6 +113,7 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - An About section in Settings (version, authors, thanks, licenses and the versions of the software Riptor uses, ready to paste into a bug report) and a log viewer. Logs stay in memory, with tracker passkeys and URL parameters masked.
 - In-app updates on Windows: when a new version is out, Riptor shows a popup with its notes and can download it in the background while you keep working; once it is downloaded and its signature checked, Riptor asks before restarting to install it. On Linux, updates come from your package manager.
 - Headless mode on Linux: `riptord` runs Riptor without a window and `riptor-cli` controls it over a private local socket (no network port).
+- Remote control from your phone: Riptor can speak qBittorrent's Web API, so apps like qBitController manage it over your network (off by default; see [Remote control](#remote-control)).
 - "Open with" and default-app registration for `.torrent` files and `magnet:` links.
 
 ## Installation
@@ -161,6 +162,16 @@ If Riptor can't find them (for example with a portable qBittorrent), click **Cho
 - Linux: `~/.local/share/qBittorrent/BT_backup`, or `~/.var/app/org.qbittorrent.qBittorrent/data/qBittorrent/BT_backup` for the Flatpak
 
 Importing again is safe: torrents already in Riptor are left alone and the all-time totals aren't counted twice.
+
+### Remote control
+
+Riptor can be controlled from apps built for qBittorrent's Web UI, such as qBitController on Android.
+
+1. **In Riptor, open Settings › Remote Control**, turn on **Allow remote control**, set a **password** and save.
+2. **In qBitController, add a server** with the address `https://<this computer's IP>:8080`, your username (`admin` unless you changed it) and the password.
+3. **In the server's advanced settings, turn on "Trust self-signed certificates"** (Riptor makes its own certificate unless you give it one).
+
+It only accepts devices on your local network unless you allow more, and never anything arriving through the VPN tunnel. Search and RSS aren't available remotely, and a few qBittorrent-only switches (sequential download, super seeding, automatic torrent management) answer "not supported".
 
 ### Keyboard shortcuts
 
@@ -229,7 +240,7 @@ Security is a core design requirement. In short:
 - **Secrets:** API keys and VPN credentials live in the OS credential store, never in files or backups.
 - **Backups:** XChaCha20-Poly1305 authenticated encryption with an optional Argon2id password. Restores re-validate everything.
 - **Statistics:** the all-time statistics and each torrent's transfer totals are sealed with a key kept in your system's credential store, so they can't be edited by hand; a changed or damaged file is set aside and the history starts again from zero (torrents are unaffected). This is tamper-evident, not tamper-proof: someone who extracts the key from their own credential store could still forge it.
-- **App hardening:** no web UI or HTTP API server, a strict content security policy, Tauri's isolation pattern with an IPC allowlist, and least-privilege permissions.
+- **App hardening:** no server listens unless you turn on remote control (off by default), a strict content security policy, Tauri's isolation pattern with an IPC allowlist, and least-privilege permissions.
 
 **Known limitations:**
 - Peer encryption (MSE/PE) is obfuscation, not privacy: the protocol uses RC4 and an unauthenticated key exchange, so anyone in the middle can still read the traffic. It has been tested between Riptor sessions, not yet against other clients on a real network.

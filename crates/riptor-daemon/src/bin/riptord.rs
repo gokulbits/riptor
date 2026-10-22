@@ -110,6 +110,12 @@ mod unix {
             sock.display()
         );
 
+        // Remote control (qBittorrent Web API), when turned on in the settings.
+        tokio::spawn(riptor_webapi::supervise(
+            engine.clone(),
+            data_dir.clone(),
+            Default::default(),
+        ));
         let (stop_tx, mut stop_rx) = tokio::sync::mpsc::channel::<()>(1);
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         loop {

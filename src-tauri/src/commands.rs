@@ -1071,3 +1071,54 @@ pub async fn torrent_safety(state: State<'_, AppState>, id: String) -> Res<ripto
 pub async fn vpn_leak_check(state: State<'_, AppState>) -> Res<riptor_core::LeakCheck> {
     engine(&state).await?.leak_check().await.map_err(err)
 }
+
+fn webui_dir(app: &AppHandle) -> Res<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path().app_data_dir().map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+pub struct WebUiState {
+    status: riptor_webapi::Status,
+    has_password: bool,
+    has_api_key: bool,
+    has_ddns_password: bool,
+}
+
+/// Remote control: whether it runs, and which secrets are set (never the secrets themselves).
+#[tauri::command]
+pub fn webui_state(app: AppHandle, state: State<'_, AppState>) -> Res<WebUiState> {
+    let dir = webui_dir(&app)?;
+    Ok(WebUiState {
+        status: state.webui.lock().clone(),
+        has_password: riptor_webapi::has_password(&dir),
+        has_api_key: riptor_webapi::has_api_key(&dir),
+        has_ddns_password: riptor_webapi::ddns_password(&dir).is_some(),
+    })
+}
+
+#[tauri::command]
+pub async fn webui_set_password(app: AppHandle, password: String) -> Res<()> {
+    let dir = webui_dir(&app)?;
+    // Argon2 takes a moment; keep it off the async runtime.
+    tauri::async_runtime::spawn_blocking(move || riptor_webapi::set_password(&dir, &password))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(err)
+}
+
+/// The new key, shown once; only its hash is kept.
+#[tauri::command]
+pub fn webui_new_api_key(app: AppHandle) -> Res<String> {
+    riptor_webapi::new_api_key(&webui_dir(&app)?).map_err(err)
+}
+
+#[tauri::command]
+pub fn webui_remove_api_key(app: AppHandle) -> Res<()> {
+    riptor_webapi::remove_api_key(&webui_dir(&app)?).map_err(err)
+}
+
+#[tauri::command]
+pub fn webui_set_ddns_password(app: AppHandle, password: String) -> Res<()> {
+    riptor_webapi::set_ddns_password(&webui_dir(&app)?, &password).map_err(err)
+}

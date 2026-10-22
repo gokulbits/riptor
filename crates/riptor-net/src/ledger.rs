@@ -25,6 +25,7 @@ pub enum Purpose {
     Python,
     VpnServer,
     CountryData,
+    DynamicDns,
 }
 
 impl Purpose {
@@ -45,6 +46,7 @@ impl Purpose {
             Purpose::Python => "python",
             Purpose::VpnServer => "vpn_server",
             Purpose::CountryData => "country_data",
+            Purpose::DynamicDns => "dynamic_dns",
         }
     }
 }

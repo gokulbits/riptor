@@ -22,6 +22,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 riptor-core = { path = "../riptor-core" }
+riptor-webapi = { path = "../riptor-webapi" }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"] }

@@ -108,6 +108,241 @@ pub enum CapCounts {
     Both,
 }
 
+/// Remote control through qBittorrent's Web API (for apps like qBitController). Off by default;
+/// passwords, the API key and the dynamic DNS password live in `webui-auth.json`, not here.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebUi {
+    pub enabled: bool,
+    /// `*` for every adapter, or one IP address.
+    pub address: String,
+    pub port: u16,
+    /// Ask the router to forward the port (UPnP / NAT-PMP). Exposes it to the internet.
+    pub upnp: bool,
+    pub https: bool,
+    /// PEM files; both empty means a self-signed certificate Riptor makes.
+    pub cert_file: Option<PathBuf>,
+    pub key_file: Option<PathBuf>,
+    pub username: String,
+    pub bypass_localhost: bool,
+    pub bypass_subnets: bool,
+    /// CIDR ranges, e.g. `192.168.1.0/24`.
+    pub subnet_whitelist: Vec<String>,
+    /// Consecutive failed logins before a ban; 0 never bans.
+    pub max_failures: u32,
+    pub ban_secs: u32,
+    pub session_timeout_secs: u32,
+    pub clickjacking_protection: bool,
+    pub csrf_protection: bool,
+    pub secure_cookie: bool,
+    pub host_validation: bool,
+    /// `;`-separated host names (`*` wildcards allowed); `*` accepts any.
+    pub server_domains: String,
+    pub custom_headers_enabled: bool,
+    /// `Name: value`, one per line.
+    pub custom_headers: String,
+    pub reverse_proxy: bool,
+    /// `;`-separated IPs or CIDR ranges whose X-Forwarded-For is believed.
+    pub trusted_proxies: String,
+    /// Riptor's own rule: accept clients outside the local network (never via the VPN tunnel).
+    pub allow_public: bool,
+    pub ddns: Ddns,
+}
+
+/// A dyndns2-style update service (the protocol most dynamic DNS providers speak).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Ddns {
+    pub enabled: bool,
+    /// The provider's https update address, e.g. `https://example.com/nic/update`.
+    pub update_url: String,
+    pub domain: String,
+    pub username: String,
+}
+
+impl Default for WebUi {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            address: "*".into(),
+            port: 8080,
+            upnp: false,
+            https: true,
+            cert_file: None,
+            key_file: None,
+            username: "admin".into(),
+            bypass_localhost: false,
+            bypass_subnets: false,
+            subnet_whitelist: Vec::new(),
+            max_failures: 5,
+            ban_secs: 3600,
+            session_timeout_secs: 3600,
+            clickjacking_protection: true,
+            csrf_protection: true,
+            secure_cookie: true,
+            host_validation: true,
+            server_domains: "*".into(),
+            custom_headers_enabled: false,
+            custom_headers: String::new(),
+            reverse_proxy: false,
+            trusted_proxies: String::new(),
+            allow_public: false,
+            ddns: Ddns::default(),
+        }
+    }
+}
+
+/// `a.b.c.d/n` or an IPv6 range; a bare address counts as a single host.
+pub fn parse_cidr(s: &str) -> Option<(std::net::IpAddr, u8)> {
+    let s = s.trim();
+    let (ip, bits) = match s.split_once('/') {
+        Some((ip, bits)) => (
+            ip.parse::<std::net::IpAddr>().ok()?,
+            bits.parse::<u8>().ok()?,
+        ),
+        None => {
+            let ip = s.parse::<std::net::IpAddr>().ok()?;
+            (ip, if ip.is_ipv4() { 32 } else { 128 })
+        }
+    };
+    let max = if ip.is_ipv4() { 32 } else { 128 };
+    (bits <= max).then_some((ip, bits))
+}
+
+pub fn cidr_contains((net, bits): (std::net::IpAddr, u8), ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        v4 => v4,
+    };
+    match (net, ip) {
+        (IpAddr::V4(n), IpAddr::V4(i)) => {
+            let mask = u32::MAX.checked_shl(32 - u32::from(bits)).unwrap_or(0);
+            u32::from(n) & mask == u32::from(i) & mask
+        }
+        (IpAddr::V6(n), IpAddr::V6(i)) => {
+            let mask = u128::MAX.checked_shl(128 - u32::from(bits)).unwrap_or(0);
+            u128::from(n) & mask == u128::from(i) & mask
+        }
+        _ => false,
+    }
+}
+
+impl WebUi {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        use anyhow::ensure;
+        ensure!(
+            self.port >= 1024,
+            "use a port from 1024 up for remote control"
+        );
+        ensure!(
+            self.address == "*" || self.address.parse::<std::net::IpAddr>().is_ok(),
+            "the remote control address must be * or an IP address"
+        );
+        let u = &self.username;
+        ensure!(
+            !u.is_empty() && u.len() <= 64 && u.chars().all(|c| c.is_ascii_graphic()),
+            "the remote control username must be 1-64 letters, digits or symbols, with no spaces"
+        );
+        ensure!(
+            self.cert_file.is_some() == self.key_file.is_some(),
+            "choose both a certificate and a key, or neither"
+        );
+        for f in self.cert_file.iter().chain(&self.key_file) {
+            ensure!(
+                f.is_absolute(),
+                "certificate and key paths must be absolute"
+            );
+        }
+        ensure!(
+            self.subnet_whitelist.len() <= 64,
+            "too many whitelisted subnets"
+        );
+        for s in &self.subnet_whitelist {
+            ensure!(parse_cidr(s).is_some(), "not a subnet: {s}");
+        }
+        ensure!(self.max_failures <= 1000, "the ban limit is too high");
+        ensure!(
+            (60..=86_400 * 30).contains(&self.ban_secs),
+            "bans last from a minute to 30 days"
+        );
+        ensure!(
+            (60..=86_400 * 30).contains(&self.session_timeout_secs),
+            "sessions last from a minute to 30 days"
+        );
+        ensure!(self.server_domains.len() <= 1024, "too many server domains");
+        for d in self
+            .server_domains
+            .split(';')
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+        {
+            ensure!(
+                d.len() <= 253
+                    && d.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "-.*:[]".contains(c)),
+                "not a domain: {d}"
+            );
+        }
+        ensure!(
+            self.custom_headers.len() <= 8192,
+            "custom headers are too long"
+        );
+        for line in self
+            .custom_headers
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+        {
+            let (name, value) = line.split_once(':').unwrap_or((line, ""));
+            ensure!(
+                !name.trim().is_empty()
+                    && name
+                        .trim()
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-')
+                    && value.chars().all(|c| c == '\t' || (' '..='~').contains(&c)),
+                "not a header: {line}"
+            );
+        }
+        ensure!(
+            self.trusted_proxies.len() <= 1024,
+            "too many trusted proxies"
+        );
+        for p in self
+            .trusted_proxies
+            .split(';')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            ensure!(parse_cidr(p).is_some(), "not a proxy address: {p}");
+        }
+        let d = &self.ddns;
+        if d.enabled {
+            let url = url::Url::parse(&d.update_url)
+                .map_err(|_| anyhow::anyhow!("the dynamic DNS update address isn't a URL"))?;
+            ensure!(
+                url.scheme() == "https",
+                "the dynamic DNS update address must be https"
+            );
+            ensure!(
+                !d.domain.is_empty()
+                    && d.domain.len() <= 253
+                    && d.domain
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "-.".contains(c)),
+                "not a domain name: {}",
+                d.domain
+            );
+            ensure!(
+                d.username.len() <= 128 && !d.username.contains(['\r', '\n']),
+                "the dynamic DNS username is too long"
+            );
+        }
+        Ok(())
+    }
+}
+
 /// A monthly allowance; torrents wait once it's used up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataCap {
@@ -181,6 +416,7 @@ pub struct Settings {
     pub scrub_mib_per_sec: u32,
     /// Download DB-IP's country list to show where peers are; off until turned on.
     pub peer_countries: bool,
+    pub web_ui: WebUi,
     /// Closing the window hides it; Quit is in the tray menu.
     pub close_to_tray: bool,
     /// Empty means the default layout.
@@ -231,6 +467,7 @@ impl Default for Settings {
             scrub_days: Some(30),
             scrub_mib_per_sec: 32,
             peer_countries: false,
+            web_ui: WebUi::default(),
             close_to_tray: true,
             columns: Vec::new(),
             storage: StorageConfig::default(),
@@ -257,6 +494,7 @@ impl Settings {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.web_ui.validate()?;
         anyhow::ensure!(
             self.download_dir.is_absolute(),
             "download folder must be an absolute path"
