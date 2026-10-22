@@ -544,3 +544,79 @@ async fn state_is_saved_when_it_changes_and_not_otherwise() {
         .contains("\"films\""));
     engine.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn imports_carry_labels_history_and_limits() {
+    use riptor_core::create::{create, CreateOptions, Progress};
+    use riptor_core::{Limit, Source};
+    let tmp = tempfile::tempdir().unwrap();
+    let downloads = tmp.path().join("downloads");
+    let content = downloads.join("content");
+    std::fs::create_dir_all(&content).unwrap();
+    std::fs::write(content.join("a.bin"), vec![3u8; 100_000]).unwrap();
+    let torrent = create(
+        &content,
+        &CreateOptions {
+            piece_length: Some(16 * 1024),
+            ..Default::default()
+        },
+        &Progress::default(),
+    )
+    .unwrap();
+
+    let from = tmp.path().join("other-client");
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::write(from.join("abc.torrent"), &torrent).unwrap();
+    let s = |v: &str| format!("{}:{v}", v.len());
+    let save = downloads.to_string_lossy().into_owned();
+    let resume = format!(
+        "d{}{}{}i1e{}{}{}l{}e{}i5000e{}i12345e{}i600e{}i300e{}i1700000000e{}i2500e{}i-1ee",
+        s("save_path"),
+        s(&save),
+        s("paused"),
+        s("qBt-category"),
+        s("Linux/ISOs"),
+        s("qBt-tags"),
+        s("debian"),
+        s("total_downloaded"),
+        s("total_uploaded"),
+        s("active_time"),
+        s("seeding_time"),
+        s("added_time"),
+        s("qBt-ratioLimit"),
+        s("qBt-seedingTimeLimit"),
+    );
+    std::fs::write(from.join("abc.fastresume"), resume).unwrap();
+
+    let engine = engine(&tmp.path().join("data"), quiet_settings(&downloads)).await;
+    let mut events = engine.subscribe();
+    let report = engine.import_from(&from).await.unwrap();
+    assert_eq!(
+        (report.added, report.skipped),
+        (1, 0),
+        "{:?}",
+        report.failed
+    );
+    let id = engine
+        .preview(Source::File(from.join("abc.torrent")))
+        .await
+        .unwrap()
+        .info_hash;
+
+    // A tick may land between adding and copying the history over.
+    let t = wait_for(&mut events, &id, "the imported history", |t| t.uploaded > 0).await;
+    assert_eq!(t.category.as_deref(), Some("Linux-ISOs"));
+    assert!(engine.categories().contains_key("Linux-ISOs"));
+    assert_eq!(t.tags, ["debian"]);
+    assert_eq!((t.downloaded, t.uploaded), (5000, 12345));
+    assert_eq!((t.seeding_time, t.added_on), (300, 1_700_000_000));
+    assert_eq!(t.limits.ratio, Limit::Value(2.5));
+    assert_eq!(t.limits.seeding_time, Limit::Unlimited);
+    assert_eq!(t.limits.inactive_seeding_time, Limit::UseGlobal);
+    assert_eq!(Path::new(&t.save_path), content);
+
+    // Importing again leaves what Riptor already has alone.
+    let again = engine.import_from(&from).await.unwrap();
+    assert_eq!((again.added, again.already_present), (0, 1));
+    engine.shutdown().await.unwrap();
+}

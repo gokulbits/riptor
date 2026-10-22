@@ -256,6 +256,7 @@ pub fn run() {
             commands::rename_files,
             commands::set_trackers,
             commands::import_torrents,
+            commands::import_scan,
             commands::vpn_leak_check,
             commands::verify_checksums,
             commands::torrent_safety,

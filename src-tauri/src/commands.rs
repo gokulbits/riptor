@@ -972,6 +972,15 @@ pub async fn import_torrents(
     engine(&state).await?.import_from(&path).await.map_err(err)
 }
 
+/// `None` looks in qBittorrent's usual folders; nothing is added.
+#[tauri::command]
+pub async fn import_scan(
+    state: State<'_, AppState>,
+    path: Option<PathBuf>,
+) -> Res<riptor_core::import::ImportScan> {
+    engine(&state).await?.import_scan(path).await.map_err(err)
+}
+
 #[derive(serde::Serialize)]
 pub struct Connection {
     purpose: &'static str,

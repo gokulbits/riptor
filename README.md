@@ -60,7 +60,7 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - A piece map showing which parts are downloaded.
 - Downloads pause by themselves when their drive runs low on space (1 GiB by default) and resume when there's room.
 - When downloads finish, Riptor can put the computer to sleep or shut it down (with a minute to cancel).
-- Import torrents from another client's folder of `.torrent` and `.fastresume` files; existing data is checked, not downloaded again.
+- Import torrents from qBittorrent (see [Moving from qBittorrent](#moving-from-qbittorrent)), with their category, tags, downloaded and uploaded totals, seeding time and share limits; existing data is checked, not downloaded again. qBittorrent's overall statistics aren't imported.
 - A folder for incomplete downloads: torrents download there and move to their save folder when complete.
 - Trackers that are added to every new public torrent, and an option to add new torrents stopped.
 - RSS and Atom feeds, with download rules (words or regular expressions, per feed, with a category and folder) that add matching torrents automatically. Feeds are fetched through the VPN when it's on, and torrents with programs are always added stopped.
@@ -145,6 +145,22 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 Use **Add** for a `.torrent` file, or **Magnet** for magnet links and URLs. You can also drop files or links onto the window, paste magnet links, info hashes or `.torrent` links anywhere, or open one from your browser. Every torrent goes through the add dialog, where you choose what to download and where to put it.
 
 Right-click a torrent to pause, resume or force-start it, change its category or tags, set share limits, move it in the queue, open its folder, or copy its magnet link. Double-clicking a torrent opens its folder.
+
+### Moving from qBittorrent
+
+Riptor can take over your torrents from qBittorrent without downloading anything again.
+
+1. **In qBittorrent, pause the torrents that are still downloading** (or close qBittorrent). Torrents that are only seeding can keep going.
+2. **In Riptor, open the ⋯ menu and choose Import from qBittorrent.** Riptor finds qBittorrent's torrents by itself and shows how many it found.
+3. **Click Import.** Each torrent keeps its save folder, category, tags, downloaded and uploaded totals, seeding time and share limits. Riptor checks the files where they are.
+4. **When you're happy, remove the torrents in qBittorrent and choose to keep the files.** Don't let both apps download the same torrent at once.
+
+If Riptor can't find them (for example with a portable qBittorrent), click **Choose folder** and pick qBittorrent's `BT_backup` folder:
+
+- Windows: `%LOCALAPPDATA%qBittorrentBT_backup`
+- Linux: `~/.local/share/qBittorrent/BT_backup`, or `~/.var/app/org.qbittorrent.qBittorrent/data/qBittorrent/BT_backup` for the Flatpak
+
+qBittorrent's overall statistics (its all-time totals) aren't copied.
 
 ### Keyboard shortcuts
 

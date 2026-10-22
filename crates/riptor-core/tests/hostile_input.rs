@@ -227,3 +227,54 @@ fn backups_refuse_garbage_and_tampering() {
         }
     }
 }
+
+#[test]
+fn mutated_resume_files_never_panic_or_leak_bad_values() {
+    use riptor_core::import::{clean_label, parse_fastresume};
+    use riptor_core::Limit;
+    let save = std::env::temp_dir()
+        .join("dl")
+        .to_string_lossy()
+        .into_owned();
+    let s = |v: &str| format!("{}:{v}", v.len());
+    let base = format!(
+        "d{}{}{}{}{}l{}{}e{}i5000e{}i12345e{}i600e{}i300e{}i1700000000e{}i2500e{}i-1e{}i60ee",
+        s("save_path"),
+        s(&save),
+        s("qBt-category"),
+        s("Linux ISOs"),
+        s("qBt-tags"),
+        s("debian"),
+        s("seeding"),
+        s("total_downloaded"),
+        s("total_uploaded"),
+        s("active_time"),
+        s("seeding_time"),
+        s("added_time"),
+        s("qBt-ratioLimit"),
+        s("qBt-seedingTimeLimit"),
+        s("qBt-inactiveSeedingTimeLimit"),
+    )
+    .into_bytes();
+    assert!(parse_fastresume(&base).is_some());
+    let mut rng = rand::rngs::StdRng::seed_from_u64(37);
+    for _ in 0..10_000 {
+        let b = mutate(&mut rng, &base);
+        let Some(r) = parse_fastresume(&b) else {
+            continue;
+        };
+        assert!(r.save_path.is_absolute());
+        assert!(r.tags.len() <= 32);
+        for label in r.tags.iter().chain(&r.category) {
+            assert_eq!(
+                clean_label(label.as_bytes()).as_deref(),
+                Some(label.as_str())
+            );
+        }
+        assert!(r.downloaded <= 1 << 60 && r.uploaded <= 1 << 60);
+        assert!(r.active_time <= 100 * 365 * 24 * 3600 && r.seeding_time <= 100 * 365 * 24 * 3600);
+        if let Limit::Value(v) = r.limits.ratio {
+            assert!(v.is_finite() && (0.0..=10_000.0).contains(&v), "{v}");
+        }
+    }
+}

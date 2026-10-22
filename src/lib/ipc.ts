@@ -24,6 +24,7 @@ import type {
   FilePriority,
   PieceMap,
   ImportReport,
+  ImportScan,
   LeakCheck,
   MagnetLink,
   NetInfo,
@@ -73,6 +74,8 @@ export const api = {
   autostartSet: (enabled: boolean) => invoke<void>("autostart_set", { enabled }),
   leakCheck: () => invoke<LeakCheck>("vpn_leak_check"),
   importTorrents: (path: string) => invoke<ImportReport>("import_torrents", { path }),
+  /** null looks in qBittorrent's usual folders. */
+  importScan: (path: string | null) => invoke<ImportScan>("import_scan", { path }),
   setTrackers: (id: string, trackers: string[]) => invoke<void>("set_trackers", { id, trackers }),
   reannounce: (ids: string[]) => invoke<void>("reannounce", { ids }),
   addPeer: (id: string, addr: string) => invoke<void>("add_peer", { id, addr }),

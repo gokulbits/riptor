@@ -166,7 +166,7 @@ export function Toolbar(props: {
               })),
             },
             "sep",
-            { label: "Import from another client…", icon: <FolderInput size={14} />, onClick: props.onImport },
+            { label: "Import from qBittorrent…", icon: <FolderInput size={14} />, onClick: props.onImport },
             { label: "Connections", icon: <Network size={14} />, onClick: props.onConnections },
             { label: "Logs", icon: <ScrollText size={14} />, onClick: props.onLogs },
             { label: "About Riptor", icon: <Info size={14} />, onClick: props.onAbout },

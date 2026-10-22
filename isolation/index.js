@@ -15,7 +15,7 @@ const APP_COMMANDS = new Set([
   "vpn_profiles", "vpn_import", "vpn_delete", "vpn_set_credentials", "vpn_connect", "vpn_disconnect",
   "vpn_status", "vpn_get_prefs", "vpn_set_prefs", "vpn_openvpn_installed",
   "autostart_get", "autostart_set", "when_done_get", "when_done_set", "when_done_cancel", "update_supported", "update_check", "update_install",
-  "set_file_priority", "export_torrent", "reveal_torrent_file", "open_torrent_file", "torrent_pieces", "rename_files", "set_trackers", "import_torrents", "vpn_leak_check", "reannounce", "add_peer", "ban_peer",
+  "set_file_priority", "export_torrent", "reveal_torrent_file", "open_torrent_file", "torrent_pieces", "rename_files", "set_trackers", "import_torrents", "import_scan", "vpn_leak_check", "reannounce", "add_peer", "ban_peer",
   "rss_view", "rss_articles", "rss_add_feed", "rss_remove_feed", "rss_rename_feed", "rss_mark_read",
   "rss_refresh", "rss_set_options", "rss_save_rule", "rss_delete_rule", "rss_preview_rule",
   "verify_checksums", "torrent_safety", "connections", "connections_clear", "swarm_view", "release_leak_hold", "network_info", "check_data", "preview_file", "about_info", "country_status",

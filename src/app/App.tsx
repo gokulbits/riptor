@@ -45,6 +45,7 @@ import { SettingsDialog, type Section } from "../features/settings/SettingsDialo
 import { StatsDialog } from "../features/stats/StatsDialog";
 import { LogsDialog } from "../features/about/LogsDialog";
 import { ConnectionsDialog } from "../features/about/ConnectionsDialog";
+import { ImportDialog } from "../features/torrents/ImportDialog";
 import { CreateTorrentDialog } from "../features/create/CreateTorrentDialog";
 import { SearchView, useSearchEvents } from "../features/search/SearchView";
 import { VpnView } from "../features/vpn/VpnView";
@@ -58,6 +59,7 @@ type Modal =
   | { kind: "create" }
   | { kind: "logs" }
   | { kind: "connections" }
+  | { kind: "import" }
   | { kind: "category" }
   | { kind: "limits"; ids: string[] }
   | { kind: "tags"; ids: string[] }
@@ -366,23 +368,6 @@ export default function App() {
     }
   };
 
-  const importFromClient = async () => {
-    const dir = await open({
-      directory: true,
-      title: "Choose the folder of .torrent and .fastresume files from your other client",
-    });
-    if (typeof dir !== "string") return;
-    actions.toast("info", "Importing… existing files are checked, not downloaded again.");
-    try {
-      const r = await api.importTorrents(dir);
-      const parts = [`${r.added} added`, r.already_present && `${r.already_present} already here`, r.skipped && `${r.skipped} skipped`];
-      actions.toast(r.failed.length ? "warning" : "success", `Import: ${parts.filter(Boolean).join(", ")}.`);
-      for (const f of r.failed.slice(0, 3)) actions.toast("warning", f);
-    } catch (e) {
-      actions.toast("error", errorText(e));
-    }
-  };
-
   const exportSelected = async (ids: string[]) => {
     const fileName = (id: string) => `${(s.torrents.get(id)?.name ?? id).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")}.torrent`;
     const secrets = await Promise.all(ids.map((id) => api.safety(id).then((x) => x.secret_trackers, () => 0)));
@@ -533,7 +518,7 @@ export default function App() {
         onConnections={() => setModal({ kind: "connections" })}
         onResumeAll={() => run(api.resume([...s.torrents.keys()]))}
         onStopAll={() => run(api.stop([...s.torrents.keys()]))}
-        onImport={importFromClient}
+        onImport={() => setModal({ kind: "import" })}
         onAbout={() => setModal({ kind: "settings", section: "about" })}
       />
       {view === "search" ? (
@@ -591,6 +576,7 @@ export default function App() {
       {modal?.kind === "create" && <CreateTorrentDialog onClose={() => setModal(null)} />}
       {modal?.kind === "logs" && <LogsDialog onClose={() => setModal(null)} />}
       {modal?.kind === "connections" && <ConnectionsDialog onClose={() => setModal(null)} />}
+      {modal?.kind === "import" && <ImportDialog onClose={() => setModal(null)} />}
       {modal?.kind === "category" && <CategoryDialog onClose={() => setModal(null)} onSaved={refreshCategories} />}
       {modal?.kind === "limits" && limitTargets.length > 0 && <ShareLimitsDialog torrents={limitTargets} onClose={() => setModal(null)} />}
       {modal?.kind === "tags" && tagTargets.length > 0 && <TagsDialog torrents={tagTargets} onClose={() => setModal(null)} />}

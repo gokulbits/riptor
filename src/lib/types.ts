@@ -166,6 +166,13 @@ export interface LeakCheck {
   notes: string[];
 }
 
+export interface ImportScan {
+  /** null when no folder was given and none was found. */
+  dir: string | null;
+  found: number;
+  skipped: number;
+}
+
 export interface ImportReport {
   added: number;
   already_present: number;

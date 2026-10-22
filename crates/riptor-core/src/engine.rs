@@ -1360,7 +1360,18 @@ impl Engine {
         Ok(())
     }
 
-    /// Adds torrents from another client's folder; the data is checked where it lies.
+    /// Counts what `import_from` would add; `None` looks in qBittorrent's usual folders.
+    pub async fn import_scan(
+        &self,
+        dir: Option<PathBuf>,
+    ) -> anyhow::Result<crate::import::ImportScan> {
+        if let Some(d) = &dir {
+            ensure!(d.is_absolute(), "choose a folder");
+        }
+        tokio::task::spawn_blocking(move || crate::import::scan_counts(dir.as_deref())).await?
+    }
+
+    /// Adds torrents from qBittorrent's folder; the data is checked where it lies.
     pub async fn import_from(&self, dir: &Path) -> anyhow::Result<crate::import::ImportReport> {
         ensure!(dir.is_absolute(), "choose a folder");
         let d = dir.to_path_buf();
@@ -1377,20 +1388,37 @@ impl Engine {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let r = &f.resume;
             let result = async {
                 let p = self.preview(Source::File(f.torrent.clone())).await?;
                 if p.already_added {
                     return Ok(false);
                 }
-                self.add(AddParams {
-                    info_hash: p.info_hash,
-                    save_path: Some(f.save_path.clone()),
-                    start_paused: f.paused || add_stopped,
-                    // Their layout: the torrent's own folder inside the save folder.
-                    create_subfolder: Some(true),
-                    ..Default::default()
-                })
-                .await?;
+                if let Some(c) = &r.category {
+                    self.categories.write().entry(c.clone()).or_insert(None);
+                }
+                let id = self
+                    .add(AddParams {
+                        info_hash: p.info_hash,
+                        save_path: Some(r.save_path.clone()),
+                        category: r.category.clone(),
+                        tags: r.tags.clone(),
+                        start_paused: r.paused || add_stopped,
+                        // Their layout: the torrent's own folder inside the save folder.
+                        create_subfolder: Some(true),
+                        ..Default::default()
+                    })
+                    .await?;
+                // Carry the history over; the data itself is still checked.
+                if let Some(rec) = self.records.write().get_mut(&parse_hash(&id)?) {
+                    rec.all_time_download = r.downloaded;
+                    rec.all_time_upload = r.uploaded;
+                    rec.active_time = r.active_time;
+                    rec.seeding_time = r.seeding_time;
+                    rec.added_on = r.added_on.unwrap_or(rec.added_on);
+                    rec.limits = r.limits;
+                }
+                self.dirty.store(true, Ordering::Relaxed);
                 anyhow::Ok(true)
             }
             .await;
