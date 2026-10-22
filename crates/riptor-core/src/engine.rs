@@ -2887,6 +2887,11 @@ async fn build_session(
             proxy_url: s.proxy_url.clone(),
             enable_tcp: true,
             peer_opts: None,
+            encryption: match s.encryption {
+                crate::settings::PeerEncryption::Off => librqbit::EncryptionPolicy::Disabled,
+                crate::settings::PeerEncryption::Prefer => librqbit::EncryptionPolicy::Prefer,
+                crate::settings::PeerEncryption::Require => librqbit::EncryptionPolicy::Require,
+            },
         }),
         disable_trackers: blocked,
         // Pinned to loopback, so anything that slips through fails in the OS.

@@ -39,6 +39,7 @@ const fixture = {
   close_to_tray: true,
   listen_port: 6881,
   transport: "tcp",
+  encryption: "prefer",
   listen_address: null,
   upnp: true,
   dht: true,
@@ -87,6 +88,14 @@ describe("SettingsDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(saved).toHaveLength(1));
     expect(saved[0]).toEqual({ ...fixture, dht: false, add_stopped: true });
+  });
+
+  it("saves the peer encryption choice", async () => {
+    await open("connection");
+    fireEvent.change(screen.getByLabelText(/Encrypt peer traffic/), { target: { value: "require" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toEqual({ ...fixture, encryption: "require" });
   });
 
   it("opens at the section it's asked for", async () => {

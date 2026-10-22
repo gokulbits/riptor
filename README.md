@@ -55,6 +55,7 @@ Built-in search, an app-only VPN with a kill switch, encrypted backups, and a st
 - File priorities (High, Normal, Low) on top of choosing which files to download. Open finished files (never programs) or show them in their folder. Audio and video can be played while they download, once their start is on disk.
 - Rename files and folders inside a torrent; the files move on disk.
 - Edit a torrent's trackers and re-announce, add peers by address, ban peers, and load an IP blocklist from a URL or a local file.
+- Peer traffic encryption (MSE/PE), on by default: Riptor encrypts when the peer can and falls back to plain otherwise, or only talks to peers that encrypt. It hides BitTorrent from throttling and simple inspection; it isn't privacy (use the VPN for that).
 - See which country each peer is in (off until you turn it on). Riptor downloads DB-IP's free country list once a month, through the VPN when it's on, and looks addresses up on your computer.
 - A piece map showing which parts are downloaded.
 - Downloads pause by themselves when their drive runs low on space (1 GiB by default) and resume when there's room.
@@ -214,7 +215,7 @@ Security is a core design requirement. In short:
 - **App hardening:** no web UI or HTTP API server, a strict content security policy, Tauri's isolation pattern with an IPC allowlist, and least-privilege permissions.
 
 **Known limitations:**
-- Peer traffic isn't encrypted (the engine has no MSE/PE support).
+- Peer encryption (MSE/PE) is obfuscation, not privacy: the protocol uses RC4 and an unauthenticated key exchange, so anyone in the middle can still read the traffic. It has been tested between Riptor sessions, not yet against other clients on a real network.
 - On the VPN, search plugins reach the web through a local proxy bound to the tunnel. Plugins that use the standard helpers or Python's `urllib` go through it; one that opens its own sockets would bypass it.
 - Web seeds are skipped while a SOCKS5 proxy or anonymous mode is in use, since they would bypass the proxy.
 - The update check never goes through the VPN (the updater uses its own connection); the connections ledger shows it.
@@ -346,8 +347,8 @@ Done: the Windows setup with OpenVPN and Python bundled, `.deb` and `.rpm` packa
 - [ ] Keep the Windows setup under 20 MB (19.3 MB for 0.1.2).
 
 ### Engine and storage
-Done: web seeds (BEP 19), runtime per-torrent speed limits, force recheck, moving and renaming a torrent's files, a free-space guard, editable trackers, peer bans, peer countries, a piece map, play-while-downloading, importing from other clients, and removing leftover session entries.
-- [ ] Download and seed a large public torrent end to end on a real network.
+Done: web seeds (BEP 19), peer traffic encryption (MSE/PE), runtime per-torrent speed limits, force recheck, moving and renaming a torrent's files, a free-space guard, editable trackers, peer bans, peer countries, a piece map, play-while-downloading, importing from other clients, and removing leftover session entries.
+- [ ] Download and seed a large public torrent end to end on a real network, including with peer encryption set to "always" (checks it works with other clients).
 - [ ] Storage benchmark: the download path now measures the same as plain file I/O (medians within 1%), but results are noisy; re-check on a fast NVMe drive.
 
 ### Seeding and queueing

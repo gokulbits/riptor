@@ -217,12 +217,16 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
             .unwrap_or_else(|| Duration::from_secs(10));
 
         let now = Instant::now();
-        let (ckind, mut read, mut write) = with_timeout(
+        let (ckind, read, write) = with_timeout(
             "connecting",
             connect_timeout,
             self.connector.connect(self.addr),
         )
         .await?;
+        // RIPTOR PATCH: MSE/PE peer encryption.
+        let (mut read, mut write) = self
+            .encrypt_outgoing(read, write, connect_timeout, rwtimeout)
+            .await?;
 
         async move {
             self.handler.on_connected(now.elapsed());
@@ -270,6 +274,45 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
         }
         .instrument(trace_span!("", kind=%ckind))
         .await
+    }
+
+    // RIPTOR PATCH: MSE/PE. Under Prefer, a peer that can't encrypt gets a plain reconnect and is
+    // remembered, so later attempts skip straight to plain.
+    async fn encrypt_outgoing(
+        &self,
+        read: BoxAsyncReadVectored,
+        write: BoxAsyncWrite,
+        connect_timeout: Duration,
+        rwtimeout: Duration,
+    ) -> Result<(BoxAsyncReadVectored, BoxAsyncWrite)> {
+        use crate::mse::EncryptionPolicy;
+        let policy = self.connector.encryption();
+        if policy == EncryptionPolicy::Disabled
+            || (policy == EncryptionPolicy::Prefer && self.connector.known_plain(self.addr))
+        {
+            return Ok((read, write));
+        }
+        let attempt = with_timeout(
+            "encryption handshake",
+            rwtimeout,
+            crate::mse::initiate(read, write, self.info_hash).map_err(Error::Anyhow),
+        )
+        .await;
+        match attempt {
+            Ok(rw) => Ok(rw),
+            Err(e) if policy == EncryptionPolicy::Prefer => {
+                trace!(addr=?self.addr, "encryption handshake failed, retrying plain: {e:#}");
+                self.connector.remember_plain(self.addr);
+                let (_, r, w) = with_timeout(
+                    "connecting",
+                    connect_timeout,
+                    self.connector.connect(self.addr),
+                )
+                .await?;
+                Ok((r, w))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     async fn manage_peer(&self, args: ManagePeerArgs) -> Result<()> {

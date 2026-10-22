@@ -289,6 +289,7 @@ export interface Settings {
   listen_port: number;
   listen_address: string | null;
   transport: "tcp" | "tcp_and_utp";
+  encryption: "off" | "prefer" | "require";
   upnp: boolean;
   dht: boolean;
   lsd: boolean;

@@ -440,6 +440,16 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
                 <Toggle checked={s.upnp} onChange={(v) => set({ upnp: v })} label="Forward the port with UPnP" />
               </Group>
               <Group title="Peers">
+                <Field
+                  label="Encrypt peer traffic"
+                  hint="Hides BitTorrent traffic from throttling and simple inspection. It isn't real privacy: the method is weak and anyone in the middle can still read it. Use the VPN for that."
+                >
+                  <select className="input" value={s.encryption} onChange={(e) => set({ encryption: e.target.value as Settings["encryption"] })}>
+                    <option value="prefer">When the peer can (recommended)</option>
+                    <option value="require">Always (skip peers that can't)</option>
+                    <option value="off">Never</option>
+                  </select>
+                </Field>
                 <Toggle checked={s.dht} onChange={(v) => set({ dht: v })} label="DHT (find peers without trackers)" />
                 <Toggle checked={s.lsd} onChange={(v) => set({ lsd: v })} label="Local peer discovery" />
                 <Toggle
@@ -776,8 +786,8 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
                 )}
               </Group>
               <p className="rounded-md bg-raised p-3 text-xs text-muted">
-                Peer traffic is not encrypted (the engine does not support BitTorrent protocol encryption). Use the VPN feature or a
-                SOCKS5 proxy if you need to hide BitTorrent traffic from your network provider.
+                Peer encryption (Connection, Peers) only hides BitTorrent traffic from simple inspection; it doesn't hide who you
+                connect to or what you share. Use the VPN if you need privacy from your network provider.
               </p>
             </>
           )}

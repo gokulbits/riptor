@@ -26,6 +26,7 @@ Please do **not** open a public issue. Use GitHub's private vulnerability report
 | Torznab responses | `quick-xml`, which never resolves external entities. Size caps. Mutation tests cover Torznab, Internet Archive replies, plugin results and scrapes. |
 | VPN profiles (`.ovpn`, WireGuard `.conf`) | Script and plugin directives (`up`, `down`, `plugin`, `PostUp`, …) are rejected, because they would run as admin or root. The privileged helper re-validates every profile and takes only a fixed set of requests. |
 | Peer country list (opt-in) | Downloaded from db-ip.com over https only when "Show peer countries" is on, through the VPN when it's on and never while the kill switch holds traffic; recorded in the connections ledger. Size- and row-capped and strictly parsed (sorted, non-overlapping ranges, two-letter codes), and refused whole if anything is off. Lookups happen locally; turning the option off deletes the list. Mutation tests cover the parser. |
+| Encrypted peer handshakes (MSE/PE) | Read from anyone who connects. Padding, the initial payload and every length are capped, the sync search is bounded, degenerate keys (0, 1, p-1, p and above) are refused, the whole handshake has a deadline, and a peer asking for a torrent we don't have is dropped. Tests cover tampered and random handshakes on both sides. |
 | Deep links (`magnet:`) | Always open the add dialog. Nothing is added silently. |
 
 ## Hardening
@@ -40,6 +41,6 @@ Please do **not** open a public issue. Use GitHub's private vulnerability report
 
 ## Known limitations
 
-* librqbit has no MSE/PE peer encryption, so peer traffic is not obfuscated. Use the VPN integration if your ISP throttles BitTorrent.
+* Peer encryption (MSE/PE) only obfuscates: RC4 and an unauthenticated Diffie-Hellman exchange, as the protocol defines them. It hides BitTorrent from throttling and simple inspection, not from someone in the middle. Use the VPN for privacy.
 * The update check uses the updater plugin's own connection, so it never goes through the VPN. The connections ledger shows it as such.
 * Search plugins are separate programs: their connections are only seen (and listed) while the VPN's proxy carries them.

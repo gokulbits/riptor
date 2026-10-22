@@ -61,6 +61,8 @@ mod ip_ranges;
 pub mod limits;
 mod listen;
 mod merge_streams;
+// RIPTOR PATCH: MSE/PE peer encryption.
+pub mod mse;
 mod peer_connection;
 mod peer_info_reader;
 mod piece_tracker;
@@ -98,6 +100,8 @@ pub use session::{
     SUPPORTED_SCHEMES, Session, SessionOptions, SessionPersistenceConfig,
 };
 pub use stream_connect::ConnectionOptions;
+// RIPTOR PATCH: MSE/PE peer encryption.
+pub use mse::EncryptionPolicy;
 pub use torrent_state::{
     ManagedTorrent, ManagedTorrentShared, ManagedTorrentState, TorrentMetadata, TorrentStats,
     TorrentStatsState,

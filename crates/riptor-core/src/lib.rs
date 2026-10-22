@@ -43,5 +43,5 @@ pub use model::*;
 pub use network::{NetworkMode, VpnBinding};
 pub use reveal::RevealTarget;
 pub use riptor_seeding::{Intent, Limit, ShareLimitAction, ShareLimits};
-pub use settings::{ColumnPref, Settings, WatchedFolder};
+pub use settings::{ColumnPref, PeerEncryption, Settings, WatchedFolder};
 pub use stats::{Statistics, StatsReport};

@@ -13,6 +13,18 @@ pub enum Transport {
     TcpAndUtp,
 }
 
+/// Peer traffic encryption (MSE/PE). Hides BitTorrent from throttling; not real privacy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerEncryption {
+    Off,
+    /// Encrypt when the peer can, plain otherwise.
+    #[default]
+    Prefer,
+    /// Only encrypted peers.
+    Require,
+}
+
 /// A folder whose `.torrent` files are added automatically.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchedFolder {
@@ -117,6 +129,7 @@ pub struct Settings {
     /// `None` = all interfaces.
     pub listen_address: Option<std::net::IpAddr>,
     pub transport: Transport,
+    pub encryption: PeerEncryption,
     pub upnp: bool,
     pub dht: bool,
     pub lsd: bool,
@@ -185,6 +198,7 @@ impl Default for Settings {
             listen_port: 0,
             listen_address: None,
             transport: Transport::Tcp,
+            encryption: PeerEncryption::Prefer,
             upnp: true,
             dht: true,
             lsd: true,
@@ -394,6 +408,7 @@ impl Settings {
         self.listen_port != other.listen_port
             || self.listen_address != other.listen_address
             || self.transport != other.transport
+            || self.encryption != other.encryption
             || self.upnp != other.upnp
             || self.dht != other.dht
             || self.lsd != other.lsd

@@ -39,6 +39,8 @@ pub struct ConnectionOptions {
     // TCP outgoing connections are enabled by default
     pub enable_tcp: bool,
     pub peer_opts: Option<PeerConnectionOptions>,
+    // RIPTOR PATCH: MSE/PE peer encryption.
+    pub encryption: crate::mse::EncryptionPolicy,
 }
 
 impl Default for ConnectionOptions {
@@ -47,6 +49,7 @@ impl Default for ConnectionOptions {
             enable_tcp: true,
             proxy_url: None,
             peer_opts: None,
+            encryption: Default::default(),
         }
     }
 }
@@ -65,6 +68,8 @@ pub(crate) struct StreamConnectorArgs {
     pub utp_socket: Option<Arc<UtpSocketUdp>>,
     pub bind_device: Option<BindDevice>,
     pub ipv4_only: bool,
+    // RIPTOR PATCH: MSE/PE peer encryption.
+    pub encryption: crate::mse::EncryptionPolicy,
 }
 
 impl SocksProxyConfig {
@@ -133,6 +138,9 @@ pub(crate) struct StreamConnector {
     utp_socket: Option<Arc<librqbit_utp::UtpSocketUdp>>,
     stats: ConnectStatsAtomic,
     ipv4_only: bool,
+    // RIPTOR PATCH: MSE/PE; peers that failed the encrypted handshake go plain next time.
+    encryption: crate::mse::EncryptionPolicy,
+    plain_only: parking_lot::Mutex<std::collections::HashSet<SocketAddr>>,
 }
 
 impl StreamConnector {
@@ -158,7 +166,27 @@ impl StreamConnector {
             bind_device: config.bind_device,
             stats: Default::default(),
             ipv4_only: config.ipv4_only,
+            encryption: config.encryption,
+            plain_only: Default::default(),
         })
+    }
+
+    // RIPTOR PATCH: MSE/PE peer encryption.
+    pub(crate) fn encryption(&self) -> crate::mse::EncryptionPolicy {
+        self.encryption
+    }
+
+    pub(crate) fn known_plain(&self, addr: SocketAddr) -> bool {
+        self.plain_only.lock().contains(&addr)
+    }
+
+    pub(crate) fn remember_plain(&self, addr: SocketAddr) {
+        let mut set = self.plain_only.lock();
+        // Bounded; forgetting only costs one more encrypted attempt.
+        if set.len() >= 4096 {
+            set.clear();
+        }
+        set.insert(addr);
     }
 
     fn get_stat(&self, kind: ConnectionKind, is_v6: bool) -> &SingleStatAtomic {

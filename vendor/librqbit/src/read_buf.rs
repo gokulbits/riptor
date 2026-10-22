@@ -54,17 +54,25 @@ impl ReadBuf {
         conn: &mut BoxAsyncReadVectored,
         timeout: Duration,
     ) -> Result<Handshake> {
-        self.len = with_timeout(
-            "reading",
-            timeout,
-            conn.read(&mut *self.buf).map_err(Error::ReadHandshake),
-        )
+        // RIPTOR PATCH: keep reading until the whole handshake is in (one deadline for all of it);
+        // encrypted streams and slow links can deliver it in pieces.
+        let (h, size) = with_timeout("reading", timeout, async {
+            loop {
+                let n = conn
+                    .read(&mut self.buf[self.len..])
+                    .await
+                    .map_err(Error::ReadHandshake)?;
+                if n == 0 {
+                    return Err(Error::PeerDisconnectedReadingHandshake);
+                }
+                self.len += n;
+                match Handshake::deserialize(&self.buf[..self.len]) {
+                    Err(MessageDeserializeError::NotEnoughData(..)) => continue,
+                    r => return r.map_err(Error::DeserializeHandshake),
+                }
+            }
+        })
         .await?;
-        if self.len == 0 {
-            return Err(Error::PeerDisconnectedReadingHandshake);
-        }
-        let (h, size) =
-            Handshake::deserialize(&self.buf[..self.len]).map_err(Error::DeserializeHandshake)?;
         self.advance(size);
         Ok(h)
     }

@@ -752,6 +752,12 @@ impl Session {
                     utp_socket: listen_result.as_ref().and_then(|l| l.utp_socket.clone()),
                     bind_device: bind_device.clone(),
                     ipv4_only: opts.ipv4_only,
+                    // RIPTOR PATCH: MSE/PE peer encryption.
+                    encryption: opts
+                        .connect
+                        .as_ref()
+                        .map(|c| c.encryption)
+                        .unwrap_or_default(),
                 })
                 .await
                 .context("error creating stream connector")?,
@@ -932,7 +938,7 @@ impl Session {
         self: Arc<Self>,
         addr: SocketAddr,
         kind: ConnectionKind,
-        mut reader: BoxAsyncReadVectored,
+        reader: BoxAsyncReadVectored,
         writer: BoxAsyncWrite,
     ) -> anyhow::Result<(Arc<TorrentStateLive>, CheckedIncomingConnection)> {
         let rwtimeout = self
@@ -955,6 +961,23 @@ impl Session {
                 .fetch_add(1, Ordering::Relaxed);
             bail!("Incoming ip {incoming_ip} is not in allowlist");
         }
+
+        // RIPTOR PATCH: MSE/PE. Plain handshakes pass through unless encryption is required.
+        let info_hashes = || {
+            self.db
+                .read()
+                .torrents
+                .iter()
+                .map(|(_, t)| t.info_hash())
+                .collect::<Vec<_>>()
+        };
+        let (mut reader, writer, _encrypted) = tokio::time::timeout(
+            rwtimeout,
+            crate::mse::accept(reader, writer, self.connector.encryption(), info_hashes),
+        )
+        .await
+        .context("encryption handshake timed out")?
+        .context("encryption handshake")?;
 
         let mut read_buf = ReadBuf::new();
         let h = read_buf
