@@ -516,3 +516,31 @@ async fn the_country_list_loads_only_when_turned_on() {
     assert!(!cache.exists());
     engine.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn state_is_saved_when_it_changes_and_not_otherwise() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let engine = engine(&data, quiet_settings(&tmp.path().join("dl"))).await;
+    let file = data.join("torrents.json");
+
+    engine.set_category_def("tv", None).unwrap();
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"tv\""));
+    let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
+    let writes = engine.state_writes();
+
+    engine.set_category_def("tv", None).unwrap();
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().modified().unwrap(),
+        modified,
+        "an unchanged torrents.json was rewritten"
+    );
+    // Only the statistics can have moved on (uptime).
+    assert!(engine.state_writes() - writes <= 1);
+
+    engine.set_category_def("films", None).unwrap();
+    assert!(std::fs::read_to_string(&file)
+        .unwrap()
+        .contains("\"films\""));
+    engine.shutdown().await.unwrap();
+}

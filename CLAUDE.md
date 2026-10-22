@@ -75,7 +75,7 @@ cargo bench -p riptor-storage
 
 - **riptor-core::Engine** owns the librqbit `Session`.
   - It adds every torrent paused, and the once-a-second `tick()` lets `riptor-seeding::Scheduler` decide start/queue/share-limit actions.
-  - It keeps all-time counters in `torrents.json` and statistics in `statistics.json`, using atomic writes via `state_file`.
+  - It keeps all-time counters in `torrents.json` and statistics in `statistics.json`, using atomic writes via `state_file`. `saver.rs` writes them on a blocking thread (the tick never waits; user actions and shutdown await it), newest contents only, and skips files whose bytes haven't changed.
   - librqbit's own JSON persistence and fastresume live in `<data>/session`.
 - **riptor-storage::CachedStorageFactory** is the session's *default* storage factory, so restored torrents use it. librqbit hides the output folder from factories, so the engine registers each torrent's root by info hash before adding or restoring it, and an unregistered torrent is refused.
 - **Pieces:** buffered per piece in memory, then flushed synchronously in `on_piece_completed`, which runs *before* the piece is announced to peers.

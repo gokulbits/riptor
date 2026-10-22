@@ -22,6 +22,7 @@ pub mod preview;
 pub mod public_ip;
 pub mod relocate;
 pub mod reveal;
+mod saver;
 pub mod scrub;
 pub mod seen_ip;
 mod session_db;

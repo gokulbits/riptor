@@ -122,6 +122,7 @@ pub struct Engine {
     last_tick: Mutex<Instant>,
     ticks: Mutex<u64>,
     dirty: AtomicBool,
+    saver: crate::saver::Saver,
     /// Serialises session rebuilds and torrent removals.
     admin: tokio::sync::Mutex<()>,
     statistics: Mutex<Statistics>,
@@ -275,6 +276,7 @@ impl Engine {
             last_tick: Mutex::new(Instant::now()),
             ticks: Mutex::new(0),
             dirty: AtomicBool::new(false),
+            saver: Default::default(),
             admin: tokio::sync::Mutex::new(()),
             statistics: Mutex::new(statistics),
             session_tally: Mutex::new(SessionTally {
@@ -632,49 +634,50 @@ impl Engine {
         let now = unix_now();
         let dangerous =
             crate::suspicion::worst(&p.findings) == Some(crate::suspicion::Level::Danger);
-        let mut records = self.records.write();
-        let next_pos = records
-            .values()
-            .filter_map(|r| r.queue_pos)
-            .max()
-            .map_or(0, |m| m + 1);
-        records.insert(
-            hash,
-            Record {
-                info_hash: hash.as_string(),
-                name: p.name.clone(),
-                root,
-                owned_root: owned,
-                category,
-                tags,
-                added_on: now,
-                completed_on: None,
-                all_time_upload: 0,
-                all_time_download: 0,
-                seeding_time: 0,
-                active_time: 0,
-                last_activity: now,
-                limits: ShareLimits::default(),
-                limit_action: None,
-                queue_pos: Some(next_pos),
-                intent: if params.start_paused || (dangerous && !params.allow_suspicious) {
-                    Intent::Stopped
-                } else {
-                    Intent::Started
+        {
+            let mut records = self.records.write();
+            let next_pos = records
+                .values()
+                .filter_map(|r| r.queue_pos)
+                .max()
+                .map_or(0, |m| m + 1);
+            records.insert(
+                hash,
+                Record {
+                    info_hash: hash.as_string(),
+                    name: p.name.clone(),
+                    root,
+                    owned_root: owned,
+                    category,
+                    tags,
+                    added_on: now,
+                    completed_on: None,
+                    all_time_upload: 0,
+                    all_time_download: 0,
+                    seeding_time: 0,
+                    active_time: 0,
+                    last_activity: now,
+                    limits: ShareLimits::default(),
+                    limit_action: None,
+                    queue_pos: Some(next_pos),
+                    intent: if params.start_paused || (dangerous && !params.allow_suspicious) {
+                        Intent::Stopped
+                    } else {
+                        Intent::Started
+                    },
+                    has_executables: p.has_executables,
+                    dl_limit_kib: None,
+                    ul_limit_kib: None,
+                    move_on_complete: incomplete.map(|_| base.clone()),
+                    file_priority: BTreeMap::new(),
+                    renames: BTreeMap::new(),
+                    checksums: None,
+                    last_scrub: None,
+                    findings: Some(p.findings),
+                    content_findings: None,
                 },
-                has_executables: p.has_executables,
-                dl_limit_kib: None,
-                ul_limit_kib: None,
-                move_on_complete: incomplete.map(|_| base.clone()),
-                file_priority: BTreeMap::new(),
-                renames: BTreeMap::new(),
-                checksums: None,
-                last_scrub: None,
-                findings: Some(p.findings),
-                content_findings: None,
-            },
-        );
-        drop(records);
+            );
+        }
         if dangerous && !params.allow_suspicious && !params.start_paused {
             self.notice(
                 NoticeLevel::Warning,
@@ -684,7 +687,7 @@ impl Engine {
         self.statistics.lock().torrents_added += 1;
         // Checked on the next tick, before the queue can start it.
         *self.last_disk_check.lock() = None;
-        self.persist_now()?;
+        self.persist().await?;
         info!("added {}", p.name);
         Ok(hash.as_string())
     }
@@ -769,7 +772,7 @@ impl Engine {
         self.runtime.lock().remove(&hash);
         self.factory.unregister(&hash);
         crate::swarm::forget(&hash);
-        self.persist_now()?;
+        self.persist().await?;
         let _ = self.events.send(Event::Removed {
             id: hash.as_string(),
         });
@@ -981,7 +984,7 @@ impl Engine {
             r.root = root;
             r.renames = kept;
         }
-        self.persist_now()?;
+        self.persist().await?;
         added.context("adding the torrent back")?;
         moved
     }
@@ -1240,7 +1243,7 @@ impl Engine {
             self.check_root(p)?;
         }
         self.categories.write().insert(name.to_string(), save_path);
-        self.persist_now()
+        self.persist_blocking()
     }
 
     pub fn remove_category_def(&self, name: &str) -> anyhow::Result<()> {
@@ -1250,7 +1253,7 @@ impl Engine {
                 r.category = None;
             }
         }
-        self.persist_now()
+        self.persist_blocking()
     }
 
     // ------------------------------------------------------------- details
@@ -1676,11 +1679,32 @@ impl Engine {
         }
     }
 
-    fn persist_now(&self) -> anyhow::Result<()> {
+    fn queue_state(&self) -> anyhow::Result<()> {
         self.dirty.store(false, Ordering::Relaxed);
-        let stats = self.statistics.lock().clone();
-        state_file::save(&self.data_dir.join("statistics.json"), &stats)?;
-        state_file::save(&self.data_dir.join("torrents.json"), &self.snapshot_state())
+        let stats = state_file::to_bytes(&*self.statistics.lock())?;
+        self.saver
+            .queue(self.data_dir.join("statistics.json"), stats);
+        let torrents = state_file::to_bytes(&self.snapshot_state())?;
+        self.saver
+            .queue(self.data_dir.join("torrents.json"), torrents);
+        Ok(())
+    }
+
+    /// Saves now and waits, without blocking the runtime.
+    async fn persist(&self) -> anyhow::Result<()> {
+        self.queue_state()?;
+        self.saver.flush().await
+    }
+
+    fn persist_blocking(&self) -> anyhow::Result<()> {
+        self.queue_state()?;
+        self.saver.flush_blocking()
+    }
+
+    /// State files written so far this run; unchanged ones aren't rewritten.
+    #[doc(hidden)]
+    pub fn state_writes(&self) -> u64 {
+        self.saver.writes()
     }
 
     // -------------------------------------------------------------- create
@@ -1891,7 +1915,7 @@ impl Engine {
                 }
             }
         }
-        self.persist_now()?;
+        self.persist().await?;
         Ok(report)
     }
 
@@ -2041,7 +2065,7 @@ impl Engine {
     }
 
     pub async fn shutdown(&self) -> anyhow::Result<()> {
-        let r = self.persist_now();
+        let r = self.persist().await;
         self.session().stop().await;
         r
     }
@@ -2375,8 +2399,10 @@ impl Engine {
             *t
         };
         if n % PERSIST_EVERY_TICKS == 0 || self.dirty.load(Ordering::Relaxed) {
-            if let Err(e) = self.persist_now() {
-                warn!("saving torrent state failed: {e:#}");
+            // Written off the runtime; a failed write stays queued for next time.
+            match self.queue_state() {
+                Ok(()) => self.saver.flush_soon(),
+                Err(e) => warn!("saving torrent state failed: {e:#}"),
             }
         }
         if n % 10 == 3 {

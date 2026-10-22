@@ -32,10 +32,14 @@ pub fn save_bytes(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn save<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
+pub fn to_bytes<T: Serialize>(value: &T) -> anyhow::Result<Vec<u8>> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
-    save_bytes(path, &bytes)
+    Ok(bytes)
+}
+
+pub fn save<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
+    save_bytes(path, &to_bytes(value)?)
 }
 
 fn create_private(path: &Path) -> std::io::Result<File> {
