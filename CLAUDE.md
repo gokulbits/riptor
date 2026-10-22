@@ -48,12 +48,15 @@ Lint, which must be clean:
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Format and typecheck:
+Format, typecheck and lint the UI (oxlint with the React hooks rules; `typescript-eslint` doesn't support TypeScript 7):
 ```bash
 cargo fmt --all
 ```
 ```bash
 npx tsc -b --noEmit
+```
+```bash
+npm run lint
 ```
 
 CI runs Node 22 (npm 10), which rejects some lockfiles written by a newer local npm. After changing `package-lock.json`, check it the way CI will:
@@ -92,7 +95,7 @@ cargo bench -p riptor-storage
 - **Observers:** the `observe.rs` patch in tracker-comms (announces: swarm size, BEP 24 address, host) and `riptor_observe.rs` in librqbit (peers' `yourip`) feed `swarm.rs`, `seen_ip.rs` and the connections ledger (`riptor_net::ledger`, memory only, hosts only). Every new outgoing request should be recorded in the ledger.
 - **Holds:** `blocked` (kill switch, or the untrusted-network rule via `Settings::kill_switch`), the leak hold, metered connections and the data cap (`engine/hold.rs`) all stop starts and pause running torrents in `tick()`. Read the kill switch through `Engine::kill_switch_on`, never `vpn_required` alone.
 - **Reuse** (`dedupe.rs`, `engine/reuse.rs`): matches are proven by sample piece hashes; hard links only when no piece spans the file and a neighbour, otherwise copies.
-- **Peer countries** (`geoip.rs`, `engine/countries.rs`): opt-in (`Settings::peer_countries`). DB-IP's monthly CSV is fetched as a `Job` through `web_client`, cached as `<data>/geoip/*.csv.gz`, and deleted when turned off; `peers()` adds a `country` code. DB-IP must stay credited wherever countries show (CC BY 4.0).
+- **Peer countries** (`geoip.rs`, `engine/countries.rs`): opt-in (`Settings::peer_countries`). DB-IP's monthly CSV is fetched as a `Job` through `web_client`, cached as `<data>/geoip/*.csv.gz`, and deleted when turned off. `peers()` (`engine/peers.rs`) returns typed `PeerInfo` with the peer-sent client name cleaned and capped, plus a `country` code. DB-IP must stay credited wherever countries show (CC BY 4.0).
 - **About** lives in Settings (`AboutSection.tsx`); versions come from `about_info`. The license texts are the repo's `LICENSE` and `THIRD-PARTY-NOTICES.md`, imported raw.
 
 ## What's left to do (priority order)

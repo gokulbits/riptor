@@ -58,9 +58,10 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: Frontend typecheck + tests
+      - name: Frontend typecheck, lint + tests
         run: |
           npm run typecheck
+          npm run lint
           npm test --if-present
 
       - name: Build frontend

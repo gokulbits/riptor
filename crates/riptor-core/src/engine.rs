@@ -41,6 +41,8 @@ mod hold;
 mod reuse;
 
 pub use countries::CountryStatus;
+mod peers;
+pub use peers::PeerInfo;
 mod safety;
 mod swarm_ip;
 
@@ -1524,18 +1526,6 @@ impl Engine {
             .find(|p| p.is_dir())
             .context("no such drive")?;
         Ok(riptor_storage::free_space(existing)?)
-    }
-
-    pub fn peers(&self, id: &str) -> anyhow::Result<serde_json::Value> {
-        let t = self.handle(&parse_hash(id)?)?;
-        match t.live() {
-            Some(live) => {
-                let mut v = serde_json::to_value(live.per_peer_stats_snapshot(Default::default()))?;
-                self.add_countries(&mut v);
-                Ok(v)
-            }
-            None => Ok(serde_json::Value::Null),
-        }
     }
 
     /// One file's path on disk, its length, and how much of its start is on disk.

@@ -3,7 +3,8 @@ import { Dialog, Toggle } from "../../components/ui";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, errorText } from "../../lib/ipc";
 import { formatBytes, formatDate, formatDuration, formatPercent, formatRatio } from "../../lib/format";
-import type { FileEntry, FilePriority, Limit, PieceMap, TorrentSummary } from "../../lib/types";
+import type { FileEntry, FilePriority, Limit, PeerInfo, PieceMap, TorrentSummary } from "../../lib/types";
+import { countryName, peerIp, sortPeers } from "./peers";
 import { ProgressBar, StateLabel, Tabs } from "../../components/ui";
 import { loadPref, savePref, useApp } from "../../stores/app";
 import { PreviewDialog } from "./PreviewDialog";
@@ -432,54 +433,14 @@ function Trackers({ t }: { t: TorrentSummary }) {
   );
 }
 
-interface PeerRow {
-  addr: string;
-  state: string;
-  client: string;
-  fetched: number;
-  uploaded: number;
-  kind: string;
-  country: string | null;
-}
-
-// Full country names for the code tooltip; Intl can be missing data on some systems.
-const regionNames = (() => {
-  try {
-    return new Intl.DisplayNames(undefined, { type: "region" });
-  } catch {
-    return null;
-  }
-})();
-const countryName = (code: string) => {
-  try {
-    return regionNames?.of(code) ?? code;
-  } catch {
-    return code;
-  }
-};
-
 function Peers({ t }: { t: TorrentSummary }) {
-  const [rows, setRows] = useState<PeerRow[]>([]);
+  const [rows, setRows] = useState<PeerInfo[]>([]);
   useEffect(() => {
     let alive = true;
     const load = () =>
       api
         .peers(t.id)
-        .then((raw) => {
-          if (!alive) return;
-          const peers = (raw as { peers?: Record<string, any> } | null)?.peers ?? {};
-          setRows(
-            Object.entries(peers).map(([addr, p]) => ({
-              addr,
-              state: String(p?.state ?? ""),
-              client: String(p?.client_name ?? ""),
-              fetched: Number(p?.counters?.fetched_bytes ?? 0),
-              uploaded: Number(p?.counters?.uploaded_bytes ?? 0),
-              kind: String(p?.conn_kind ?? ""),
-              country: typeof p?.country === "string" && /^[A-Z]{2}$/.test(p.country) ? p.country : null,
-            })),
-          );
-        })
+        .then((peers) => alive && setRows(peers))
         .catch(() => alive && setRows([]));
     load();
     const iv = setInterval(load, 2000);
@@ -490,7 +451,7 @@ function Peers({ t }: { t: TorrentSummary }) {
   }, [t.id]);
   const toast = useApp((s) => s.toast);
   const [peer, setPeer] = useState("");
-  const sorted = useMemo(() => [...rows].sort((a, b) => b.fetched + b.uploaded - (a.fetched + a.uploaded)), [rows]);
+  const sorted = useMemo(() => sortPeers(rows), [rows]);
   const addPeer = () =>
     api.addPeer(t.id, peer).then(
       () => {
@@ -500,7 +461,6 @@ function Peers({ t }: { t: TorrentSummary }) {
       (e) => toast("error", errorText(e)),
     );
   const countries = rows.some((p) => p.country);
-  const ip = (addr: string) => addr.replace(/^\[?([^\]]+?)\]?:\d+$/, "$1");
   return (
     <div>
       <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
@@ -539,17 +499,17 @@ function Peers({ t }: { t: TorrentSummary }) {
                     {p.country ? <span className="rounded bg-raised px-1.5 py-0.5 font-mono text-xs">{p.country}</span> : <span className="text-muted">–</span>}
                   </td>
                 )}
-                <td className="max-w-0 truncate px-2">{p.client}</td>
-                <td className="px-2 text-muted">{p.kind}</td>
-                <td className="px-2 text-right tabular-nums">{formatBytes(p.fetched)}</td>
+                <td className="max-w-0 truncate px-2" title={p.client ?? undefined}>{p.client}</td>
+                <td className="px-2 text-muted">{p.conn}</td>
+                <td className="px-2 text-right tabular-nums">{formatBytes(p.downloaded)}</td>
                 <td className="px-2 text-right tabular-nums">{formatBytes(p.uploaded)}</td>
                 <td className="px-2 text-right">
                   <button
                     className="btn-ghost p-1 hover:text-danger"
                     title="Ban this peer (all torrents)"
                     onClick={() =>
-                      api.banPeer(ip(p.addr)).then(
-                        () => toast("info", `Banned ${ip(p.addr)}. Unban it in Settings, Privacy & Security.`),
+                      api.banPeer(peerIp(p.addr)).then(
+                        () => toast("info", `Banned ${peerIp(p.addr)}. Unban it in Settings, Privacy & Security.`),
                         (e) => toast("error", errorText(e)),
                       )
                     }

@@ -120,7 +120,10 @@ pub async fn free_space(state: State<'_, AppState>, path: PathBuf) -> Res<u64> {
 }
 
 #[tauri::command]
-pub async fn torrent_peers(state: State<'_, AppState>, id: String) -> Res<serde_json::Value> {
+pub async fn torrent_peers(
+    state: State<'_, AppState>,
+    id: String,
+) -> Res<Vec<riptor_core::PeerInfo>> {
     engine(&state).await?.peers(&id).map_err(err)
 }
 

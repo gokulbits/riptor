@@ -619,6 +619,18 @@ export interface NetInfo {
   names: string[];
 }
 
+export interface PeerInfo {
+  addr: string;
+  /** Cleaned and capped in Rust. */
+  client: string | null;
+  state: string;
+  conn: "tcp" | "utp" | "socks" | null;
+  downloaded: number;
+  uploaded: number;
+  /** ISO 3166 code, when peer countries are on. */
+  country: string | null;
+}
+
 export interface CountryStatus {
   enabled: boolean;
   ready: boolean;

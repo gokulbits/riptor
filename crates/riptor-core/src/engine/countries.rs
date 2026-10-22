@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use tracing::{info, warn};
 
-use super::{unix_now, Engine, Job};
+use super::{unix_now, Engine, Job, PeerInfo};
 use crate::geoip::{self, GeoDb};
 
 const RETRY: Duration = Duration::from_secs(600);
@@ -111,26 +111,22 @@ impl Engine {
     }
 
     /// Adds `country` to each peer in librqbit's peer snapshot.
-    pub(super) fn add_countries(&self, peers: &mut serde_json::Value) {
+    pub(super) fn add_countries(&self, peers: &mut [PeerInfo]) {
         if let Some(db) = self.geo.lock().db.clone() {
             add_countries(&db, peers);
         }
     }
 }
 
-fn add_countries(db: &GeoDb, peers: &mut serde_json::Value) {
-    let Some(map) = peers.get_mut("peers").and_then(|p| p.as_object_mut()) else {
-        return;
-    };
-    for (addr, peer) in map.iter_mut() {
-        let ip = addr
+fn add_countries(db: &GeoDb, peers: &mut [PeerInfo]) {
+    for peer in peers {
+        let ip = peer
+            .addr
             .parse::<std::net::SocketAddr>()
             .map(|a| a.ip())
-            .or_else(|_| addr.parse::<std::net::IpAddr>());
-        if let (Ok(ip), Some(obj)) = (ip, peer.as_object_mut()) {
-            if let Some(cc) = db.lookup(ip) {
-                obj.insert("country".into(), cc.into());
-            }
+            .or_else(|_| peer.addr.parse::<std::net::IpAddr>());
+        if let Ok(ip) = ip {
+            peer.country = db.lookup(ip);
         }
     }
 }
@@ -143,22 +139,25 @@ mod tests {
     fn peers_get_a_country() {
         let db =
             GeoDb::parse(&b"1.0.0.0,1.0.0.255,AU\n2a00:1450::,2a00:1450:ffff::,IE\n"[..]).unwrap();
-        let mut v = serde_json::json!({ "peers": {
-            "1.0.0.7:6881": { "state": "live" },
-            "[2a00:1450::1]:51413": { "state": "live" },
-            "9.9.9.9:1": { "state": "live" },
-            "not an address": { "state": "live" },
-            "1.0.0.8:1": "not an object",
-        }});
-        add_countries(&db, &mut v);
-        let p = &v["peers"];
-        assert_eq!(p["1.0.0.7:6881"]["country"], "AU");
-        assert_eq!(p["[2a00:1450::1]:51413"]["country"], "IE");
-        assert!(p["9.9.9.9:1"].get("country").is_none());
-        assert!(p["not an address"].get("country").is_none());
-        // Anything else is left alone.
-        let mut other = serde_json::json!(null);
-        add_countries(&db, &mut other);
-        assert!(other.is_null());
+        let peer = |addr: &str| PeerInfo {
+            addr: addr.into(),
+            client: None,
+            state: "live",
+            conn: None,
+            downloaded: 0,
+            uploaded: 0,
+            country: None,
+        };
+        let mut peers = [
+            "1.0.0.7:6881",
+            "[2a00:1450::1]:51413",
+            "1.0.0.9",
+            "9.9.9.9:1",
+            "not an address",
+        ]
+        .map(peer);
+        add_countries(&db, &mut peers);
+        let got: Vec<_> = peers.iter().map(|p| p.country.as_deref()).collect();
+        assert_eq!(got, [Some("AU"), Some("IE"), Some("AU"), None, None]);
     }
 }

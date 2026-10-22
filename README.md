@@ -378,6 +378,7 @@ Bug reports, ideas and pull requests are welcome.
   - `cargo test --workspace`
   - `npm test`
   - `npx tsc -b --noEmit`
+  - `npm run lint`
 
   Any change that handles external input should come with a test that shows the attack failing.
 

@@ -34,8 +34,8 @@ mod watch;
 mod webseed;
 
 pub use engine::{
-    BackupSummary, CountryStatus, Engine, EngineConfig, QueueMove, RestoreOptions, RestoreReport,
-    SwarmView,
+    BackupSummary, CountryStatus, Engine, EngineConfig, PeerInfo, QueueMove, RestoreOptions,
+    RestoreReport, SwarmView,
 };
 pub use input::Source;
 pub use model::*;
