@@ -158,7 +158,7 @@ Riptor can take over your torrents from qBittorrent without downloading anything
 
 If Riptor can't find them (for example with a portable qBittorrent), click **Choose folder** and pick qBittorrent's `BT_backup` folder:
 
-- Windows: `%LOCALAPPDATA%qBittorrentBT_backup`
+- Windows: `%LOCALAPPDATA%\qBittorrent\BT_backup`
 - Linux: `~/.local/share/qBittorrent/BT_backup`, or `~/.var/app/org.qbittorrent.qBittorrent/data/qBittorrent/BT_backup` for the Flatpak
 
 Importing again is safe: torrents already in Riptor are left alone and the all-time totals aren't counted twice.

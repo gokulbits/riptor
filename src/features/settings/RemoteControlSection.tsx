@@ -235,8 +235,8 @@ export function RemoteControlSection({ s, set }: { s: Settings; set: (patch: Par
         )}
         {(w.bypass_localhost || w.bypass_subnets) && <Warning>Anyone who can reach Riptor from those addresses controls it without a password.</Warning>}
         <div className="grid grid-cols-3 gap-3">
-          <Field label="Ban client after consecutive failures" hint="0 never bans.">
-            <input className="input" type="number" min={0} max={1000} value={w.max_failures} onChange={(e) => edit({ max_failures: clampInt(e.target.value, 0, 1000) })} />
+          <Field label="Ban client after consecutive failures" hint="Each new ban on the same client lasts twice as long, up to a week.">
+            <input className="input" type="number" min={1} max={20} value={w.max_failures} onChange={(e) => edit({ max_failures: clampInt(e.target.value, 1, 20) })} />
           </Field>
           <Field label="Ban for (minutes)">
             <input className="input" type="number" min={1} max={43200} value={minutes(w.ban_secs)} onChange={(e) => edit({ ban_secs: clampInt(e.target.value, 1, 43200) * 60 })} />

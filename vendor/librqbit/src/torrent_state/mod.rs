@@ -401,15 +401,12 @@ impl ManagedTorrent {
                         "initialize_and_start",
                         token.clone(),
                         async move {
-                            let concurrent_init_semaphore =
-                                session.concurrent_initialize_semaphore.clone();
-                            let _permit = concurrent_init_semaphore
-                                .acquire()
-                                .await
-                                .context("bug: concurrent init semaphore was closed")?;
+                            let permit = session.acquire_init_permit().await?;
 
                             let check_result = init.check().await;
                             init.finish_check();
+                            // RIPTOR PATCH: the limit may have been lowered during the check.
+                            session.release_init_permit(permit);
 
                             match check_result {
                                 Ok(paused) => {

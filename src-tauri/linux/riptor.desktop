@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Riptor
+GenericName=BitTorrent client
+Comment=Lightweight BitTorrent client
+Exec=riptor %U
+StartupWMClass=riptor
+Icon=riptor
+Terminal=false
+Categories=Network;FileTransfer;P2P;
+Keywords=torrent;bittorrent;magnet;download;
+MimeType=application/x-bittorrent;x-scheme-handler/magnet;

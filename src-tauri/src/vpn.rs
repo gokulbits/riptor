@@ -124,7 +124,9 @@ async fn connect_management(
     let started = std::time::Instant::now();
     loop {
         if let Some(code) = helper.exit_code() {
-            bail!("{}", helper_failure(code));
+            // Let the stderr reader catch pkexec's last words.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            bail!("{}", helper_failure(code, &helper.stderr()));
         }
         #[cfg(target_os = "linux")]
         let attempt = {
@@ -162,14 +164,16 @@ async fn connect_management(
 
 const MANAGEMENT_WAIT: Duration = Duration::from_secs(20);
 
-fn helper_failure(code: i32) -> String {
+fn helper_failure(code: i32, stderr: &str) -> String {
+    if let Some(why) = crate::elevate::pkexec_failure(code, stderr) {
+        return why;
+    }
     match code {
         0 => "OpenVPN stopped before Riptor could talk to it".into(),
         2 => "the VPN helper was started incorrectly".into(),
         3 => "the profile was rejected by the VPN helper".into(),
         4 => "OpenVPN isn't installed".into(),
         5 => "OpenVPN failed to start (is another VPN using the adapter?)".into(),
-        126 | 127 if cfg!(not(windows)) => "administrator permission was declined".into(),
         c => format!("the VPN helper failed (code {c})"),
     }
 }
@@ -770,7 +774,7 @@ impl VpnManager {
             "wireguard".to_string(),
             cfg_path.to_string_lossy().into_owned(),
         ];
-        let mut child = crate::elevate::spawn(&helper_path()?, &args)?;
+        let (mut child, stderr) = crate::elevate::spawn(&helper_path()?, &args)?;
         let stdout = child
             .stdout
             .take()
@@ -786,8 +790,12 @@ impl VpnManager {
                 .ok()
                 .and_then(|r| r.ok())
                 .and_then(|s| s.code());
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            if let Some(why) = code.and_then(|c| crate::elevate::pkexec_failure(c, &stderr.text()))
+            {
+                bail!(why);
+            }
             bail!(match code {
-                Some(126) | Some(127) => "administrator permission was declined",
                 Some(3) => "the profile was rejected by the VPN helper",
                 Some(6) => "WireGuard tools (wg-quick) aren't installed",
                 _ => "WireGuard failed to start",

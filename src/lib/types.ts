@@ -337,6 +337,7 @@ export interface Settings {
   data_cap: DataCap | null;
   scrub_days: number | null;
   scrub_mib_per_sec: number;
+  checks_at_once: number;
   peer_countries: boolean;
   web_ui: WebUiSettings;
   close_to_tray: boolean;

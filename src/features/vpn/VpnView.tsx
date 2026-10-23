@@ -8,6 +8,7 @@ import {
   Loader2,
   Plug,
   PlugZap,
+  RotateCw,
   ShieldAlert,
   ShieldCheck,
   ShieldOff,
@@ -151,7 +152,17 @@ function SwarmCard() {
   );
 }
 
-function StatusCard({ status, killSwitch, onDisconnect }: { status: VpnStatus; killSwitch: boolean; onDisconnect: () => void }) {
+function StatusCard({
+  status,
+  killSwitch,
+  onDisconnect,
+  onRetry,
+}: {
+  status: VpnStatus;
+  killSwitch: boolean;
+  onDisconnect: () => void;
+  onRetry: (profileId: string) => void;
+}) {
   const network = useApp((s) => s.global?.network);
   const up = status.phase === "connected";
   const busy = status.phase === "connecting" || status.phase === "reconnecting";
@@ -189,11 +200,18 @@ function StatusCard({ status, killSwitch, onDisconnect }: { status: VpnStatus; k
           Public IP: <PublicIpView />
         </div>
       </div>
-      {status.phase !== "disconnected" && (
-        <button className="btn-ghost" onClick={onDisconnect}>
-          <Plug size={14} /> Disconnect
-        </button>
-      )}
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        {status.phase === "error" && status.profile_id && (
+          <button className="btn-primary" onClick={() => onRetry(status.profile_id!)}>
+            <RotateCw size={14} /> Try again
+          </button>
+        )}
+        {status.phase !== "disconnected" && (
+          <button className="btn-ghost" onClick={onDisconnect}>
+            <Plug size={14} /> {status.phase === "error" ? "Dismiss" : "Disconnect"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -397,6 +415,7 @@ export function VpnView() {
   };
 
   const disconnect = () => api.vpnDisconnect().catch((e) => toast("error", errorText(e)));
+  const retry = (id: string) => api.vpnConnect(id).catch((e) => toast("error", errorText(e)));
 
   if (!status || !prefs) {
     return <div className="flex h-full items-center justify-center text-sm text-muted">Loading VPN…</div>;
@@ -405,7 +424,7 @@ export function VpnView() {
   return (
     <div className="h-full overflow-auto">
       <div className="mx-auto max-w-3xl space-y-5 p-6">
-        <StatusCard status={status} killSwitch={killSwitch} onDisconnect={disconnect} />
+        <StatusCard status={status} killSwitch={killSwitch} onDisconnect={disconnect} onRetry={retry} />
         {status.phase === "connected" && <LeakCheckCard />}
         <SwarmCard />
 

@@ -728,6 +728,16 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
                     <option value="full">Pre-allocate full size</option>
                   </select>
                 </Field>
+                <Field label="Torrents to check at once" hint="1 suits hard drives; SSDs can take more">
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    max={16}
+                    value={s.checks_at_once}
+                    onChange={(e) => set({ checks_at_once: Math.min(16, Math.max(1, Math.round(Number(e.target.value)) || 1)) })}
+                  />
+                </Field>
               </div>
             </Group>
           )}

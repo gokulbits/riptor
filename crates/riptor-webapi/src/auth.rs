@@ -2,7 +2,7 @@
 //! password (Argon2id), the API key (SHA-256) and the dynamic DNS password. Also sessions and
 //! bans after repeated failures.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,6 +20,13 @@ const MAX_PASSWORD: usize = 256;
 pub const MAX_FAILURES: u32 = 5;
 const MAX_SESSIONS: usize = 32;
 const MAX_TRACKED_IPS: usize = 4096;
+/// Each ban on the same client lasts twice as long as the last, up to this.
+const MAX_BAN: Duration = Duration::from_secs(7 * 86_400);
+/// A client's ban history is forgotten after this long without a failure.
+const FORGET_AFTER: Duration = Duration::from_secs(7 * 86_400);
+/// Failures from all clients together: past this many in the window, logins pause.
+pub const GLOBAL_FAILURES: usize = 30;
+const GLOBAL_WINDOW: Duration = Duration::from_secs(3600);
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Stored {
@@ -98,7 +105,7 @@ pub fn ddns_password(data_dir: &Path) -> Option<String> {
 /// Ban and session limits from the settings.
 #[derive(Clone, Copy, Debug)]
 pub struct Policy {
-    /// 0 never bans.
+    /// Failures in a row before a ban; at least 1.
     pub max_failures: u32,
     pub ban: Duration,
     pub idle: Duration,
@@ -169,6 +176,192 @@ pub enum Login {
     Ok(String),
     Fails,
     Banned,
+    /// Too many failures from all clients together; nobody can sign in with a password for now.
+    Paused,
+}
+
+/// One ban covers a whole IPv6 /64, which a single home or server usually has.
+fn client_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let mut seg = v6.segments();
+                seg[4..].fill(0);
+                IpAddr::V6(seg.into())
+            }
+        },
+        v4 => v4,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Record {
+    /// Failures since the last ban or success.
+    fails: u32,
+    /// Checks under way, counted as failures until they finish.
+    pending: u32,
+    /// Bans so far, for doubling the next one.
+    strikes: u32,
+    until: Option<Instant>,
+    last: Instant,
+}
+
+impl Record {
+    fn banned(&self, now: Instant) -> bool {
+        self.until.is_some_and(|u| now < u)
+    }
+}
+
+#[derive(Default)]
+struct ThrottleState {
+    clients: HashMap<IpAddr, Record>,
+    recent: VecDeque<Instant>,
+    pending: usize,
+}
+
+/// Failed sign-ins (password or API key), kept while Riptor runs, across server restarts.
+#[derive(Default)]
+pub struct Throttle(Mutex<ThrottleState>);
+
+impl ThrottleState {
+    fn prune(&mut self, now: Instant) {
+        while self
+            .recent
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= GLOBAL_WINDOW)
+        {
+            self.recent.pop_front();
+        }
+    }
+
+    /// Room for a new client: quiet, unbanned ones go first; bans are never dropped.
+    fn make_room(&mut self, now: Instant) -> bool {
+        if self.clients.len() < MAX_TRACKED_IPS {
+            return true;
+        }
+        self.clients.retain(|_, r| {
+            r.pending > 0 || r.banned(now) || now.duration_since(r.last) < FORGET_AFTER
+        });
+        if self.clients.len() < MAX_TRACKED_IPS {
+            return true;
+        }
+        let victim = self
+            .clients
+            .iter()
+            .filter(|(_, r)| r.pending == 0 && !r.banned(now) && r.strikes == 0)
+            .min_by_key(|(_, r)| r.last)
+            .map(|(k, _)| *k);
+        victim.is_some_and(|k| self.clients.remove(&k).is_some())
+    }
+}
+
+/// A sign-in attempt under way; dropped unfinished (the client hung up), it counts as a failure.
+pub struct Attempt {
+    throttle: Arc<Throttle>,
+    ip: IpAddr,
+    policy: Policy,
+    done: bool,
+}
+
+impl Attempt {
+    pub fn finish(mut self, ok: bool) {
+        self.done = true;
+        self.throttle.end(self.ip, ok, &self.policy);
+    }
+}
+
+impl Drop for Attempt {
+    fn drop(&mut self) {
+        if !self.done {
+            self.throttle.end(self.ip, false, &self.policy);
+        }
+    }
+}
+
+impl Throttle {
+    /// Starts a sign-in attempt, or says why it can't be tried now.
+    pub fn begin(self: &Arc<Self>, ip: IpAddr, policy: &Policy) -> Result<Attempt, Login> {
+        self.reserve(ip, policy)?;
+        Ok(Attempt {
+            throttle: self.clone(),
+            ip,
+            policy: *policy,
+            done: false,
+        })
+    }
+
+    fn reserve(&self, ip: IpAddr, policy: &Policy) -> Result<(), Login> {
+        let key = client_key(ip);
+        let now = Instant::now();
+        let mut st = self.0.lock();
+        st.prune(now);
+        if st.clients.get(&key).is_some_and(|r| r.banned(now)) {
+            return Err(Login::Banned);
+        }
+        if st.recent.len() + st.pending >= GLOBAL_FAILURES {
+            return Err(Login::Paused);
+        }
+        if !st.clients.contains_key(&key) && !st.make_room(now) {
+            // Every slot holds a ban or a live attempt.
+            return Err(Login::Paused);
+        }
+        let r = st.clients.entry(key).or_insert(Record {
+            fails: 0,
+            pending: 0,
+            strikes: 0,
+            until: None,
+            last: now,
+        });
+        // Attempts already in flight count, so parallel requests can't slip past the limit.
+        if r.fails + r.pending >= policy.max_failures.max(1) {
+            return Err(Login::Banned);
+        }
+        r.pending += 1;
+        st.pending += 1;
+        Ok(())
+    }
+
+    fn end(&self, ip: IpAddr, ok: bool, policy: &Policy) {
+        let key = client_key(ip);
+        let now = Instant::now();
+        let mut st = self.0.lock();
+        st.pending = st.pending.saturating_sub(1);
+        if !ok {
+            st.recent.push_back(now);
+        }
+        let Some(r) = st.clients.get_mut(&key) else {
+            return;
+        };
+        r.pending = r.pending.saturating_sub(1);
+        r.last = now;
+        if ok {
+            r.fails = 0;
+            r.strikes = 0;
+            return;
+        }
+        r.fails += 1;
+        if r.fails >= policy.max_failures.max(1) {
+            r.fails = 0;
+            r.strikes = r.strikes.saturating_add(1);
+            let doubling = 2u32.saturating_pow(r.strikes.saturating_sub(1).min(20));
+            let ban = policy
+                .ban
+                .saturating_mul(doubling)
+                .min(MAX_BAN)
+                .max(policy.ban);
+            r.until = Some(now + ban);
+        }
+    }
+
+    pub fn banned(&self, ip: IpAddr) -> bool {
+        let now = Instant::now();
+        self.0
+            .lock()
+            .clients
+            .get(&client_key(ip))
+            .is_some_and(|r| r.banned(now))
+    }
 }
 
 pub struct Auth {
@@ -177,79 +370,65 @@ pub struct Auth {
     policy: Policy,
     api_key: Option<String>,
     sessions: Mutex<HashMap<String, Instant>>,
-    failures: Mutex<HashMap<IpAddr, (u32, Instant)>>,
+    throttle: Arc<Throttle>,
     // Argon2 is meant to be slow; two at a time keeps it from tying up the CPU.
     checks: Arc<Semaphore>,
 }
 
 impl Auth {
     pub fn new(data_dir: &Path, username: &str, policy: Policy) -> Self {
+        Self::with_throttle(data_dir, username, policy, Arc::default())
+    }
+
+    pub fn with_throttle(
+        data_dir: &Path,
+        username: &str,
+        policy: Policy,
+        throttle: Arc<Throttle>,
+    ) -> Self {
         Self {
             file: data_dir.join(FILE),
             username: username.to_string(),
             policy,
             api_key: read_secrets(&data_dir.join(FILE)).api_key,
             sessions: Mutex::new(HashMap::new()),
-            failures: Mutex::new(HashMap::new()),
+            throttle,
             checks: Arc::new(Semaphore::new(2)),
         }
     }
 
     pub fn banned(&self, ip: IpAddr) -> bool {
-        let mut f = self.failures.lock();
-        match f.get(&ip) {
-            Some((n, since)) if self.policy.max_failures > 0 && *n >= self.policy.max_failures => {
-                if since.elapsed() < self.policy.ban {
-                    return true;
-                }
-                f.remove(&ip);
-                false
-            }
-            _ => false,
-        }
-    }
-
-    fn fail(&self, ip: IpAddr) {
-        let mut f = self.failures.lock();
-        if f.len() >= MAX_TRACKED_IPS {
-            f.retain(|_, (_, since)| since.elapsed() < self.policy.ban);
-            if f.len() >= MAX_TRACKED_IPS {
-                f.clear();
-            }
-        }
-        let e = f.entry(ip).or_insert((0, Instant::now()));
-        e.0 += 1;
-        e.1 = Instant::now();
+        self.throttle.banned(ip)
     }
 
     pub async fn login(&self, ip: IpAddr, username: &str, password: &str) -> Login {
-        if self.banned(ip) {
-            return Login::Banned;
-        }
+        let attempt = match self.throttle.begin(ip, &self.policy) {
+            Ok(a) => a,
+            Err(why) => return why,
+        };
         let ok = match (load(&self.file), password.len() <= MAX_PASSWORD * 4) {
-            (Some(stored), true) => {
-                let Ok(_slot) = self.checks.clone().acquire_owned().await else {
-                    return Login::Fails;
-                };
-                let password = password.to_string();
-                let check = tokio::task::spawn_blocking(move || {
-                    let salt = b64().decode(&stored.salt).ok()?;
-                    let want = b64().decode(&stored.hash).ok()?;
-                    let got = derive(&password, &salt, stored.m_cost, stored.t_cost).ok()?;
-                    Some(same(&got, &want))
-                })
-                .await;
-                // Both are always checked, so timing doesn't say which was wrong.
-                matches!(check, Ok(Some(true)))
-                    & same(username.as_bytes(), self.username.as_bytes())
-            }
+            (Some(stored), true) => match self.checks.clone().acquire_owned().await {
+                Ok(_slot) => {
+                    let password = password.to_string();
+                    let check = tokio::task::spawn_blocking(move || {
+                        let salt = b64().decode(&stored.salt).ok()?;
+                        let want = b64().decode(&stored.hash).ok()?;
+                        let got = derive(&password, &salt, stored.m_cost, stored.t_cost).ok()?;
+                        Some(same(&got, &want))
+                    })
+                    .await;
+                    // Both are always checked, so timing doesn't say which was wrong.
+                    matches!(check, Ok(Some(true)))
+                        & same(username.as_bytes(), self.username.as_bytes())
+                }
+                Err(_) => false,
+            },
             _ => false,
         };
+        attempt.finish(ok);
         if !ok {
-            self.fail(ip);
             return Login::Fails;
         }
-        self.failures.lock().remove(&ip);
         Login::Ok(self.new_session())
     }
 
@@ -279,6 +458,20 @@ impl Auth {
         self.api_key
             .as_ref()
             .is_some_and(|want| same(sha256_hex(key).as_bytes(), want.as_bytes()))
+    }
+
+    /// An API key sent by `ip`; wrong keys count as failed sign-ins, like passwords.
+    pub fn api_key_from(&self, ip: IpAddr, key: &str) -> bool {
+        match self.throttle.begin(ip, &self.policy) {
+            Ok(attempt) => {
+                let ok = self.api_key_ok(key);
+                attempt.finish(ok);
+                ok
+            }
+            // A pause is for password guessing; a 192-bit key can't be guessed.
+            Err(Login::Paused) => self.api_key_ok(key),
+            Err(_) => false,
+        }
     }
 
     /// True for a live session, which this also keeps alive.
@@ -377,5 +570,188 @@ mod tests {
             std::fs::write(d.path().join(FILE), forged).unwrap();
             assert!(!has_password(d.path()), "{forged}");
         }
+    }
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    fn policy(max_failures: u32, ban_ms: u64) -> Policy {
+        Policy {
+            max_failures,
+            ban: Duration::from_millis(ban_ms),
+            idle: Duration::from_secs(3600),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_guesses_cant_slip_past_the_limit() {
+        let d = tempfile::tempdir().unwrap();
+        set_password(d.path(), "correct horse").unwrap();
+        let auth = Arc::new(Auth::new(d.path(), "admin", policy(3, 3_600_000)));
+        let mut set = tokio::task::JoinSet::new();
+        for i in 0..40 {
+            let auth = auth.clone();
+            set.spawn(async move {
+                auth.login(ip("192.168.1.9"), "admin", &format!("guess{i}"))
+                    .await
+            });
+        }
+        let (mut checked, mut refused) = (0, 0);
+        while let Some(r) = set.join_next().await {
+            match r.unwrap() {
+                Login::Fails => checked += 1,
+                Login::Banned => refused += 1,
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!((checked, refused), (3, 37), "only 3 passwords may be tried");
+        assert_eq!(
+            auth.login(ip("192.168.1.9"), "admin", "correct horse")
+                .await,
+            Login::Banned
+        );
+    }
+
+    #[tokio::test]
+    async fn bans_double_each_time() {
+        let d = tempfile::tempdir().unwrap();
+        let auth = Auth::new(d.path(), "admin", policy(1, 200));
+        let me = ip("10.0.0.7");
+        assert_eq!(auth.login(me, "admin", "x").await, Login::Fails);
+        assert_eq!(auth.login(me, "admin", "x").await, Login::Banned);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            auth.login(me, "admin", "x").await,
+            Login::Fails,
+            "first ban over"
+        );
+        // The second ban lasts 400 ms, not 200.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(auth.login(me, "admin", "x").await, Login::Banned);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(auth.login(me, "admin", "x").await, Login::Fails);
+    }
+
+    #[tokio::test]
+    async fn one_ban_covers_an_ipv6_slash_64() {
+        let d = tempfile::tempdir().unwrap();
+        let auth = Auth::new(d.path(), "admin", policy(1, 3_600_000));
+        assert_eq!(
+            auth.login(ip("2001:db8::1"), "admin", "x").await,
+            Login::Fails
+        );
+        assert_eq!(
+            auth.login(ip("2001:db8::ffff:2"), "admin", "x").await,
+            Login::Banned
+        );
+        assert_eq!(
+            auth.login(ip("2001:db8:0:1::1"), "admin", "x").await,
+            Login::Fails
+        );
+        // A v4-mapped address is the IPv4 client.
+        assert_eq!(auth.login(ip("10.1.1.1"), "admin", "x").await, Login::Fails);
+        assert_eq!(
+            auth.login(ip("::ffff:10.1.1.1"), "admin", "x").await,
+            Login::Banned
+        );
+    }
+
+    #[tokio::test]
+    async fn guesses_spread_over_many_addresses_pause_sign_ins() {
+        let d = tempfile::tempdir().unwrap();
+        set_password(d.path(), "correct horse").unwrap();
+        let key = new_api_key(d.path()).unwrap();
+        let auth = Auth::new(d.path(), "admin", policy(20, 3_600_000));
+        for i in 0..GLOBAL_FAILURES {
+            let who = ip(&format!("10.9.{}.{}", i / 200, i % 200 + 1));
+            // A wrong user name skips nothing: the password is still checked.
+            assert_eq!(auth.login(who, "nobody", "x").await, Login::Fails);
+        }
+        assert_eq!(
+            auth.login(ip("10.99.0.1"), "admin", "guess").await,
+            Login::Paused
+        );
+        assert_eq!(
+            auth.login(ip("10.99.0.2"), "admin", "correct horse").await,
+            Login::Paused,
+            "even the right password waits"
+        );
+        assert!(!auth.api_key_from(ip("10.99.0.3"), "rpt_guess"));
+        // The owner's API key still works.
+        assert!(auth.api_key_from(ip("10.99.0.4"), &key));
+    }
+
+    #[tokio::test]
+    async fn hanging_up_mid_check_still_counts() {
+        let throttle = Arc::new(Throttle::default());
+        let p = policy(2, 3_600_000);
+        let me = ip("192.168.4.4");
+        drop(throttle.begin(me, &p).unwrap());
+        drop(throttle.begin(me, &p).unwrap());
+        assert!(throttle.banned(me));
+        assert!(matches!(throttle.begin(me, &p), Err(Login::Banned)));
+        // Nothing is left counted as in flight.
+        assert_eq!(throttle.0.lock().pending, 0);
+    }
+
+    #[test]
+    fn wrong_api_keys_count_as_failures() {
+        let d = tempfile::tempdir().unwrap();
+        let key = new_api_key(d.path()).unwrap();
+        let auth = Auth::new(d.path(), "admin", policy(3, 3_600_000));
+        let me = ip("192.168.2.2");
+        for _ in 0..3 {
+            assert!(!auth.api_key_from(me, "rpt_wrong"));
+        }
+        assert!(auth.banned(me));
+        assert!(
+            !auth.api_key_from(me, &key),
+            "a banned client can't use the key either"
+        );
+        assert!(auth.api_key_from(ip("192.168.2.3"), &key));
+    }
+
+    #[tokio::test]
+    async fn bans_outlive_a_server_restart() {
+        let d = tempfile::tempdir().unwrap();
+        let throttle = Arc::new(Throttle::default());
+        let me = ip("192.168.3.3");
+        let first = Auth::with_throttle(d.path(), "admin", policy(1, 3_600_000), throttle.clone());
+        assert_eq!(first.login(me, "admin", "x").await, Login::Fails);
+        drop(first);
+        let second = Auth::with_throttle(d.path(), "admin", policy(1, 3_600_000), throttle);
+        assert_eq!(second.login(me, "admin", "x").await, Login::Banned);
+    }
+
+    #[test]
+    fn a_full_table_never_drops_a_ban() {
+        let now = Instant::now();
+        let mut st = ThrottleState::default();
+        let rec = |until| Record {
+            fails: 0,
+            pending: 0,
+            strikes: 1,
+            until,
+            last: now,
+        };
+        let banned = ip("172.16.0.1");
+        st.clients
+            .insert(banned, rec(Some(now + Duration::from_secs(3600))));
+        for i in 1..MAX_TRACKED_IPS as u32 {
+            let a = std::net::Ipv4Addr::from(0x0b00_0000 + i);
+            st.clients.insert(IpAddr::V4(a), rec(None));
+        }
+        // Every other entry has a ban history, so there's no room, and the ban stays.
+        assert!(!st.make_room(now));
+        assert!(st.clients.get(&banned).is_some_and(|r| r.banned(now)));
+        // Without history the quietest one makes way.
+        for r in st.clients.values_mut() {
+            if r.until.is_none() {
+                r.strikes = 0;
+            }
+        }
+        assert!(st.make_room(now));
+        assert!(st.clients.get(&banned).is_some_and(|r| r.banned(now)));
     }
 }

@@ -1669,6 +1669,8 @@ impl Engine {
         *self.settings.write() = new.clone();
         self.session()
             .set_banned(new.banned_ips.iter().copied().collect());
+        self.session()
+            .set_concurrent_init_limit(new.checks_at_once as usize);
         self.storage.reconfigure(new.storage.clone());
         *self.last_disk_check.lock() = None;
         self.apply_limits();
@@ -1793,6 +1795,13 @@ impl Engine {
     #[doc(hidden)]
     pub fn state_writes(&self) -> u64 {
         self.saver.writes()
+    }
+
+    /// (torrents checked at once, checks that could start right now).
+    #[doc(hidden)]
+    pub fn check_slots(&self) -> (usize, usize) {
+        let s = self.session();
+        (s.concurrent_init_limit(), s.concurrent_init_available())
     }
 
     // -------------------------------------------------------------- create
@@ -3056,6 +3065,7 @@ async fn build_session(
         blocklist_url: None,
         blocklist_file,
         peer_limit: s.peer_limit,
+        concurrent_init_limit: Some(s.checks_at_once as usize),
         disable_local_service_discovery: !s.lsd || anon || vpn.is_some() || blocked,
         client_name_and_version: anon.then(|| "BitTorrent".to_string()),
         ..Default::default()

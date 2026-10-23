@@ -714,3 +714,84 @@ async fn transfer_history_is_sealed_and_edits_are_rejected() {
     assert!(e.statistics().history_reset.is_none());
     e.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn checks_at_once_follows_the_setting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let downloads = tmp.path().join("downloads");
+    std::fs::create_dir_all(&data).unwrap();
+    let mut s = quiet_settings(&downloads);
+    s.checks_at_once = 2;
+    let e = engine(&data, s.clone()).await;
+    assert_eq!(e.check_slots(), (2, 2));
+
+    s.checks_at_once = 5;
+    e.update_settings(s.clone()).await.unwrap();
+    assert_eq!(e.check_slots(), (5, 5));
+    s.checks_at_once = 1;
+    e.update_settings(s.clone()).await.unwrap();
+    assert_eq!(e.check_slots(), (1, 1));
+
+    for bad in [0, 17] {
+        s.checks_at_once = bad;
+        assert!(e.update_settings(s.clone()).await.is_err(), "{bad}");
+        assert_eq!(e.check_slots(), (1, 1));
+    }
+    e.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lowering_checks_at_once_mid_check_leaves_no_extra_slots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session = librqbit::Session::new_with_opts(
+        tmp.path().to_path_buf(),
+        librqbit::SessionOptions {
+            dht: None,
+            persistence: None,
+            disable_local_service_discovery: true,
+            listen: None,
+            concurrent_init_limit: Some(2),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let slots = || {
+        (
+            session.concurrent_init_limit(),
+            session.concurrent_init_available(),
+        )
+    };
+    assert_eq!(slots(), (2, 2));
+
+    // Both checks running; the lower limit takes effect as they finish.
+    let a = session.acquire_init_permit().await.unwrap();
+    let b = session.acquire_init_permit().await.unwrap();
+    session.set_concurrent_init_limit(1);
+    assert_eq!(slots(), (1, 0));
+    session.release_init_permit(a);
+    assert_eq!(
+        slots(),
+        (1, 0),
+        "the first finished check gives its slot up"
+    );
+    session.release_init_permit(b);
+    assert_eq!(slots(), (1, 1));
+
+    // Lowered and raised again before anything finished: nothing is lost or added.
+    session.set_concurrent_init_limit(2);
+    let a = session.acquire_init_permit().await.unwrap();
+    let b = session.acquire_init_permit().await.unwrap();
+    session.set_concurrent_init_limit(1);
+    session.set_concurrent_init_limit(3);
+    assert_eq!(slots(), (3, 1));
+    session.release_init_permit(a);
+    session.release_init_permit(b);
+    assert_eq!(slots(), (3, 3));
+
+    // Idle slots go straight away; zero is treated as one.
+    session.set_concurrent_init_limit(0);
+    assert_eq!(slots(), (1, 1));
+    session.stop().await;
+}

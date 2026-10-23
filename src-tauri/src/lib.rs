@@ -42,7 +42,12 @@ fn items_from_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Vec<Source> {
             if a.starts_with("magnet:?") {
                 Some(Source::Magnet(a.to_string()))
             } else {
-                let p = std::path::PathBuf::from(a);
+                // Linux file managers pass file:// URLs to `Exec=... %U`.
+                let p = if a.starts_with("file://") {
+                    url::Url::parse(a).ok()?.to_file_path().ok()?
+                } else {
+                    std::path::PathBuf::from(a)
+                };
                 let is_torrent = p
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("torrent"));
@@ -449,5 +454,23 @@ mod tests {
             dir.join("missing.torrent").to_str().unwrap(),
         ]);
         assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn file_urls_from_file_managers_are_read_as_paths() {
+        let dir = std::env::temp_dir().join("riptor-args-url-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = dir.join("with space.torrent");
+        std::fs::write(&t, b"d4:infode").unwrap();
+        let file_url = url::Url::from_file_path(&t).unwrap().to_string();
+        assert!(file_url.contains("%20"));
+        let items = items_from_args([
+            file_url.as_str(),
+            "file://remote-host/x.torrent",
+            "file:///nowhere/missing.torrent",
+            "file://",
+        ]);
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], Source::File(p) if *p == t));
     }
 }

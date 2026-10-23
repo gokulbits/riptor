@@ -122,8 +122,8 @@ impl Ctx {
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "));
-        bearer.is_some_and(|k| self.auth.api_key_ok(k.trim()))
-            || session_id(headers).is_some_and(|sid| self.auth.check(sid))
+        session_id(headers).is_some_and(|sid| self.auth.check(sid))
+            || bearer.is_some_and(|k| self.auth.api_key_from(ip, k.trim()))
     }
 
     /// CSRF (Origin/Referer) and Host checks, as configured.
@@ -285,6 +285,10 @@ async fn login(
         Login::Banned => text(
             StatusCode::FORBIDDEN,
             "Your IP address has been banned after too many failed authentication attempts.",
+        ),
+        Login::Paused => text(
+            StatusCode::FORBIDDEN,
+            "Too many failed sign-ins from different addresses; sign-ins are paused for a while.",
         ),
     }
 }

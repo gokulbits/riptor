@@ -182,8 +182,9 @@ mod imp {
         std::fs::create_dir_all(&dir)?;
         let exe = launcher()?;
         let quoted = format!("\"{}\"", exe.display().to_string().replace('"', "\\\""));
+        // Only a handler; the package's own entry is the one in the menu.
         let entry = format!(
-            "[Desktop Entry]\nType=Application\nName=Riptor\nComment=Lightweight BitTorrent client\nExec={quoted} %U\nIcon=riptor\nTerminal=false\nCategories=Network;FileTransfer;P2P;\nMimeType={};\n",
+            "[Desktop Entry]\nType=Application\nName=Riptor\nComment=Lightweight BitTorrent client\nExec={quoted} %U\nIcon=riptor\nTerminal=false\nCategories=Network;FileTransfer;P2P;\nMimeType={};\nNoDisplay=true\n",
             MIMES.join(";")
         );
         std::fs::write(dir.join(DESKTOP), entry)?;

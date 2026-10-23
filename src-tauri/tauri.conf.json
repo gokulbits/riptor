@@ -81,6 +81,7 @@
           "python3",
           "bubblewrap"
         ],
+        "desktopTemplate": "linux/riptor.desktop",
         "files": {
           "/usr/share/polkit-1/actions/app.riptor.vpn-helper.policy": "linux/app.riptor.vpn-helper.policy",
           "/usr/lib/systemd/user/riptord.service": "linux/riptord.service"
@@ -93,6 +94,7 @@
           "python3",
           "bubblewrap"
         ],
+        "desktopTemplate": "linux/riptor.desktop",
         "files": {
           "/usr/share/polkit-1/actions/app.riptor.vpn-helper.policy": "linux/app.riptor.vpn-helper.policy",
           "/usr/lib/systemd/user/riptord.service": "linux/riptord.service"

@@ -49,6 +49,8 @@ pub struct ColumnPref {
 
 const MAX_COLUMNS: usize = 32;
 const MAX_EXTRA_TRACKERS: usize = 100;
+const MAX_CHECKS_AT_ONCE: u32 = 16;
+const MAX_LOGIN_FAILURES: u32 = 20;
 
 /// http(s) or udp, no credentials or odd characters.
 pub fn valid_tracker(t: &str) -> bool {
@@ -128,7 +130,7 @@ pub struct WebUi {
     pub bypass_subnets: bool,
     /// CIDR ranges, e.g. `192.168.1.0/24`.
     pub subnet_whitelist: Vec<String>,
-    /// Consecutive failed logins before a ban; 0 never bans.
+    /// Consecutive failed logins before a ban; bans can't be turned off.
     pub max_failures: u32,
     pub ban_secs: u32,
     pub session_timeout_secs: u32,
@@ -261,7 +263,10 @@ impl WebUi {
         for s in &self.subnet_whitelist {
             ensure!(parse_cidr(s).is_some(), "not a subnet: {s}");
         }
-        ensure!(self.max_failures <= 1000, "the ban limit is too high");
+        ensure!(
+            (1..=MAX_LOGIN_FAILURES).contains(&self.max_failures),
+            "ban after 1 to {MAX_LOGIN_FAILURES} failed sign-ins"
+        );
         ensure!(
             (60..=86_400 * 30).contains(&self.ban_secs),
             "bans last from a minute to 30 days"
@@ -414,6 +419,8 @@ pub struct Settings {
     pub scrub_days: Option<u32>,
     /// How fast the background check may read.
     pub scrub_mib_per_sec: u32,
+    /// Torrents whose files are checked at the same time; the rest wait their turn.
+    pub checks_at_once: u32,
     /// Download DB-IP's country list to show where peers are; off until turned on.
     pub peer_countries: bool,
     pub web_ui: WebUi,
@@ -466,6 +473,7 @@ impl Default for Settings {
             data_cap: None,
             scrub_days: Some(30),
             scrub_mib_per_sec: 32,
+            checks_at_once: 3,
             peer_countries: false,
             web_ui: WebUi::default(),
             close_to_tray: true,
@@ -479,6 +487,12 @@ impl Default for Settings {
 impl Settings {
     /// Brings settings from older versions up to date.
     pub fn migrate(&mut self) {
+        // 0.1.6 allowed "never ban" and up to 1000 tries.
+        let w = &mut self.web_ui;
+        if w.max_failures == 0 {
+            w.max_failures = WebUi::default().max_failures;
+        }
+        w.max_failures = w.max_failures.min(MAX_LOGIN_FAILURES);
         if let Some(p) = self.watched_folder.take() {
             if !self.watched_folders.iter().any(|w| w.path == p) {
                 self.watched_folders.insert(
@@ -593,6 +607,10 @@ impl Settings {
             (1..=4096).contains(&self.scrub_mib_per_sec),
             "the data check speed must be 1 to 4096 MiB/s"
         );
+        anyhow::ensure!(
+            (1..=MAX_CHECKS_AT_ONCE).contains(&self.checks_at_once),
+            "check 1 to {MAX_CHECKS_AT_ONCE} torrents at once"
+        );
         if let Some(c) = &self.data_cap {
             anyhow::ensure!(
                 (1..=1_000_000).contains(&c.gib),
@@ -703,6 +721,45 @@ mod tests {
         s.incomplete_dir = None;
         s.download_dir = PathBuf::from("relative");
         assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn sign_in_bans_cant_be_turned_off() {
+        let mut s = Settings {
+            download_dir: std::env::temp_dir(),
+            ..Settings::default()
+        };
+        for bad in [0, MAX_LOGIN_FAILURES + 1, 1000] {
+            s.web_ui.max_failures = bad;
+            assert!(s.validate().is_err(), "{bad}");
+        }
+        // Settings from 0.1.6 are brought into range instead of being thrown away.
+        for (old, now) in [(0, 5), (1000, MAX_LOGIN_FAILURES), (3, 3)] {
+            s.web_ui.max_failures = old;
+            s.migrate();
+            assert_eq!(s.web_ui.max_failures, now);
+            s.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn checks_at_once_is_bounded() {
+        let mut s = Settings {
+            download_dir: std::env::temp_dir(),
+            ..Settings::default()
+        };
+        assert_eq!(s.checks_at_once, 3);
+        for ok in [1, 3, MAX_CHECKS_AT_ONCE] {
+            s.checks_at_once = ok;
+            s.validate().unwrap();
+        }
+        for bad in [0, MAX_CHECKS_AT_ONCE + 1, u32::MAX] {
+            s.checks_at_once = bad;
+            assert!(s.validate().is_err(), "{bad}");
+        }
+        // Settings saved before this option get the default.
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.checks_at_once, 3);
     }
 
     #[test]

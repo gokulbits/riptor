@@ -81,6 +81,17 @@ pub async fn start(
     cfg: &WebUi,
     bind: SocketAddr,
 ) -> anyhow::Result<Running> {
+    start_with(engine, data_dir, cfg, bind, Arc::default()).await
+}
+
+/// Like `start`, with failed sign-ins remembered in `throttle` across restarts.
+pub async fn start_with(
+    engine: Arc<Engine>,
+    data_dir: &Path,
+    cfg: &WebUi,
+    bind: SocketAddr,
+    throttle: Arc<auth::Throttle>,
+) -> anyhow::Result<Running> {
     cfg.validate()?;
     anyhow::ensure!(
         has_password(data_dir),
@@ -106,7 +117,7 @@ pub async fn start(
     };
     let ctx = Arc::new(api::Ctx::new(
         engine,
-        auth::Auth::new(data_dir, &cfg.username, policy),
+        auth::Auth::with_throttle(data_dir, &cfg.username, policy, throttle),
         data_dir.to_path_buf(),
         cfg.clone(),
     ));
@@ -145,6 +156,8 @@ pub async fn supervise(engine: Arc<Engine>, data_dir: PathBuf, status: Arc<Mutex
     type Want = (WebUi, Option<std::time::SystemTime>);
     let mut running: Option<(Want, Running)> = None;
     let mut failed: Option<Want> = None;
+    // Changing a setting restarts the server; bans stay.
+    let throttle = Arc::new(auth::Throttle::default());
     loop {
         let cfg = engine.settings().web_ui;
         let stamp = std::fs::metadata(data_dir.join(auth::FILE))
@@ -156,7 +169,15 @@ pub async fn supervise(engine: Arc<Engine>, data_dir: PathBuf, status: Arc<Mutex
             running = None;
             let mut st = Status::default();
             if let Some(w) = want.clone() {
-                match start(engine.clone(), &data_dir, &w.0, bind_addr(&w.0)).await {
+                match start_with(
+                    engine.clone(),
+                    &data_dir,
+                    &w.0,
+                    bind_addr(&w.0),
+                    throttle.clone(),
+                )
+                .await
+                {
                     Ok(r) => {
                         info!("remote control listening on {}", r.addr);
                         st = Status {

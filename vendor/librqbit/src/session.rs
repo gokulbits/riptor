@@ -136,6 +136,8 @@ pub struct Session {
 
     // Limits and throttling
     pub(crate) concurrent_initialize_semaphore: Arc<tokio::sync::Semaphore>,
+    /// RIPTOR PATCH: (limit, permits to retire when running checks finish), so it can change at runtime.
+    concurrent_init_limit: parking_lot::Mutex<(usize, usize)>,
     pub ratelimits: Limits,
 
     pub blocklist: IpRanges,
@@ -829,7 +831,11 @@ impl Session {
                 root_span: opts.root_span,
                 stats: Arc::new(SessionStats::new()),
                 concurrent_initialize_semaphore: Arc::new(tokio::sync::Semaphore::new(
-                    opts.concurrent_init_limit.unwrap_or(3),
+                    opts.concurrent_init_limit.unwrap_or(3).max(1),
+                )),
+                concurrent_init_limit: parking_lot::Mutex::new((
+                    opts.concurrent_init_limit.unwrap_or(3).max(1),
+                    0,
                 )),
                 udp_tracker_client,
                 ratelimits: Limits::new(opts.ratelimits),
@@ -1557,6 +1563,52 @@ impl Session {
 
         info!(id, "deleted torrent");
         Ok(())
+    }
+
+    // RIPTOR PATCH: how many torrents check their files at once. Checks already running finish.
+    pub fn set_concurrent_init_limit(&self, limit: usize) {
+        let limit = limit.max(1);
+        let mut g = self.concurrent_init_limit.lock();
+        let (current, debt) = &mut *g;
+        let sem = &self.concurrent_initialize_semaphore;
+        if limit > *current {
+            let more = limit - *current;
+            let paid = more.min(*debt);
+            *debt -= paid;
+            sem.add_permits(more - paid);
+        } else if limit < *current {
+            // Idle permits go now; ones held by running checks go when those finish.
+            let fewer = *current - limit;
+            *debt += fewer - sem.forget_permits(fewer);
+        }
+        *current = limit;
+    }
+
+    /// A slot for checking one torrent's files.
+    pub async fn acquire_init_permit(&self) -> anyhow::Result<tokio::sync::OwnedSemaphorePermit> {
+        self.concurrent_initialize_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .context("bug: concurrent init semaphore was closed")
+    }
+
+    /// A check is done with its permit: retire it if the limit was lowered meanwhile.
+    pub fn release_init_permit(&self, permit: tokio::sync::OwnedSemaphorePermit) {
+        let mut g = self.concurrent_init_limit.lock();
+        if g.1 > 0 {
+            g.1 -= 1;
+            permit.forget();
+        }
+    }
+
+    pub fn concurrent_init_limit(&self) -> usize {
+        self.concurrent_init_limit.lock().0
+    }
+
+    /// Checks that could start right now.
+    pub fn concurrent_init_available(&self) -> usize {
+        self.concurrent_initialize_semaphore.available_permits()
     }
 
     // RIPTOR PATCH: banned peers, checked with the blocklist.
