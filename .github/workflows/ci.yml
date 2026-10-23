@@ -49,10 +49,11 @@ jobs:
         # A hung mirror can hold a job for hours: give up on slow tries and retry.
         timeout-minutes: 20
         run: |
-          apt="sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          # Under sudo, so the timeout can stop apt-get; -k kills it if it ignores the first signal.
+          apt="apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           for try in 1 2 3; do
-            timeout 120 $apt update \
-              && timeout 480 $apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev \
+            sudo timeout -k 15 90 $apt update \
+              && sudo timeout -k 15 300 $apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev \
               && exit 0
             echo "apt-get failed (try $try), retrying"
             sudo dpkg --configure -a || true
@@ -95,10 +96,11 @@ jobs:
         # A hung mirror can hold a job for hours: give up on slow tries and retry.
         timeout-minutes: 20
         run: |
-          apt="sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          # Under sudo, so the timeout can stop apt-get; -k kills it if it ignores the first signal.
+          apt="apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           for try in 1 2 3; do
-            timeout 120 $apt update \
-              && timeout 480 $apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev \
+            sudo timeout -k 15 90 $apt update \
+              && sudo timeout -k 15 300 $apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev \
               && exit 0
             echo "apt-get failed (try $try), retrying"
             sudo dpkg --configure -a || true
@@ -133,10 +135,11 @@ jobs:
         # A hung mirror can hold a job for hours: give up on slow tries and retry.
         timeout-minutes: 20
         run: |
-          apt="sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          # Under sudo, so the timeout can stop apt-get; -k kills it if it ignores the first signal.
+          apt="apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           for try in 1 2 3; do
-            timeout 120 $apt update \
-              && timeout 480 $apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev \
+            sudo timeout -k 15 90 $apt update \
+              && sudo timeout -k 15 300 $apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev \
               && exit 0
             echo "apt-get failed (try $try), retrying"
             sudo dpkg --configure -a || true
