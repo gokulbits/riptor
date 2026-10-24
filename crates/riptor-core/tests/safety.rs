@@ -208,8 +208,9 @@ async fn fake_releases_are_added_stopped_and_disguised_files_flagged() {
         })
         .await
         .unwrap();
+    // Its files are checked first, so wait for that before looking at the state.
     let t = wait_for(&mut events, &id, "the fake release to show up", |t| {
-        t.suspicion.is_some()
+        t.suspicion.is_some() && t.state != riptor_core::TorrentState::Checking
     })
     .await;
     assert_eq!(t.state, riptor_core::TorrentState::Stopped);
