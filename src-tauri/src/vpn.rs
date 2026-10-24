@@ -37,6 +37,8 @@ pub struct VpnStatus {
     pub local_ip: Option<String>,
     pub forwarded_port: Option<u16>,
     pub message: Option<String>,
+    /// The desktop showed no password prompt; Riptor can ask for the password itself.
+    pub needs_password: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -126,7 +128,14 @@ async fn connect_management(
         if let Some(code) = helper.exit_code() {
             // Let the stderr reader catch pkexec's last words.
             tokio::time::sleep(Duration::from_millis(200)).await;
-            bail!("{}", helper_failure(code, &helper.stderr()));
+            if let Some(why) = helper.auth_failure() {
+                bail!(why);
+            }
+            let stderr = helper.stderr();
+            if crate::elevate::no_prompt(code, &stderr) {
+                return Err(crate::elevate::NoPrompt.into());
+            }
+            bail!("{}", helper_failure(code, &stderr));
         }
         #[cfg(target_os = "linux")]
         let attempt = {
@@ -411,6 +420,15 @@ impl VpnManager {
     }
 
     pub async fn connect(self: &Arc<Self>, profile_id: &str) -> anyhow::Result<()> {
+        self.connect_with(profile_id, None).await
+    }
+
+    /// `password` answers pkexec's own prompt when the desktop has no graphical one (Linux).
+    pub async fn connect_with(
+        self: &Arc<Self>,
+        profile_id: &str,
+        password: Option<crate::elevate::Password>,
+    ) -> anyhow::Result<()> {
         self.disconnect().await;
         let profile: Profile = self.store.get(profile_id)?;
         {
@@ -447,14 +465,21 @@ impl VpnManager {
                 phase: Phase::Connecting,
                 profile_id: Some(profile.id.clone()),
                 profile_name: Some(profile.name.clone()),
-                message: Some("Waiting for administrator permission…".into()),
+                message: Some(
+                    if password.is_some() {
+                        "Checking your password…"
+                    } else {
+                        "Waiting for administrator permission…"
+                    }
+                    .into(),
+                ),
                 ..Default::default()
             }
         });
         let started = match profile.kind {
-            Kind::OpenVpn => self.start(&profile).await,
+            Kind::OpenVpn => self.start(&profile, password).await,
             #[cfg(target_os = "linux")]
-            Kind::WireGuard => self.start_wireguard(&profile).await,
+            Kind::WireGuard => self.start_wireguard(&profile, password).await,
             #[cfg(not(target_os = "linux"))]
             Kind::WireGuard => Err(anyhow::anyhow!("WireGuard isn't available on this system")),
         };
@@ -464,6 +489,7 @@ impl VpnManager {
                 self.set_status(|s| {
                     s.phase = Phase::Error;
                     s.message = Some(format!("{e:#}"));
+                    s.needs_password = e.downcast_ref::<crate::elevate::NoPrompt>().is_some();
                 });
                 self.fall_back().await;
                 Err(e)
@@ -471,7 +497,11 @@ impl VpnManager {
         }
     }
 
-    async fn start(self: &Arc<Self>, profile: &Profile) -> anyhow::Result<()> {
+    async fn start(
+        self: &Arc<Self>,
+        profile: &Profile,
+        login: Option<crate::elevate::Password>,
+    ) -> anyhow::Result<()> {
         let config = self.store.materialize(&profile.id)?;
         // Linux: a Unix socket only this user can open. Elsewhere: loopback TCP.
         let port = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
@@ -500,7 +530,8 @@ impl VpnManager {
         ];
         // The helper stays running as OpenVPN's parent, so it shows under Riptor.
         let mut helper =
-            tokio::task::spawn_blocking(move || crate::elevate::start(&helper, &args)).await??;
+            tokio::task::spawn_blocking(move || crate::elevate::start(&helper, &args, login))
+                .await??;
         let connected = connect_management(&mut helper, port).await;
         let _ = std::fs::remove_file(&cfg_path);
         let _ = std::fs::remove_file(&pw_path);
@@ -754,7 +785,11 @@ impl VpnManager {
 
     /// The tunnel lasts as long as we hold the helper's stdin.
     #[cfg(target_os = "linux")]
-    async fn start_wireguard(self: &Arc<Self>, profile: &Profile) -> anyhow::Result<()> {
+    async fn start_wireguard(
+        self: &Arc<Self>,
+        profile: &Profile,
+        login: Option<crate::elevate::Password>,
+    ) -> anyhow::Result<()> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
         let config = self.store.materialize(&profile.id)?;
@@ -774,7 +809,7 @@ impl VpnManager {
             "wireguard".to_string(),
             cfg_path.to_string_lossy().into_owned(),
         ];
-        let (mut child, stderr) = crate::elevate::spawn(&helper_path()?, &args)?;
+        let (mut child, stderr, auth) = crate::elevate::spawn(&helper_path()?, &args, login)?;
         let stdout = child
             .stdout
             .take()
@@ -791,6 +826,12 @@ impl VpnManager {
                 .and_then(|r| r.ok())
                 .and_then(|s| s.code());
             tokio::time::sleep(Duration::from_millis(200)).await;
+            if let Some(why) = auth.as_ref().and_then(|a| a.failure()) {
+                bail!(why);
+            }
+            if code.is_some_and(|c| crate::elevate::no_prompt(c, &stderr.text())) {
+                return Err(crate::elevate::NoPrompt.into());
+            }
             if let Some(why) = code.and_then(|c| crate::elevate::pkexec_failure(c, &stderr.text()))
             {
                 bail!(why);

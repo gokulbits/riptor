@@ -539,6 +539,7 @@ export interface VpnStatus {
   local_ip: string | null;
   forwarded_port: number | null;
   message: string | null;
+  needs_password: boolean;
 }
 
 export interface VpnProfile {

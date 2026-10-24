@@ -354,6 +354,7 @@ pub fn run() {
             commands::vpn_delete,
             commands::vpn_set_credentials,
             commands::vpn_connect,
+            commands::vpn_connect_with_password,
             commands::vpn_disconnect,
             commands::vpn_status,
             commands::vpn_get_prefs,

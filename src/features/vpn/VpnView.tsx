@@ -14,7 +14,7 @@ import {
   ShieldOff,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { PublicIpView } from "../../components/PublicIp";
 import { Field, Toggle } from "../../components/ui";
 import { api, errorText, events } from "../../lib/ipc";
@@ -167,6 +167,7 @@ function StatusCard({
   const up = status.phase === "connected";
   const busy = status.phase === "connecting" || status.phase === "reconnecting";
   const Icon = up ? ShieldCheck : status.phase === "error" ? ShieldAlert : ShieldOff;
+  const askPassword = status.phase === "error" && status.needs_password && status.profile_id != null;
   return (
     <div className="card flex items-start gap-4 p-4">
       <Icon size={32} className={clsx("shrink-0", up ? "text-ok" : status.phase === "error" ? "text-danger" : "text-muted")} />
@@ -199,9 +200,10 @@ function StatusCard({
         <div className="flex items-center gap-1 pt-1 text-xs text-muted">
           Public IP: <PublicIpView />
         </div>
+        {askPassword && <AdminPasswordForm profileId={status.profile_id!} />}
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
-        {status.phase === "error" && status.profile_id && (
+        {status.phase === "error" && status.profile_id && !askPassword && (
           <button className="btn-primary" onClick={() => onRetry(status.profile_id!)}>
             <RotateCw size={14} /> Try again
           </button>
@@ -213,6 +215,49 @@ function StatusCard({
         )}
       </div>
     </div>
+  );
+}
+
+/** Linux, when the desktop showed no password prompt: the password goes to the system's own check. */
+function AdminPasswordForm({ profileId }: { profileId: string }) {
+  const toast = useApp((s) => s.toast);
+  const [pass, setPass] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!pass) return;
+    setBusy(true);
+    try {
+      await api.vpnConnectWithPassword(profileId, pass);
+    } catch (err) {
+      toast("error", errorText(err));
+    } finally {
+      setPass("");
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={submit} className="space-y-2 pt-2">
+      <p className="text-xs text-muted">
+        Enter your account password (your account needs administrator rights). Riptor passes it straight to the system's password
+        check and doesn't keep it.
+      </p>
+      <div className="flex gap-2">
+        <input
+          className="input flex-1"
+          type="password"
+          autoComplete="off"
+          aria-label="Your password"
+          placeholder="Your password"
+          value={pass}
+          onChange={(e) => setPass(e.target.value)}
+          autoFocus
+        />
+        <button type="submit" className="btn-primary" disabled={busy || !pass}>
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />} Connect
+        </button>
+      </div>
+    </form>
   );
 }
 

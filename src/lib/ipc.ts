@@ -147,6 +147,7 @@ export const api = {
   vpnSetCredentials: (id: string, username: string, password: string) =>
     invoke<void>("vpn_set_credentials", { id, username, password }),
   vpnConnect: (id: string) => invoke<void>("vpn_connect", { id }),
+  vpnConnectWithPassword: (id: string, password: string) => invoke<void>("vpn_connect_with_password", { id, password }),
   vpnDisconnect: () => invoke<void>("vpn_disconnect"),
   vpnStatus: () => invoke<VpnStatus>("vpn_status"),
   vpnPrefs: () => invoke<VpnPrefs>("vpn_get_prefs"),

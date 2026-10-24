@@ -721,6 +721,24 @@ pub async fn vpn_connect(state: State<'_, AppState>, id: String) -> Res<()> {
     vpn(&state)?.connect(&id).await.map_err(err)
 }
 
+/// Linux, when the desktop showed no password prompt: the password goes to pkexec's own prompt.
+#[tauri::command]
+pub async fn vpn_connect_with_password(
+    state: State<'_, AppState>,
+    id: String,
+    password: String,
+) -> Res<()> {
+    let password = crate::elevate::Password::new(password);
+    if !cfg!(target_os = "linux") {
+        return Err("Riptor only asks for the password itself on Linux".into());
+    }
+    crate::elevate::check_password(&password).map_err(err)?;
+    vpn(&state)?
+        .connect_with(&id, Some(password))
+        .await
+        .map_err(err)
+}
+
 #[tauri::command]
 pub async fn vpn_disconnect(state: State<'_, AppState>) -> Res<()> {
     vpn(&state)?.disconnect().await;
