@@ -79,7 +79,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
+      # Saving takes minutes; only main's cache gets reused, so other runs just restore it.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -144,11 +147,12 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: msrv
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo +"$MSRV" check --workspace --all-targets --locked
 
-  # Full-LTO builds are slow: tags and manual runs only.
+  # Full-LTO builds are slow: tags and manual runs only. They run alongside the checks;
+  # only the release job, which waits for every check, can put them on a release.
   bundle:
-    needs: [check, msrv, security]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
@@ -190,6 +194,7 @@ jobs:
           done
           exit 1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # Installers never build on main, so this cache has to be saved here to be reused.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -253,7 +258,7 @@ jobs:
 
   # Drafts only; a person publishes. The only job with write access.
   release:
-    needs: bundle
+    needs: [bundle, check, msrv, security]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     timeout-minutes: 20
