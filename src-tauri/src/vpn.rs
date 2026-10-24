@@ -473,9 +473,22 @@ impl VpnManager {
                     }
                     .into(),
                 ),
+                // Kept if this attempt fails later on, since a retry needs the password again.
+                needs_password: password.is_some(),
                 ..Default::default()
             }
         });
+        // On this desktop every new try needs the password again, so the box stays after a failure.
+        let asked_password = password.is_some();
+        info!(
+            "VPN connecting with profile {:?}{}",
+            profile.name,
+            if asked_password {
+                " (admin password typed in Riptor)"
+            } else {
+                ""
+            }
+        );
         let started = match profile.kind {
             Kind::OpenVpn => self.start(&profile, password).await,
             #[cfg(target_os = "linux")]
@@ -486,10 +499,12 @@ impl VpnManager {
         match started {
             Ok(()) => Ok(()),
             Err(e) => {
+                let no_prompt = e.downcast_ref::<crate::elevate::NoPrompt>().is_some();
+                warn!("VPN connect failed: {e:#}");
                 self.set_status(|s| {
                     s.phase = Phase::Error;
                     s.message = Some(format!("{e:#}"));
-                    s.needs_password = e.downcast_ref::<crate::elevate::NoPrompt>().is_some();
+                    s.needs_password = no_prompt || asked_password;
                 });
                 self.fall_back().await;
                 Err(e)
@@ -604,8 +619,13 @@ impl VpnManager {
             }
             cmds.on_line(&line);
             let parsed = mgmt::parse(&line);
-            if let Line::State { state, .. } = &parsed {
-                info!("VPN state: {state}");
+            match &parsed {
+                Line::State { state, .. } => info!("VPN state: {state}"),
+                // OpenVPN's own log, for the Logs view.
+                Line::Log { fatal: true, msg } => warn!("openvpn: {msg}"),
+                Line::Log { msg, .. } => info!("openvpn: {msg}"),
+                Line::Fatal(msg) => warn!("openvpn fatal: {msg}"),
+                _ => {}
             }
             // Give up as soon as the attempt can't work, instead of waiting for the timeout.
             let connecting = matches!(self.status.lock().phase, Phase::Connecting);

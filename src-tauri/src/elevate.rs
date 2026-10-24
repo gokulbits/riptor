@@ -128,9 +128,24 @@ impl Elevated {
 }
 
 /// The last few KiB someone wrote to stderr, read on a thread so the writer never blocks.
+/// Each line also goes to Riptor's log.
 #[cfg(not(windows))]
 #[derive(Clone, Default)]
 pub struct Tail(std::sync::Arc<parking_lot::Mutex<String>>);
+
+/// One line from pkexec or the VPN helper into Riptor's log, bounded and without control characters.
+#[cfg(not(windows))]
+fn log_line(from: &str, line: &[u8]) {
+    let text: String = String::from_utf8_lossy(line)
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(500)
+        .collect();
+    let text = text.trim();
+    if !text.is_empty() {
+        tracing::warn!(target: "riptor::vpn", "{from}: {text}");
+    }
+}
 
 #[cfg(not(windows))]
 impl Tail {
@@ -146,12 +161,21 @@ impl Tail {
         }
     }
 
-    fn drain(&self, mut r: impl std::io::Read + Send + 'static) {
+    fn drain(&self, r: impl std::io::Read + Send + 'static) {
+        use std::io::BufRead;
         let tail = self.clone();
         std::thread::spawn(move || {
-            let mut chunk = [0u8; 1024];
-            while let Ok(n @ 1..) = r.read(&mut chunk) {
-                tail.push(&chunk[..n]);
+            let mut r = std::io::BufReader::new(r);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                match std::io::Read::take(&mut r, 4096).read_until(b'\n', &mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        log_line("pkexec/helper", &line);
+                        tail.push(&line);
+                    }
+                }
             }
         });
     }
@@ -174,8 +198,7 @@ pub fn start(exe: &Path, args: &[String], password: Option<Password>) -> anyhow:
             let (master, slave) = tty::open()?;
             tty::attach(&mut cmd, &slave);
             let child = cmd.spawn()?;
-            drop(slave);
-            (child, Some(tty::answer(master, pw)))
+            (child, Some(tty::answer(master, slave, pw)))
         }
         None => (cmd.spawn()?, None),
     };
@@ -272,28 +295,33 @@ pub fn spawn(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let mut auth = None;
-    let mut slave = None;
-    let mut master = None;
-    if password.is_some() {
-        let (m, s) = tty::open()?;
-        tty::attach(&mut cmd, &s);
-        master = Some(m);
-        slave = Some(s);
-    }
+    let pty = match password {
+        Some(pw) => {
+            let (m, s) = tty::open()?;
+            tty::attach(&mut cmd, &s);
+            Some((m, s, pw))
+        }
+        None => None,
+    };
     let mut child = tokio::process::Command::from(cmd).spawn()?;
-    drop(slave);
-    if let (Some(m), Some(pw)) = (master, password) {
-        auth = Some(tty::answer(m, pw));
-    }
+    let auth = pty.map(|(m, s, pw)| tty::answer(m, s, pw));
     let stderr = Tail::default();
-    if let Some(mut e) = child.stderr.take() {
+    if let Some(e) = child.stderr.take() {
         let tail = stderr.clone();
         tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            let mut chunk = [0u8; 1024];
-            while let Ok(n @ 1..) = e.read(&mut chunk).await {
-                tail.push(&chunk[..n]);
+            use tokio::io::AsyncBufReadExt;
+            let mut r = tokio::io::BufReader::new(e);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                match r.read_until(b'\n', &mut line).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        line.truncate(4096);
+                        log_line("pkexec/helper", &line);
+                        tail.push(&line);
+                    }
+                }
             }
         });
     }
@@ -303,19 +331,26 @@ pub fn spawn(
 /// Linux: answering pkexec's own terminal prompt when the desktop has no graphical one.
 #[cfg(target_os = "linux")]
 pub mod tty {
+    use std::collections::VecDeque;
     use std::io::{Read, Write};
     use std::os::fd::{AsRawFd, BorrowedFd};
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::process::CommandExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use parking_lot::Mutex;
+    use tracing::{info, warn};
 
     use super::{next_reply, Password, Reply};
 
     /// How long pkexec gets to ask, and then to say whether the password worked.
     const PROMPT_WAIT: Duration = Duration::from_secs(60);
+    /// Terminals kept open for helpers that may still run; the oldest is closed past this.
+    const KEPT: usize = 8;
+
+    static OPEN: Mutex<VecDeque<Arc<AtomicBool>>> = Mutex::new(VecDeque::new());
 
     #[derive(Default)]
     pub struct Auth {
@@ -361,23 +396,65 @@ pub mod tty {
         }
     }
 
-    /// Answers pkexec's prompts on `master`, then keeps the terminal open for as long as the helper runs.
-    pub fn answer(master: std::fs::File, password: Password) -> Arc<Auth> {
+    /// Answers pkexec's prompts, then keeps the terminal open for as long as the helper may run.
+    /// Riptor holds the slave too: with no slave open the terminal reads as closed, and closing the
+    /// master would hang up the helper and OpenVPN.
+    pub fn answer(master: std::fs::File, slave: std::fs::File, password: Password) -> Arc<Auth> {
         let auth = Arc::new(Auth::default());
         let state = auth.clone();
         let user = std::env::var("USER")
             .or_else(|_| std::env::var("LOGNAME"))
             .unwrap_or_default();
         std::thread::spawn(move || {
-            let why = converse(&master, &password, &user);
-            drop(password);
-            match why {
-                // Closing the terminal now would hang up the helper, so hold it until the helper ends.
-                Ok(()) => drain(&master),
-                Err(why) => *state.failure.lock() = Some(why),
+            info!(target: "riptor::vpn", "no system password prompt; answering pkexec's own prompt as {user:?}");
+            let result = converse(&master, &password, &user);
+            match result {
+                Ok(()) => {
+                    info!(target: "riptor::vpn", "pkexec accepted the password");
+                    let retired = Arc::new(AtomicBool::new(false));
+                    {
+                        let mut open = OPEN.lock();
+                        open.push_back(retired.clone());
+                        while open.len() > KEPT {
+                            if let Some(old) = open.pop_front() {
+                                old.store(true, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                    keep_open(&master, &password, &retired);
+                }
+                Err(why) => {
+                    warn!(target: "riptor::vpn", "pkexec password prompt: {why}");
+                    *state.failure.lock() = Some(why);
+                }
             }
+            drop(password);
+            drop(slave);
         });
         auth
+    }
+
+    /// What pkexec printed, for the log; the password is masked in case the terminal echoed it.
+    fn log_output(text: &str, password: &str) {
+        for line in text.lines().filter_map(|l| super::loggable(l, password)) {
+            info!(target: "riptor::vpn", "pkexec: {line}");
+        }
+    }
+
+    fn wait_readable(master: &std::fs::File) -> Result<bool, &'static str> {
+        let mut fds = [rustix::event::PollFd::new(
+            master,
+            rustix::event::PollFlags::IN,
+        )];
+        let tick = rustix::event::Timespec {
+            tv_sec: 0,
+            tv_nsec: 250_000_000,
+        };
+        match rustix::event::poll(&mut fds, Some(&tick)) {
+            Ok(0) | Err(rustix::io::Errno::INTR) => Ok(false),
+            Ok(_) => Ok(true),
+            Err(_) => Err("the password prompt closed"),
+        }
     }
 
     fn converse(
@@ -398,34 +475,22 @@ pub mod tty {
                     Err("the system didn't ask for the password")
                 };
             }
-            let mut fds = [rustix::event::PollFd::new(
-                master,
-                rustix::event::PollFlags::IN,
-            )];
-            let tick = rustix::event::Timespec {
-                tv_sec: 0,
-                tv_nsec: 250_000_000,
-            };
-            match rustix::event::poll(&mut fds, Some(&tick)) {
-                Ok(0) => continue,
-                Ok(_) => {}
-                Err(rustix::io::Errno::INTR) => continue,
-                Err(_) => return Err("the password prompt closed"),
+            if !wait_readable(master)? {
+                continue;
             }
             let n = match (&*master).read(&mut buf) {
-                Ok(0) | Err(_) => {
-                    // The terminal closed: pkexec has finished one way or the other.
-                    return if sent {
-                        Ok(())
-                    } else {
-                        Err("the password prompt closed")
-                    };
-                }
-                Ok(n) => n,
+                Ok(n) if n > 0 => n,
+                Ok(_) | Err(_) => return Err("the password prompt closed"),
             };
-            seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+            let text = String::from_utf8_lossy(&buf[..n]);
+            log_output(&text, password);
+            seen.push_str(&text);
             if seen.len() > 16 * 1024 {
-                seen.drain(..seen.len() - 8 * 1024);
+                let cut = seen.len() - 8 * 1024;
+                let cut = (cut..seen.len())
+                    .find(|&i| seen.is_char_boundary(i))
+                    .unwrap_or(0);
+                seen.drain(..cut);
             }
             if sent && seen.contains("AUTHENTICATION COMPLETE") {
                 return Ok(());
@@ -433,6 +498,7 @@ pub mod tty {
             let line = match next_reply(&seen, user, sent) {
                 Reply::Wait => continue,
                 Reply::Password => {
+                    info!(target: "riptor::vpn", "pkexec asked for the password; sending it");
                     sent = true;
                     since = Instant::now();
                     let mut line = Password::new(String::with_capacity(password.len() + 1));
@@ -440,7 +506,10 @@ pub mod tty {
                     line.push('\n');
                     line
                 }
-                Reply::Identity(n) => Password::new(format!("{n}\n")),
+                Reply::Identity(n) => {
+                    info!(target: "riptor::vpn", "pkexec asked which administrator; choosing {n}");
+                    Password::new(format!("{n}\n"))
+                }
                 Reply::GiveUp(why) => return Err(why),
             };
             seen.clear();
@@ -450,11 +519,34 @@ pub mod tty {
         }
     }
 
-    /// Reads and drops whatever arrives until the helper ends and the terminal closes.
-    fn drain(master: &std::fs::File) {
+    /// Logs anything else the terminal shows until Riptor no longer needs it open.
+    fn keep_open(master: &std::fs::File, password: &str, retired: &AtomicBool) {
         let mut buf = [0u8; 1024];
-        while let Ok(1..) = (&*master).read(&mut buf) {}
+        while !retired.load(Ordering::Relaxed) {
+            match wait_readable(master) {
+                Ok(true) => match (&*master).read(&mut buf) {
+                    Ok(n) if n > 0 => log_output(&String::from_utf8_lossy(&buf[..n]), password),
+                    _ => std::thread::sleep(Duration::from_millis(250)),
+                },
+                Ok(false) => {}
+                Err(_) => std::thread::sleep(Duration::from_millis(250)),
+            }
+        }
     }
+}
+
+/// A terminal line fit for the log: no control characters, bounded, the password masked.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn loggable(line: &str, password: &str) -> Option<String> {
+    let mut line: String = line
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    if !password.is_empty() {
+        line = line.replace(password, "********");
+    }
+    let line: String = line.trim().chars().take(500).collect();
+    (!line.is_empty()).then_some(line)
 }
 
 /// What to type next into pkexec's terminal prompt, from what it has printed since the last answer.
@@ -590,6 +682,17 @@ mod tests {
             next_reply(&menu[..menu.len() - 8], "pat", false),
             Reply::Wait
         );
+    }
+
+    #[test]
+    fn the_password_never_reaches_the_log() {
+        assert_eq!(
+            loggable("Password: hunter2hunter2", "hunter2hunter2").as_deref(),
+            Some("Password: ********")
+        );
+        assert_eq!(loggable("  [0m  ", "x"), Some("[0m".into()));
+        assert_eq!(loggable("   ", "x"), None);
+        assert!(loggable(&"y".repeat(2000), "").unwrap().len() <= 500);
     }
 
     #[test]
