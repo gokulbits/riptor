@@ -326,6 +326,21 @@ async fn https_and_bans() {
         .is_err());
 
     let mut api = Api::new(server.addr, true);
+    // Opening the address in a browser says it's running; the API itself still needs a sign-in.
+    let root = api
+        .http
+        .get(format!("https://{}/", server.addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(root.status().as_u16(), 200);
+    assert!(root
+        .text()
+        .await
+        .unwrap()
+        .contains("remote control is running"));
+    assert_eq!(api.get("app/version").await.0, 403);
+
     for _ in 0..riptor_webapi::auth::MAX_FAILURES {
         assert_eq!(api.login("admin", "nope").await, (200, "Fails.".into()));
     }

@@ -34,6 +34,8 @@ pub struct Status {
     pub error: Option<String>,
     /// The last dynamic DNS result.
     pub ddns: Option<String>,
+    /// Addresses phones on the local network can use.
+    pub addresses: Vec<String>,
 }
 
 pub struct Running {
@@ -107,7 +109,7 @@ pub async fn start_with(
     let allow_public = cfg.allow_public;
     let gate_engine = engine.clone();
     let gate = net::Gate::new(listener, tls, move |remote, local| {
-        net::allowed(remote.ip(), local.ip(), allow_public, vpn_ip(&gate_engine))
+        net::refusal(remote.ip(), local.ip(), allow_public, vpn_ip(&gate_engine))
     })?;
     let addr = axum::serve::Listener::local_addr(&gate)?;
     let policy = auth::Policy {
@@ -151,6 +153,18 @@ pub async fn start_with(
     })
 }
 
+/// Where the server can be reached from the local network: the bound address, or every LAN one.
+fn reachable(bound: IpAddr, vpn: Option<Ipv4Addr>) -> Vec<String> {
+    if !bound.is_unspecified() {
+        return vec![bound.to_string()];
+    }
+    riptor_core::lan_addresses()
+        .into_iter()
+        .filter(|ip| Some(*ip) != vpn)
+        .map(|ip| ip.to_string())
+        .collect()
+}
+
 /// Keeps the server in step with the settings and the secrets file for as long as Riptor runs.
 pub async fn supervise(engine: Arc<Engine>, data_dir: PathBuf, status: Arc<Mutex<Status>>) {
     type Want = (WebUi, Option<std::time::SystemTime>);
@@ -185,6 +199,7 @@ pub async fn supervise(engine: Arc<Engine>, data_dir: PathBuf, status: Arc<Mutex
                             port: Some(r.addr.port()),
                             https: w.0.https,
                             fingerprint: r.fingerprint.clone(),
+                            addresses: reachable(r.addr.ip(), vpn_ip(&engine)),
                             ..Default::default()
                         };
                         running = Some((w, r));

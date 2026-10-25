@@ -81,7 +81,9 @@ export function RemoteControlSection({ s, set }: { s: Settings; set: (patch: Par
         {w.enabled && (
           <p className="text-xs text-muted">
             {st?.running
-              ? `Running on port ${st.port}.`
+              ? st.addresses.length > 0
+                ? `Running. Address for qBitController: ${st.addresses.map((a) => `${scheme}://${a}:${st.port}`).join(" or ")}`
+                : `Running on port ${st.port}, but this computer has no local network address right now.`
               : st?.error
                 ? `Not running: ${st.error}`
                 : state && !state.has_password
@@ -94,8 +96,11 @@ export function RemoteControlSection({ s, set }: { s: Settings; set: (patch: Par
           <ol className="list-decimal space-y-0.5 pl-4">
             <li>Turn this on, set a password and save.</li>
             <li>
-              In qBitController, add a server with the address <span className="font-mono">{scheme}://this-computer's-IP:{w.port}</span>, your
-              username and password.
+              In qBitController, add a server with the address{" "}
+              <span className="font-mono">
+                {st?.running && st.addresses.length > 0 ? `${scheme}://${st.addresses[0]}:${st.port}` : `${scheme}://this-computer's-IP:${w.port}`}
+              </span>
+              , your username and password. The phone must be on the same network.
             </li>
             {w.https && <li>In the server's advanced settings, turn on "Trust self-signed certificates" (unless you use your own certificate).</li>}
           </ol>

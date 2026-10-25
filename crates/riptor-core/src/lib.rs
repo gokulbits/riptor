@@ -41,7 +41,7 @@ pub use engine::{
 };
 pub use input::Source;
 pub use model::*;
-pub use network::{NetworkMode, VpnBinding};
+pub use network::{lan_addresses, NetworkMode, VpnBinding};
 pub use reveal::RevealTarget;
 pub use riptor_seeding::{Intent, Limit, ShareLimitAction, ShareLimits};
 pub use settings::{ColumnPref, Ddns, PeerEncryption, Settings, WatchedFolder, WebUi};

@@ -64,6 +64,23 @@ pub fn adapter_for_ip(ip: Ipv4Addr) -> Option<String> {
         .map(|i| adapter_id(&i))
 }
 
+/// This computer's addresses on local networks (private IPv4, not loopback or link-local).
+pub fn lan_addresses() -> Vec<Ipv4Addr> {
+    use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
+    let mut out: Vec<Ipv4Addr> = NetworkInterface::show()
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|i| i.addr)
+        .filter_map(|a| match a {
+            Addr::V4(v) if v.ip.is_private() => Some(v.ip),
+            _ => None,
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 impl NetworkMode {
     /// Tells the connections ledger how traffic leaves now.
     pub fn note_route(&self) {

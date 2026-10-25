@@ -684,7 +684,15 @@ export interface WebUiSettings {
 }
 
 export interface WebUiState {
-  status: { running: boolean; port: number | null; https: boolean; fingerprint: string | null; error: string | null; ddns: string | null };
+  status: {
+    running: boolean;
+    port: number | null;
+    https: boolean;
+    fingerprint: string | null;
+    error: string | null;
+    ddns: string | null;
+    addresses: string[];
+  };
   has_password: boolean;
   has_api_key: boolean;
   has_ddns_password: boolean;

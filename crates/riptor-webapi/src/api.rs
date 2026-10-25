@@ -11,7 +11,7 @@ use axum::body::Bytes;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Multipart, Path, RawQuery, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, post};
+use axum::routing::{any, get, post};
 use axum::Router;
 use riptor_core::settings::{cidr_contains, parse_cidr};
 use riptor_core::{AddParams, Engine, FilePriority, QueueMove, ShareLimits, Source, WebUi};
@@ -176,6 +176,16 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
             post(add).layer(DefaultBodyLimit::max(MAX_UPLOAD)),
         )
         .route("/api/v2/{*path}", any(dispatch))
+        // No web pages here, only the API; say so to someone checking from a browser.
+        .route(
+            "/",
+            get(|| async {
+                text(
+                    StatusCode::OK,
+                    "Riptor remote control is running. Connect with an app made for qBittorrent's Web UI, such as qBitController.",
+                )
+            }),
+        )
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not Found") })
         .layer(DefaultBodyLimit::max(MAX_FORM))
         .layer(axum::middleware::map_response_with_state(
@@ -267,6 +277,17 @@ async fn login(
     } else {
         ctx.auth.login(ip, user, pass).await
     };
+    let outcome = match &result {
+        Login::Ok(_) => "signed in",
+        Login::Fails => "wrong user name or password",
+        Login::Banned => "refused, banned after failed sign-ins",
+        Login::Paused => "refused, sign-ins are paused after many failures",
+    };
+    crate::net::note(
+        ip,
+        outcome,
+        format_args!("remote control sign-in from {ip}: {outcome}"),
+    );
     match result {
         Login::Ok(sid) => {
             let secure = if ctx.cfg.https && ctx.cfg.secure_cookie {
