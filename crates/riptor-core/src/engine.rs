@@ -718,7 +718,7 @@ impl Engine {
         match self.network() {
             _ if lan => Ok(self.http.clone()),
             NetworkMode::Normal => Ok(self.http.clone()),
-            NetworkMode::Vpn(b) => webseed::client(Some(b.local_ip.into()), false),
+            NetworkMode::Vpn(b) => webseed::client(Some(&b.end()), false),
             NetworkMode::Blocked => {
                 bail!("waiting for the VPN: the kill switch holds downloads while it's down")
             }
@@ -1513,12 +1513,12 @@ impl Engine {
     pub async fn public_ip(&self) -> anyhow::Result<PublicIp> {
         let (local, via_vpn) = match self.network() {
             NetworkMode::Normal => (None, false),
-            NetworkMode::Vpn(b) => (Some(std::net::IpAddr::V4(b.local_ip)), true),
+            NetworkMode::Vpn(b) => (Some(b.end()), true),
             NetworkMode::Blocked => {
                 anyhow::bail!("the kill switch is holding traffic until the VPN connects")
             }
         };
-        let ip = crate::public_ip::lookup(local).await?;
+        let ip = crate::public_ip::lookup(local.as_ref()).await?;
         self.note_public_ip(ip, via_vpn);
         Ok(PublicIp {
             ip: ip.to_string(),
@@ -1531,12 +1531,12 @@ impl Engine {
         let NetworkMode::Vpn(b) = self.network() else {
             bail!("connect the VPN first");
         };
-        let local = std::net::IpAddr::V4(b.local_ip);
+        let end = b.end();
         let (vpn, normal) = tokio::join!(
-            crate::public_ip::lookup(Some(local)),
+            crate::public_ip::lookup(Some(&end)),
             crate::public_ip::lookup(None)
         );
-        let tunnel_dns = match crate::dns::TunnelResolver::new(local, &crate::dns::SERVERS) {
+        let tunnel_dns = match crate::dns::TunnelResolver::new(&end, &crate::dns::SERVERS) {
             Ok(r) => r
                 .lookup("api.ipify.org", 443)
                 .await
@@ -2619,7 +2619,7 @@ impl Engine {
         let net = self.network.read().clone();
         let local = match &net {
             NetworkMode::Normal => None,
-            NetworkMode::Vpn(v) => Some(std::net::IpAddr::V4(v.local_ip)),
+            NetworkMode::Vpn(v) => Some(v.end()),
             NetworkMode::Blocked => {
                 self.web_seeds.lock().clear();
                 return;
@@ -2646,7 +2646,7 @@ impl Engine {
         let http = {
             let mut c = self.web_seed_http.lock();
             if c.is_none() {
-                match webseed::client(local, allow_local) {
+                match webseed::client(local.as_ref(), allow_local) {
                     Ok(client) => *c = Some(client),
                     Err(e) => {
                         warn!("web seeds unavailable: {e:#}");
@@ -2996,7 +2996,7 @@ async fn build_session(
         .or(s.listen_address);
     // On the VPN, tracker and DHT lookups go through the tunnel too.
     let resolver = vpn
-        .map(|v| crate::dns::TunnelResolver::new(v.local_ip.into(), &crate::dns::SERVERS))
+        .map(|v| crate::dns::TunnelResolver::new(&v.end(), &crate::dns::SERVERS))
         .transpose()
         .context("setting up DNS through the VPN")?;
     crate::dns::install(resolver.as_ref());

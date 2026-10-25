@@ -17,17 +17,15 @@ pub fn parse(body: &[u8]) -> anyhow::Result<IpAddr> {
     text.parse().context("reply is not an IP address")
 }
 
-pub async fn lookup(local: Option<IpAddr>) -> anyhow::Result<IpAddr> {
+pub async fn lookup(local: Option<&riptor_net::TunnelEnd>) -> anyhow::Result<IpAddr> {
     let mut b = reqwest::Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(10))
         .user_agent("Riptor");
-    if let Some(ip) = local {
-        let resolver = crate::dns::TunnelResolver::new(ip, &crate::dns::SERVERS)?;
-        b = b
-            .local_address(ip)
-            .dns_resolver(std::sync::Arc::new(resolver));
+    if let Some(end) = local {
+        let resolver = crate::dns::TunnelResolver::new(end, &crate::dns::SERVERS)?;
+        b = end.http(b).dns_resolver(std::sync::Arc::new(resolver));
     }
     let client = b.build()?;
     let mut last = None;

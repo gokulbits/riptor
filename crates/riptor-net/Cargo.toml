@@ -7,4 +7,6 @@ license.workspace = true
 publish = false
 
 [dependencies]
+reqwest.workspace = true
+tokio.workspace = true
 url.workspace = true

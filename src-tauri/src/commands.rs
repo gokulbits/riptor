@@ -502,16 +502,15 @@ fn route_search(state: &State<'_, AppState>, s: &riptor_search::SearchManager) {
         NetworkMode::Normal => Route::Direct,
         NetworkMode::Blocked => Route::Held,
         // Never the system resolver while on the VPN.
-        NetworkMode::Vpn(b) => match riptor_core::dns::TunnelResolver::new(
-            b.local_ip.into(),
-            &riptor_core::dns::SERVERS,
-        ) {
-            Ok(r) => Route::Tunnel(riptor_search::scrape::Tunnel {
-                local: b.local_ip.into(),
-                lookup: r.hook(),
-            }),
-            Err(_) => Route::Held,
-        },
+        NetworkMode::Vpn(b) => {
+            match riptor_core::dns::TunnelResolver::new(&b.end(), &riptor_core::dns::SERVERS) {
+                Ok(r) => Route::Tunnel(riptor_search::scrape::Tunnel {
+                    end: b.end(),
+                    lookup: r.hook(),
+                }),
+                Err(_) => Route::Held,
+            }
+        }
     });
 }
 

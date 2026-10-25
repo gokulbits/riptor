@@ -237,10 +237,10 @@ pub type Lookup = Arc<
         + Sync,
 >;
 
-/// Send everything from `local` and resolve with `lookup` (the VPN tunnel).
+/// Send everything through `end` and resolve with `lookup` (the VPN tunnel).
 #[derive(Clone)]
 pub struct Tunnel {
-    pub local: IpAddr,
+    pub end: riptor_net::TunnelEnd,
     pub lookup: Lookup,
 }
 
@@ -253,7 +253,7 @@ async fn lookup(
         Some(t) => Ok((t.lookup)(host.to_string(), port)
             .await?
             .into_iter()
-            .filter(|a| a.is_ipv4() == t.local.is_ipv4())
+            .filter(|a| a.is_ipv4() == t.end.ip.is_ipv4())
             .collect()),
         None => Ok(tokio::net::lookup_host((host, port)).await?.collect()),
     }
@@ -306,7 +306,7 @@ impl Net {
     fn build(allow_local: bool, tunnel: Option<Tunnel>) -> anyhow::Result<Self> {
         let mut b = reqwest::Client::builder();
         if let Some(t) = &tunnel {
-            b = b.local_address(t.local);
+            b = t.end.http(b);
         }
         let http = b
             .timeout(Duration::from_secs(20))
@@ -388,14 +388,13 @@ impl Net {
 
     async fn udp_scrape_once(&self, tracker: &Url, info_hash: &[u8; 20]) -> anyhow::Result<Counts> {
         let addr = self.resolve_udp(tracker).await?;
-        let bind: SocketAddr = match (&self.tunnel, addr.is_ipv4(), addr.ip().is_loopback()) {
-            (Some(t), _, _) => SocketAddr::new(t.local, 0),
-            (None, true, true) => "127.0.0.1:0".parse()?,
-            (None, true, false) => "0.0.0.0:0".parse()?,
-            (None, false, true) => "[::1]:0".parse()?,
-            (None, false, false) => "[::]:0".parse()?,
+        let sock = match (&self.tunnel, addr.is_ipv4(), addr.ip().is_loopback()) {
+            (Some(t), _, _) => t.end.udp_socket(0).await?,
+            (None, true, true) => UdpSocket::bind("127.0.0.1:0").await?,
+            (None, true, false) => UdpSocket::bind("0.0.0.0:0").await?,
+            (None, false, true) => UdpSocket::bind("[::1]:0").await?,
+            (None, false, false) => UdpSocket::bind("[::]:0").await?,
         };
-        let sock = UdpSocket::bind(bind).await?;
         sock.connect(addr).await?;
 
         let tx = transaction_id();
@@ -734,7 +733,7 @@ mod tests {
         });
         let net = Net::through(
             Tunnel {
-                local: IpAddr::from([127, 0, 0, 1]),
+                end: riptor_net::TunnelEnd::new(IpAddr::from([127, 0, 0, 1]), "lo"),
                 lookup,
             },
             true,

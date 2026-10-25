@@ -45,7 +45,7 @@ impl Engine {
         let NetworkMode::Vpn(b) = self.network() else {
             return;
         };
-        match crate::public_ip::lookup(Some(IpAddr::V4(b.local_ip))).await {
+        match crate::public_ip::lookup(Some(&b.end())).await {
             Ok(ip) if self.network() == NetworkMode::Vpn(b) => self.note_public_ip(ip, true),
             Ok(_) => {}
             Err(e) => warn!("couldn't look up the VPN's public address: {e:#}"),

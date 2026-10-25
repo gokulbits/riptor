@@ -12,6 +12,13 @@ pub struct VpnBinding {
     pub forwarded_port: Option<u16>,
 }
 
+impl VpnBinding {
+    /// What Riptor's own sockets bind to on the VPN.
+    pub fn end(&self) -> riptor_net::TunnelEnd {
+        riptor_net::TunnelEnd::new(self.local_ip.into(), self.adapter.clone())
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum NetworkMode {

@@ -35,10 +35,10 @@ pub async fn fetch(data_dir: &Path, url: &str, net: &NetworkMode) -> Option<Path
         return have.then_some(cache);
     }
     let local = match net {
-        NetworkMode::Vpn(b) => Some(std::net::IpAddr::V4(b.local_ip)),
+        NetworkMode::Vpn(b) => Some(b.end()),
         _ => None,
     };
-    let got = download(url, local).await;
+    let got = download(url, local.as_ref()).await;
     riptor_net::ledger::record(riptor_net::ledger::Purpose::Blocklist, url, got.is_ok());
     match got.and_then(|bytes| crate::state_file::save_bytes(&cache, &bytes)) {
         Ok(()) => {
@@ -52,7 +52,7 @@ pub async fn fetch(data_dir: &Path, url: &str, net: &NetworkMode) -> Option<Path
     }
 }
 
-async fn download(url: &str, local: Option<std::net::IpAddr>) -> anyhow::Result<Vec<u8>> {
+async fn download(url: &str, local: Option<&riptor_net::TunnelEnd>) -> anyhow::Result<Vec<u8>> {
     let u = url::Url::parse(url)?;
     anyhow::ensure!(
         u.scheme() == "https",

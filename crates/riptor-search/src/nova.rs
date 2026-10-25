@@ -547,7 +547,7 @@ class demo(object):
                 .await;
         });
         let tunnel = crate::scrape::Tunnel {
-            local: std::net::Ipv4Addr::LOCALHOST.into(),
+            end: riptor_net::TunnelEnd::new(std::net::Ipv4Addr::LOCALHOST.into(), "lo"),
             lookup: std::sync::Arc::new(|_, port| {
                 Box::pin(async move {
                     Ok(vec![std::net::SocketAddr::from((

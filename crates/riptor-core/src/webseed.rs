@@ -198,10 +198,13 @@ impl reqwest::dns::Resolve for PublicOnly {
     }
 }
 
-/// `local` is the VPN tunnel's address when the VPN is on.
-pub fn client(local: Option<IpAddr>, allow_local: bool) -> anyhow::Result<reqwest::Client> {
+/// `local` is the VPN tunnel when the VPN is on.
+pub fn client(
+    local: Option<&riptor_net::TunnelEnd>,
+    allow_local: bool,
+) -> anyhow::Result<reqwest::Client> {
     let tunnel = local
-        .map(|ip| crate::dns::TunnelResolver::new(ip, &crate::dns::SERVERS))
+        .map(|end| crate::dns::TunnelResolver::new(end, &crate::dns::SERVERS))
         .transpose()?;
     let mut b = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
@@ -222,8 +225,8 @@ pub fn client(local: Option<IpAddr>, allow_local: bool) -> anyhow::Result<reqwes
                 a.follow()
             }
         }));
-    if let Some(ip) = local {
-        b = b.local_address(ip);
+    if let Some(end) = local {
+        b = end.http(b);
     }
     Ok(b.build()?)
 }

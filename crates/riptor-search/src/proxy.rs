@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{bail, ensure, Context};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use url::Url;
 
@@ -173,7 +173,7 @@ async fn dial_once(
     };
     let addrs: Vec<SocketAddr> = addrs
         .into_iter()
-        .filter(|a| a.is_ipv4() == t.local.is_ipv4())
+        .filter(|a| a.is_ipv4() == t.end.ip.is_ipv4())
         .filter(|a| allow_local || is_public(a.ip()))
         .collect();
     ensure!(
@@ -182,12 +182,7 @@ async fn dial_once(
     );
     let mut last = None;
     for a in addrs {
-        let sock = if a.is_ipv4() {
-            TcpSocket::new_v4()?
-        } else {
-            TcpSocket::new_v6()?
-        };
-        sock.bind(SocketAddr::new(t.local, 0))?;
+        let sock = t.end.tcp_socket()?;
         match tokio::time::timeout(CONNECT_TIMEOUT, sock.connect(a)).await {
             Ok(Ok(s)) => return Ok(s),
             Ok(Err(e)) => last = Some(anyhow::Error::from(e)),
@@ -206,7 +201,7 @@ mod tests {
 
     fn loopback_tunnel() -> Tunnel {
         Tunnel {
-            local: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            end: riptor_net::TunnelEnd::new(IpAddr::V4(Ipv4Addr::LOCALHOST), "lo"),
             lookup: Arc::new(|_, port| {
                 Box::pin(async move { Ok(vec![SocketAddr::from((Ipv4Addr::LOCALHOST, port))]) })
             }),
