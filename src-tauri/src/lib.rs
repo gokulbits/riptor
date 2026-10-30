@@ -57,6 +57,37 @@ fn items_from_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Vec<Source> {
         .collect()
 }
 
+/// On Linux the page runs in its own process; when that dies the window stays grey for good.
+#[cfg(target_os = "linux")]
+fn reload_if_the_page_dies(app: &AppHandle) {
+    use std::cell::Cell;
+    use std::time::{Duration, Instant};
+    use webkit2gtk::WebViewExt;
+    const MAX_RELOADS: u32 = 3;
+    const WINDOW: Duration = Duration::from_secs(300);
+
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.with_webview(|webview| {
+        let recent = Cell::new((Instant::now(), 0u32));
+        webview
+            .inner()
+            .connect_web_process_terminated(move |view, reason| {
+                error!("the window's web process ended: {reason:?}");
+                let (since, count) = recent.get();
+                let count = if since.elapsed() > WINDOW { 0 } else { count };
+                recent.set((if count == 0 { Instant::now() } else { since }, count + 1));
+                // A page that keeps dying right away shouldn't spin forever.
+                if count < MAX_RELOADS {
+                    view.reload();
+                } else {
+                    error!("the window's web process keeps ending; not reloading again");
+                }
+            });
+    });
+}
+
 /// Always goes through the add dialog, never added silently.
 fn forward_external(app: &AppHandle, items: Vec<Source>) {
     if items.is_empty() {
@@ -154,6 +185,8 @@ pub fn run() {
                 forward_external(&dl, items_from_args(urls.iter().map(String::as_str)));
             });
 
+            #[cfg(target_os = "linux")]
+            reload_if_the_page_dies(&handle);
             tray::create(&handle)?;
             updater::init(&handle);
             handle.manage(when_done::WhenDone::default());

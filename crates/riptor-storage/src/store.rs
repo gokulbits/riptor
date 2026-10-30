@@ -11,9 +11,10 @@ use parking_lot::Mutex;
 use tracing::{debug, warn};
 
 use crate::cache::{Key, ReadCache, WriteBudget};
-use crate::files::{read_exact_at, write_all_at, FilePool};
+use crate::files::{read_exact_at, write_all_at, FilePool, OpenFiles};
 use crate::layout::Layout;
 use crate::segments::Segments;
+use crate::stamps::Stamps;
 use crate::{os, Preallocation, StorageConfig};
 
 static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(1);
@@ -23,6 +24,8 @@ pub struct Shared {
     pub write_budget: WriteBudget,
     pub config: Mutex<StorageConfig>,
     pub metrics: Metrics,
+    pub open_files: Arc<OpenFiles>,
+    pub stamps: Stamps,
 }
 
 #[derive(Default)]
@@ -69,14 +72,17 @@ impl Shared {
         Arc::new(Self {
             read_cache: ReadCache::new(config.read_cache_bytes),
             write_budget: WriteBudget::new(config.write_buffer_bytes),
+            open_files: OpenFiles::new(config.max_open_files),
             config: Mutex::new(config),
             metrics: Metrics::default(),
+            stamps: Stamps::default(),
         })
     }
 
     pub fn reconfigure(&self, config: StorageConfig) {
         self.read_cache.set_capacity(config.read_cache_bytes);
         self.write_budget.set_capacity(config.write_buffer_bytes);
+        self.open_files.set_max_open(config.max_open_files);
         *self.config.lock() = config;
     }
 }
@@ -106,10 +112,9 @@ pub struct Store {
 
 impl Store {
     pub fn new(layout: Layout, shared: Arc<Shared>) -> Self {
-        let cfg = shared.config.lock().clone();
         let files = FilePool::new(
             layout.files.iter().map(|f| f.path.clone()).collect(),
-            cfg.max_open_files,
+            shared.open_files.clone(),
         );
         let extent = layout.piece_len.clamp(64 * 1024, 1024 * 1024);
         Self {
@@ -299,6 +304,11 @@ impl Store {
     }
 
     // ---------- read path ----------
+
+    /// The files look just as they did when this torrent was last stamped.
+    pub fn unchanged(&self, hash: &str) -> bool {
+        self.shared.stamps.matches(hash, &self.layout)
+    }
 
     pub fn read(&self, file_id: usize, offset: u64, buf: &mut [u8]) -> anyhow::Result<()> {
         let slot = self.check_bounds(file_id, offset, buf.len())?;

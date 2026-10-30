@@ -118,6 +118,11 @@ impl<U: StorageFactory + ?Sized> StorageFactory for Box<U> {
 }
 
 pub trait TorrentStorage: Send + Sync {
+    /// RIPTOR PATCH: the files are provably as they were, so resuming needn't read samples of them.
+    fn data_unchanged(&self) -> bool {
+        false
+    }
+
     // Create/open files etc.
     fn init(
         &mut self,
@@ -171,6 +176,11 @@ pub trait TorrentStorage: Send + Sync {
 }
 
 impl<U: TorrentStorage + ?Sized> TorrentStorage for Box<U> {
+    // RIPTOR PATCH: see the trait.
+    fn data_unchanged(&self) -> bool {
+        (**self).data_unchanged()
+    }
+
     fn pread_exact(&self, file_id: usize, offset: u64, buf: &mut [u8]) -> anyhow::Result<()> {
         (**self).pread_exact(file_id, offset, buf)
     }

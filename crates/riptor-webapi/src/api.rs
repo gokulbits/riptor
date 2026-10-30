@@ -466,10 +466,11 @@ async fn read(ctx: &Ctx, path: &str, p: &HashMap<String, String>) -> Option<Resp
         "transfer/info" => {
             let (_, g) = e.snapshot();
             let s = e.settings();
-            let state = qbt::server_state(&g, &s, 0, 0, 0);
+            let totals = qbt::Totals::from(&e.statistics());
+            let state = qbt::server_state(&g, &s, totals, 0);
             json_body(json!({
                 "dl_info_speed": state["dl_info_speed"], "up_info_speed": state["up_info_speed"],
-                "dl_info_data": 0, "up_info_data": 0,
+                "dl_info_data": state["dl_info_data"], "up_info_data": state["up_info_data"],
                 "dl_rate_limit": state["dl_rate_limit"], "up_rate_limit": state["up_rate_limit"],
                 "dht_nodes": state["dht_nodes"], "connection_status": state["connection_status"],
             }))
@@ -496,7 +497,7 @@ fn maindata(ctx: &Ctx) -> Response {
     let e = &ctx.engine;
     let (torrents, global) = e.snapshot();
     let settings = e.settings();
-    let all = e.statistics().all_time;
+    let totals = qbt::Totals::from(&e.statistics());
     let free = e.free_space(&settings.download_dir).unwrap_or(0);
     let mut map = serde_json::Map::new();
     let mut tags = BTreeSet::new();
@@ -508,7 +509,7 @@ fn maindata(ctx: &Ctx) -> Response {
     json_body(json!({
         "rid": ctx.rid.fetch_add(1, Ordering::Relaxed) + 1,
         "full_update": true,
-        "server_state": qbt::server_state(&global, &settings, all.all_time_download, all.all_time_upload, free),
+        "server_state": qbt::server_state(&global, &settings, totals, free),
         "torrents": map,
         "categories": qbt::categories(&e.categories()),
         "tags": tags,

@@ -53,6 +53,7 @@ Please do **not** open a public issue. Use GitHub's private vulnerability report
 
 ## Known limitations
 
+* Riptor doesn't re-read a torrent's files at startup if every file's path, size and modified time are unchanged since it last stamped them. A file changed with its size and modified time put back isn't noticed until a recheck or the data check runs.
 * Peer encryption (MSE/PE) only obfuscates: RC4 and an unauthenticated Diffie-Hellman exchange, as the protocol defines them. It hides BitTorrent from throttling and simple inspection, not from someone in the middle. Use the VPN for privacy.
 * The update check uses the updater plugin's own connection, so it never goes through the VPN. The connections ledger shows it as such.
 * Search plugins are separate programs: their connections are only seen (and listed) while the VPN's proxy carries them.

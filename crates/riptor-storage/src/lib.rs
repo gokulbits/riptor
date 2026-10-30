@@ -9,6 +9,7 @@ mod os;
 pub mod rqbit;
 pub mod sanitize;
 pub mod segments;
+pub mod stamps;
 pub mod store;
 
 use serde::{Deserialize, Serialize};

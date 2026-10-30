@@ -39,6 +39,9 @@ md5 = { package = "md-5", version = "0.11" }
 crc32fast = "1"
 network-interface = "2"
 
+[target.'cfg(unix)'.dependencies]
+rlimit = "0.11"
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Networking_Connectivity", "Foundation_Collections"] }
 

@@ -1,7 +1,40 @@
 //! Tidying librqbit's session folder.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+/// What librqbit saved about a torrent, enough to add it again.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Entry {
+    pub id: usize,
+    pub only_files: Option<Vec<usize>>,
+    pub trackers: Vec<String>,
+}
+
+/// The saved torrents by lowercase hash; empty if the file can't be read.
+pub fn entries(dir: &Path) -> HashMap<String, Entry> {
+    let Some(v) = std::fs::read(dir.join("session.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+    else {
+        return HashMap::new();
+    };
+    let Some(torrents) = v.get("torrents").and_then(|t| t.as_object()) else {
+        return HashMap::new();
+    };
+    torrents
+        .iter()
+        .filter_map(|(id, t)| {
+            let hash = t.get("info_hash")?.as_str()?.to_ascii_lowercase();
+            let entry = Entry {
+                id: id.parse().ok()?,
+                only_files: serde_json::from_value(t.get("only_files")?.clone()).ok()?,
+                trackers: serde_json::from_value(t.get("trackers")?.clone()).ok()?,
+            };
+            Some((hash, entry))
+        })
+        .collect()
+}
 
 /// Drops entries with no Riptor record. Returns the hashes removed.
 pub fn prune(dir: &Path, known: &HashSet<String>) -> anyhow::Result<Vec<String>> {
@@ -77,6 +110,32 @@ mod tests {
         assert!(!d.path().join(format!("{ORPHAN}.bitv")).exists());
         // Second run: nothing to do.
         assert!(prune(d.path(), &known).unwrap().is_empty());
+    }
+
+    #[test]
+    fn entries_skip_anything_malformed() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(entries(d.path()).is_empty());
+        std::fs::write(d.path().join("session.json"), b"[1,2,3]").unwrap();
+        assert!(entries(d.path()).is_empty());
+        let db = format!(
+            r#"{{"torrents":{{
+                "7":{{"info_hash":"{KEPT}","only_files":[0,2],"trackers":["http://t/"]}},
+                "x":{{"info_hash":"{ORPHAN}","only_files":null,"trackers":[]}},
+                "8":{{"info_hash":"{ORPHAN}","only_files":"nope","trackers":[]}}
+            }}}}"#
+        );
+        std::fs::write(d.path().join("session.json"), db).unwrap();
+        let got = entries(d.path());
+        assert_eq!(got.len(), 1);
+        assert_eq!(
+            got[KEPT],
+            Entry {
+                id: 7,
+                only_files: Some(vec![0, 2]),
+                trackers: vec!["http://t/".into()],
+            }
+        );
     }
 
     #[test]

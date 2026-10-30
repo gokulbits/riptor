@@ -117,6 +117,7 @@ impl StorageFactory for CachedStorageFactory {
         let layout = layout_for(&root, metadata)?;
         Ok(CachedStorage {
             store: Arc::new(Store::new(layout, self.shared.clone())),
+            hash: shared.info_hash.as_string(),
         })
     }
 
@@ -127,6 +128,7 @@ impl StorageFactory for CachedStorageFactory {
 
 pub struct CachedStorage {
     store: Arc<Store>,
+    hash: String,
 }
 
 impl CachedStorage {
@@ -178,7 +180,12 @@ impl TorrentStorage for CachedStorage {
         self.store.release()?;
         Ok(Box::new(CachedStorage {
             store: self.store.clone(),
+            hash: self.hash.clone(),
         }))
+    }
+
+    fn data_unchanged(&self) -> bool {
+        self.store.unchanged(&self.hash)
     }
 
     fn on_piece_completed(&self, piece_index: ValidPieceIndex) -> anyhow::Result<()> {

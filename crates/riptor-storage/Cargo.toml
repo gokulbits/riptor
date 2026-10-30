@@ -11,6 +11,8 @@ anyhow.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"
 lru = "0.19"
 librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls"] }
 librqbit-core = { version = "9.0.1", default-features = false }

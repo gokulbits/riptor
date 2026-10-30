@@ -43,6 +43,7 @@ mod reuse;
 pub use countries::CountryStatus;
 mod peers;
 pub use peers::PeerInfo;
+mod resume;
 mod safety;
 mod swarm_ip;
 
@@ -69,6 +70,10 @@ enum Job {
     NetInfo,
     Scrub(Id20),
     Countries,
+    /// Remember what finished torrents' files look like.
+    StampFiles,
+    /// Put back torrents that have a record but aren't in the session.
+    RepairSession,
 }
 
 pub struct EngineConfig {
@@ -147,6 +152,8 @@ pub struct Engine {
     /// Waiting, and everything queued or running (so nothing runs twice at once).
     jobs: Mutex<(Vec<Job>, HashSet<Job>)>,
     disk_job: tokio::sync::Mutex<()>,
+    /// Torrents that have a record but couldn't go back in the session, and why.
+    missing: Mutex<HashMap<Id20, String>>,
     /// Public addresses with and without the VPN, once known.
     vpn_public: Mutex<(Option<std::net::IpAddr>, Option<Instant>)>,
     normal_public: Mutex<Option<std::net::IpAddr>>,
@@ -198,6 +205,7 @@ fn delta(now: u64, before: u64) -> u64 {
 impl Engine {
     pub async fn start(cfg: EngineConfig) -> anyhow::Result<Arc<Self>> {
         std::fs::create_dir_all(&cfg.data_dir)?;
+        crate::open_files::raise_limit();
         crate::observe::install();
         let data_dir = cfg.data_dir;
         let mut settings: Settings = state_file::load(&data_dir.join("settings.json"))?;
@@ -215,6 +223,7 @@ impl Engine {
         }
 
         let storage = riptor_storage::Shared::new(settings.storage.clone());
+        storage.stamps.open(data_dir.join("file-stamps.json"));
         let factory = CachedStorageFactory::new(storage.clone());
         let mut records = HashMap::new();
         for r in state.torrents {
@@ -307,6 +316,7 @@ impl Engine {
             last_disk_check: Mutex::new(None),
             jobs: Mutex::new((Vec::new(), HashSet::new())),
             disk_job: tokio::sync::Mutex::new(()),
+            missing: Mutex::new(HashMap::new()),
             vpn_public: Mutex::new((None, None)),
             normal_public: Mutex::new(None),
             swarm_verdict: Mutex::new(crate::seen_ip::Verdict::Unknown),
@@ -782,10 +792,23 @@ impl Engine {
         let _g = self.admin.lock().await;
         self.stop_data_check(&hash);
         self.web_seeds.lock().remove(&hash);
-        let result = self
-            .session()
-            .delete(TorrentIdOrHash::Hash(hash), delete_files)
-            .await;
+        let in_session = self.session().get(TorrentIdOrHash::Hash(hash)).is_some();
+        let result = if in_session {
+            self.session()
+                .delete(TorrentIdOrHash::Hash(hash), delete_files)
+                .await
+        } else {
+            Ok(())
+        };
+        if delete_files && !in_session {
+            let _ = self.events.send(Event::Notice {
+                level: NoticeLevel::Warning,
+                message: "Riptor no longer knows this torrent's file list, so its files were left in place."
+                    .into(),
+            });
+        }
+        self.missing.lock().remove(&hash);
+        self.storage.stamps.forget(&hash.as_string());
         if self.records.write().remove(&hash).is_some() {
             self.statistics.lock().torrents_removed += 1;
         }
@@ -1724,12 +1747,14 @@ impl Engine {
         *self.web_seed_http.lock() = None;
         let old = self.session();
         old.stop().await;
+        self.stamp_files(&old, false).await;
         let settings = self.settings();
         let net = self.network.read().clone();
         let new = build_session(&self.data_dir, &settings, &self.factory, &net).await?;
         *self.session.write() = new;
         self.runtime.lock().clear();
         self.apply_limits();
+        self.repair_locked().await;
         info!("session restarted with new network settings");
         Ok(())
     }
@@ -2166,7 +2191,9 @@ impl Engine {
         // The last save; a tick still running afterwards writes nothing.
         let queued = self.queue_state();
         let r = self.saver.close().await;
-        self.session().stop().await;
+        let session = self.session();
+        session.stop().await;
+        self.stamp_files(&session, false).await;
         queued.and(r)
     }
 
@@ -2246,6 +2273,7 @@ impl Engine {
         let mut web_wanted = Vec::new();
         let mut finished = Vec::new();
         let (mut sum_dd, mut sum_ud, mut sum_waste) = (0u64, 0u64, 0u64);
+        let gone_from_session;
         let mut global = GlobalStats {
             listen_port: session.announce_port(),
             alt_speed: self.settings.read().alt_speed_enabled,
@@ -2416,6 +2444,14 @@ impl Engine {
                 }
                 by_id.insert(h.id(), (hash, h.clone()));
             }
+            gone_from_session = records.len() > by_id.len();
+            // Still listed: a torrent that won't load must not just vanish.
+            let shown: HashSet<Id20> = by_id.values().map(|(hash, _)| *hash).collect();
+            for (hash, why) in self.missing.lock().iter() {
+                if let Some(rec) = records.get(hash).filter(|_| !shown.contains(hash)) {
+                    summaries.push(missing_summary(rec, why));
+                }
+            }
         }
 
         {
@@ -2510,6 +2546,13 @@ impl Engine {
         }
         if n % 60 == 30 {
             self.schedule_data_check();
+            crate::open_files::check_usage();
+        }
+        if n % 300 == 200 {
+            self.queue_job(Job::StampFiles);
+        }
+        if n % 30 == 15 && gone_from_session {
+            self.queue_job(Job::RepairSession);
         }
         if n % 15 == 1 {
             self.queue_job(Job::NetInfo);
@@ -2892,6 +2935,21 @@ fn load_history(
             reset(HISTORY_REJECTED)
         }
     }
+}
+
+/// A torrent that has a record but couldn't be loaded.
+fn missing_summary(rec: &Record, why: &str) -> TorrentSummary {
+    let stats = librqbit::TorrentStats {
+        state: TorrentStatsState::Error,
+        file_progress: Vec::new(),
+        error: Some(why.to_string()),
+        progress_bytes: 0,
+        uploaded_bytes: 0,
+        total_bytes: 0,
+        finished: false,
+        live: None,
+    };
+    summarize(rec, &stats, &Runtime::default(), 0, 0, None)
 }
 
 fn summarize(

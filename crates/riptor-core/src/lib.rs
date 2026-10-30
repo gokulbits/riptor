@@ -17,6 +17,7 @@ mod motw;
 pub mod netinfo;
 pub mod network;
 mod observe;
+mod open_files;
 pub mod passkey;
 pub mod paths;
 pub mod preview;

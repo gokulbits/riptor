@@ -100,6 +100,16 @@ impl TorrentStateInitializing {
             return None;
         }
 
+        // RIPTOR PATCH: unchanged files aren't read again on every start.
+        let unchanged = self
+            .shared
+            .spawner
+            .block_in_place_with_semaphore(|| self.files.data_unchanged())
+            .await;
+        if unchanged {
+            return Some(hp);
+        }
+
         let is_broken = self
             .shared
             .spawner
@@ -154,7 +164,8 @@ impl TorrentStateInitializing {
                     })
                     .enumerate()
                 {
-                    if fo.check_piece(piece_id).is_err() {
+                    // RIPTOR PATCH: a wrong hash is Ok(false); upstream only noticed read errors.
+                    if !matches!(fo.check_piece(piece_id), Ok(true)) {
                         return true;
                     }
 

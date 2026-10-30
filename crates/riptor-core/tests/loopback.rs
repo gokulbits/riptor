@@ -551,6 +551,119 @@ async fn kill_switch_blocks_everything_until_lifted() {
     engine.shutdown().await.unwrap();
 }
 
+/// A finished torrent in a fresh engine, with its data in `downloads/content`.
+async fn finished_torrent(tmp: &Path) -> (PathBuf, PathBuf, String) {
+    let downloads = tmp.join("downloads");
+    let content = downloads.join("content");
+    make_content(&content);
+    let created = create_torrent(
+        &content,
+        CreateTorrentOptions {
+            name: Some("content"),
+            trackers: vec![],
+            piece_length: Some(256 * 1024),
+        },
+        &BlockingSpawner::new(4),
+    )
+    .await
+    .unwrap();
+    let torrent_file = tmp.join("content.torrent");
+    std::fs::write(&torrent_file, created.as_bytes().unwrap()).unwrap();
+    let data_dir = tmp.join("data");
+    riptor_core::state_file::save(&data_dir.join("settings.json"), &quiet_settings(&downloads))
+        .unwrap();
+    let engine = Engine::start(EngineConfig {
+        data_dir: data_dir.clone(),
+    })
+    .await
+    .unwrap();
+    let mut events = engine.subscribe();
+    let id = engine
+        .add_direct(Source::File(torrent_file), AddParams::default())
+        .await
+        .unwrap();
+    wait_for(&mut events, &id, "initial check", complete).await;
+    engine.shutdown().await.unwrap();
+    (data_dir, content, id)
+}
+
+async fn restart(data_dir: &Path) -> (Arc<Engine>, tokio::sync::broadcast::Receiver<Event>) {
+    let engine = Engine::start(EngineConfig {
+        data_dir: data_dir.to_path_buf(),
+    })
+    .await
+    .unwrap();
+    let events = engine.subscribe();
+    (engine, events)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restarting_reads_nothing_until_a_file_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (data_dir, content, id) = finished_torrent(tmp.path()).await;
+
+    // Unchanged: comes back complete without reading a byte. Twice, so the
+    // start itself can't be what breaks the next one.
+    for run in 0..2 {
+        let (engine, mut events) = restart(&data_dir).await;
+        wait_for(&mut events, &id, "restart", complete).await;
+        assert_eq!(engine.statistics().disk.disk_reads, 0, "run {run}");
+        engine.shutdown().await.unwrap();
+    }
+
+    // Edited: the file's stamp no longer matches, so its first piece gets read and fails.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(content.join("a.bin"))
+        .and_then(|mut f| std::io::Write::write_all(&mut f, &[0xAA; 4096]))
+        .unwrap();
+    let (engine, mut events) = restart(&data_dir).await;
+    let t = wait_for(&mut events, &id, "the damage found", |t| {
+        t.progress < 1.0 && !matches!(t.state, TorrentState::Checking | TorrentState::Metadata)
+    })
+    .await;
+    assert!(t.progress > 0.0, "only the damaged piece is lost");
+    assert!(engine.statistics().disk.disk_reads > 0);
+    engine.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_torrent_missing_from_the_session_comes_back_or_stays_listed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (data_dir, _content, id) = finished_torrent(tmp.path()).await;
+    let session = data_dir.join("session");
+    let (engine, mut events) = restart(&data_dir).await;
+    wait_for(&mut events, &id, "restart", complete).await;
+    let db = std::fs::read(session.join("session.json")).unwrap();
+    let bytes = std::fs::read(session.join(format!("{id}.torrent"))).unwrap();
+
+    // What a load failure leaves behind: the record and the saved files, no torrent.
+    engine.drop_from_session(&id).await.unwrap();
+    std::fs::write(session.join("session.json"), &db).unwrap();
+    std::fs::write(session.join(format!("{id}.torrent")), &bytes).unwrap();
+    engine.repair_now().await;
+    wait_for(&mut events, &id, "the torrent put back", complete).await;
+    assert_eq!(engine.snapshot().0.len(), 1);
+
+    // Nothing to load it from: it stays in the list, saying why, and can be removed.
+    engine.drop_from_session(&id).await.unwrap();
+    engine.repair_now().await;
+    let t = wait_for(&mut events, &id, "the error row", |t| {
+        t.state == TorrentState::Error
+    })
+    .await;
+    assert!(t.error.unwrap().contains(".torrent"), "says what's wrong");
+    assert_eq!(t.name, "content");
+
+    engine
+        .remove(std::slice::from_ref(&id), false)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert!(engine.snapshot().0.is_empty());
+    engine.shutdown().await.unwrap();
+}
+
 /// While checking, progress counts checked bytes, so 100% alone isn't enough.
 fn complete(t: &riptor_core::TorrentSummary) -> bool {
     t.progress >= 1.0 && !matches!(t.state, TorrentState::Checking | TorrentState::Metadata)

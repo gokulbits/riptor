@@ -190,6 +190,10 @@ async fn controls_riptor_like_a_remote_app() {
     assert_eq!(t["tags"], "linux, iso");
     assert!(t["magnet_uri"].as_str().unwrap().starts_with("magnet:?"));
     assert!(main["server_state"]["dl_info_speed"].is_u64());
+    assert!(main["server_state"]["dl_info_data"].is_u64());
+    assert!(main["server_state"]["up_info_data"].is_u64());
+    let transfer = api.json("transfer/info").await;
+    assert!(transfer["dl_info_data"].is_u64() && transfer["up_info_data"].is_u64());
 
     // Details the app opens.
     let files = api.json(&format!("torrents/files?hash={hash}")).await;

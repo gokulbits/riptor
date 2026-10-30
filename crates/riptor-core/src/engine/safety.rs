@@ -28,6 +28,11 @@ impl Engine {
             Job::VpnAddress => self.look_up_vpn_address().await,
             Job::NetInfo => self.refresh_net_info().await,
             Job::Countries => self.refresh_countries().await,
+            Job::StampFiles => {
+                let session = self.session();
+                self.stamp_files(&session, true).await
+            }
+            Job::RepairSession => self.repair_session().await,
             Job::Scrub(h) => {
                 let _one_at_a_time = self.disk_job.lock().await;
                 self.scrub(h).await

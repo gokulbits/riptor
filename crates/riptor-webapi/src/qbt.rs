@@ -126,13 +126,41 @@ pub fn torrent(t: &TorrentSummary, magnet: &str) -> Value {
     })
 }
 
+/// Bytes transferred, all time and since Riptor started.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Totals {
+    pub all_dl: u64,
+    pub all_ul: u64,
+    pub session_dl: u64,
+    pub session_ul: u64,
+    pub session_wasted: u64,
+}
+
+impl From<&riptor_core::stats::StatsReport> for Totals {
+    fn from(r: &riptor_core::stats::StatsReport) -> Self {
+        Self {
+            all_dl: r.all_time.all_time_download,
+            all_ul: r.all_time.all_time_upload,
+            session_dl: r.session_download,
+            session_ul: r.session_upload,
+            session_wasted: r.session_wasted,
+        }
+    }
+}
+
 pub fn server_state(
     g: &GlobalStats,
     s: &riptor_core::Settings,
-    all_dl: u64,
-    all_ul: u64,
+    totals: Totals,
     free: u64,
 ) -> Value {
+    let Totals {
+        all_dl,
+        all_ul,
+        session_dl,
+        session_ul,
+        session_wasted,
+    } = totals;
     let kib = |k: Option<u32>| k.map_or(0, |k| i64::from(k) * 1024);
     let (dl, ul) = if g.alt_speed {
         (s.alt_dl_limit_kib, s.alt_ul_limit_kib)
@@ -144,7 +172,7 @@ pub fn server_state(
         "alltime_ul": all_ul,
         "use_subcategories": false,
         "global_ratio": if all_dl > 0 { format!("{:.2}", all_ul as f64 / all_dl as f64) } else { "0.00".into() },
-        "total_wasted_session": 0,
+        "total_wasted_session": session_wasted,
         "total_peer_connections": 0,
         "read_cache_hits": "0",
         "total_buffers_size": g.write_buffer_used,
@@ -153,10 +181,10 @@ pub fn server_state(
         "queued_io_jobs": 0,
         "average_time_queue": 0,
         "total_queued_size": 0,
-        "dl_info_data": 0,
+        "dl_info_data": session_dl,
         "dl_info_speed": g.dl_rate,
         "dl_rate_limit": kib(dl),
-        "up_info_data": 0,
+        "up_info_data": session_ul,
         "up_info_speed": g.ul_rate,
         "up_rate_limit": kib(ul),
         "use_alt_speed_limits": g.alt_speed,
@@ -251,4 +279,33 @@ pub fn peers(list: &[PeerInfo], rid: u64) -> Value {
         );
     }
     json!({ "full_update": true, "rid": rid, "peers": m, "show_flags": true })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_state_reports_session_and_all_time_totals() {
+        let totals = Totals {
+            all_dl: 1000,
+            all_ul: 500,
+            session_dl: 30,
+            session_ul: 20,
+            session_wasted: 4,
+        };
+        let v = server_state(
+            &GlobalStats::default(),
+            &riptor_core::Settings::default(),
+            totals,
+            7,
+        );
+        assert_eq!(v["dl_info_data"], 30);
+        assert_eq!(v["up_info_data"], 20);
+        assert_eq!(v["total_wasted_session"], 4);
+        assert_eq!(v["alltime_dl"], 1000);
+        assert_eq!(v["alltime_ul"], 500);
+        assert_eq!(v["global_ratio"], "0.50");
+        assert_eq!(v["free_space_on_disk"], 7);
+    }
 }
