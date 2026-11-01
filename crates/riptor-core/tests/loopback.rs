@@ -967,10 +967,13 @@ async fn web_seed_alone_completes_a_download() {
         .await
         .unwrap();
     // No peers, trackers or DHT: everything comes from the web seed.
-    wait_for(&mut events, &id, "download from the web seed", |t| {
+    let done = wait_for(&mut events, &id, "download from the web seed", |t| {
         complete(t)
     })
     .await;
+    // Nothing was transferred before this run, so both tallies agree.
+    assert!(done.session_downloaded > 0);
+    assert_eq!(done.session_downloaded, done.downloaded);
     for p in &rels {
         assert_eq!(
             sha(&downloads.join("content").join(p)),

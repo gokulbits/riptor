@@ -128,7 +128,7 @@ cargo bench -p riptor-storage
 5. **Search:**
    - Test the bubblewrap sandbox on Linux.
    - Try popular community plugins against the shim (official ones work on Windows with Python 3.14).
-   - Bump the embedded Python pin in `pyembed.rs` with Python security releases (3.14.8 is current).
+   - Bump the embedded Python pin in `pyembed.rs` with Python security releases (3.14.10 is current).
    - On the VPN, searches, scrapes and URL adds go through the tunnel, and plugins through a loopback proxy (`proxy.rs`) bound to it; LAN/loopback hosts stay direct (`riptor_net::stays_local`). A plugin that ignores proxy settings and opens its own sockets would bypass it.
 6. **Security and quality:**
    - A security review before each release.

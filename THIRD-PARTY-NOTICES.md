@@ -24,7 +24,7 @@ the `.deb` and `.rpm` packages depend on.
 ## Python (Windows setup only)
 
 The Windows setup installs the official python.org "embeddable package",
-version 3.14.8 (x64), unmodified, into Riptor's install folder
+version 3.14.10 (x64), unmodified, into Riptor's install folder
 (`python\`). Riptor uses it only to run search plugins, isolated (`-I`,
 cleared environment, time and output limits). It is not added to PATH and does
 not affect any other Python on the computer.
@@ -32,7 +32,7 @@ not affect any other Python on the computer.
 - License: Python Software Foundation License Version 2
   (https://docs.python.org/3/license.html); the license text is also inside
   the install folder as `python\LICENSE.txt`.
-- Original download: https://www.python.org/ftp/python/3.14.8/python-3.14.8-embed-amd64.zip
+- Original download: https://www.python.org/ftp/python/3.14.10/python-3.14.10-embed-amd64.zip
   (SHA-256 pinned in `crates/riptor-search/src/pyembed.rs`)
 
 On Linux, the `.deb` and `.rpm` packages depend on the distribution's

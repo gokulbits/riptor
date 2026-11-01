@@ -38,6 +38,8 @@ const t = (over: Partial<TorrentSummary>): TorrentSummary => ({
   ratio: 0,
   uploaded: 0,
   downloaded: 50,
+  session_uploaded: 0,
+  session_downloaded: 20,
   peers: 1,
   peers_seen: 2,
   category: null,

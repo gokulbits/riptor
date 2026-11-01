@@ -87,8 +87,12 @@ function General({ t }: { t: TorrentSummary }) {
         <Row k="Info hash">
           <span className="select-text font-mono text-xs">{t.id}</span>
         </Row>
-        <Row k="Downloaded">{formatBytes(t.downloaded)}</Row>
-        <Row k="Uploaded">{formatBytes(t.uploaded)}</Row>
+        <Row k="Downloaded">
+          {formatBytes(t.downloaded)} <span className="text-muted">({formatBytes(t.session_downloaded)} this session)</span>
+        </Row>
+        <Row k="Uploaded">
+          {formatBytes(t.uploaded)} <span className="text-muted">({formatBytes(t.session_uploaded)} this session)</span>
+        </Row>
         <Row k="Ratio">{formatRatio(t.ratio)}</Row>
         <Row k="Seeding time">{formatDuration(t.seeding_time)}</Row>
         <Row k="Added">{formatDate(t.added_on)}</Row>

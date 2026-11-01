@@ -386,7 +386,7 @@ Done: a weekly schedule for the alternative speed limits, a watched folder, movi
 ### Search
 - [ ] Test the bubblewrap plugin sandbox on Linux.
 - [ ] Test popular community plugins. Set `RIPTOR_TEST_PYTHON` to run the plugin end-to-end test without a system Python.
-- [ ] Update the pinned embedded Python with each Python security release (3.14.8 is current).
+- [ ] Update the pinned embedded Python with each Python security release (3.14.10 is current).
 
 ### Security and quality
 Done: fake-release warnings, checksum-file checks, passkey stripping, safe preview, the connections ledger, the swarm leak check, the untrusted-networks rule, and hostile-input tests for torrents, bencode, backups, Torznab and Internet Archive replies, plugin results, tracker scrapes, VPN profiles, checksum files, passkey stripping and country lists. They found and fixed a stack overflow on deeply nested bencode, integer overflow in bencode numbers, and a crash on non-ASCII dates in search results.

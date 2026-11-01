@@ -37,6 +37,9 @@ export interface TorrentSummary {
   ratio: number;
   uploaded: number;
   downloaded: number;
+  /** Transferred since Riptor started. */
+  session_uploaded: number;
+  session_downloaded: number;
   peers: number;
   peers_seen: number;
   category: string | null;

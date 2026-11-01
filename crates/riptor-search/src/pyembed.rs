@@ -12,7 +12,7 @@ use anyhow::{ensure, Context};
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
 
-pub const VERSION: &str = "3.14.8";
+pub const VERSION: &str = "3.14.10";
 
 pub struct Release {
     pub url: &'static str,
@@ -22,15 +22,15 @@ pub struct Release {
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 pub const RELEASE: Option<Release> = Some(Release {
-    url: "https://www.python.org/ftp/python/3.14.8/python-3.14.8-embed-amd64.zip",
-    sha256: "a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310",
-    size: 12_601_679,
+    url: "https://www.python.org/ftp/python/3.14.10/python-3.14.10-embed-amd64.zip",
+    sha256: "90905e64a840557d8c1bc4f5b74db3d7ee85e3ffb217611cac1c7813acea4159",
+    size: 12_619_664,
 });
 #[cfg(all(windows, target_arch = "aarch64"))]
 pub const RELEASE: Option<Release> = Some(Release {
-    url: "https://www.python.org/ftp/python/3.14.8/python-3.14.8-embed-arm64.zip",
-    sha256: "155be84ccb57c6331cf0e39001c78a1dfac3be62f403f3ff5f2e29b80dda7ebe",
-    size: 11_923_092,
+    url: "https://www.python.org/ftp/python/3.14.10/python-3.14.10-embed-arm64.zip",
+    sha256: "bbe116bb1248820359cbf25127ac5c7794ea161869d83686cfbc9a45203ff836",
+    size: 11_934_283,
 });
 #[cfg(not(all(windows, any(target_arch = "x86_64", target_arch = "aarch64"))))]
 pub const RELEASE: Option<Release> = None;

@@ -98,6 +98,9 @@ struct Pending {
 struct Runtime {
     last_fetched: u64,
     last_uploaded: u64,
+    /// Transferred since Riptor started, like the global session tally.
+    session_download: u64,
+    session_upload: u64,
     /// fetched - verified, last seen (finished torrents only).
     last_waste: u64,
     dl_rate: f64,
@@ -1752,7 +1755,14 @@ impl Engine {
         let net = self.network.read().clone();
         let new = build_session(&self.data_dir, &settings, &self.factory, &net).await?;
         *self.session.write() = new;
-        self.runtime.lock().clear();
+        // The librqbit counters start over, but the session tallies carry on.
+        for r in self.runtime.lock().values_mut() {
+            *r = Runtime {
+                session_download: r.session_download,
+                session_upload: r.session_upload,
+                ..Default::default()
+            };
+        }
         self.apply_limits();
         self.repair_locked().await;
         info!("session restarted with new network settings");
@@ -2369,6 +2379,8 @@ impl Engine {
 
                 rec.all_time_download += dd;
                 rec.all_time_upload += ud;
+                r.session_download += dd;
+                r.session_upload += ud;
                 sum_dd += dd;
                 sum_ud += ud;
                 let secs = dt.round() as u64;
@@ -3007,6 +3019,8 @@ fn summarize(
         ),
         uploaded: rec.all_time_upload,
         downloaded: rec.all_time_download,
+        session_uploaded: r.session_upload,
+        session_downloaded: r.session_download,
         peers,
         peers_seen: seen,
         category: rec.category.clone(),

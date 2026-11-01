@@ -138,6 +138,9 @@ pub struct TorrentSummary {
     pub ratio: f64,
     pub uploaded: u64,
     pub downloaded: u64,
+    /// Transferred since Riptor started.
+    pub session_uploaded: u64,
+    pub session_downloaded: u64,
     pub peers: u32,
     pub peers_seen: u32,
     pub category: Option<String>,
