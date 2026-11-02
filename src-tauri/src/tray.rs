@@ -152,12 +152,17 @@ pub fn show_main(app: &AppHandle) {
     set_toggle_text(app, true);
 }
 
+/// Whether the window is actually on screen (not hidden to the tray or minimised).
+pub fn main_visible(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false))
+}
+
 fn toggle_main(app: &AppHandle) {
     let Some(w) = app.get_webview_window("main") else {
         return;
     };
-    let visible = w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false);
-    if visible {
+    if main_visible(app) {
         let _ = w.hide();
         set_toggle_text(app, false);
     } else {

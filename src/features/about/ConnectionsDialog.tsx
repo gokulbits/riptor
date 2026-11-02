@@ -5,6 +5,7 @@ import { Dialog } from "../../components/ui";
 import { api, errorText } from "../../lib/ipc";
 import type { Connection } from "../../lib/types";
 import { useApp } from "../../stores/app";
+import { useVisible } from "../../lib/visible";
 
 const PURPOSE: Record<string, string> = {
   tracker: "Tracker",
@@ -35,6 +36,7 @@ const time = (s: number) => new Date(s * 1000).toLocaleTimeString(undefined, { h
 export function ConnectionsDialog({ onClose }: { onClose: () => void }) {
   const toast = useApp((s) => s.toast);
   const vpn = useApp((s) => s.global?.network === "vpn");
+  const visible = useVisible();
   const [rows, setRows] = useState<Connection[]>([]);
   const [filter, setFilter] = useState("");
 
@@ -43,9 +45,10 @@ export function ConnectionsDialog({ onClose }: { onClose: () => void }) {
   }, [toast]);
   useEffect(() => {
     load();
+    if (!visible) return;
     const t = window.setInterval(load, 3000);
     return () => window.clearInterval(t);
-  }, [load]);
+  }, [load, visible]);
 
   const shown = useMemo(() => {
     const q = filter.trim().toLowerCase();

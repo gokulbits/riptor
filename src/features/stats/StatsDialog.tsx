@@ -5,6 +5,7 @@ import { api, errorText } from "../../lib/ipc";
 import { formatBytes, formatDate, formatDuration, formatRate, formatRatio } from "../../lib/format";
 import type { StatsReport } from "../../lib/types";
 import { useApp } from "../../stores/app";
+import { useVisible } from "../../lib/visible";
 
 function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
   return (
@@ -86,16 +87,17 @@ function DailyChart({ daily }: { daily: StatsReport["all_time"]["daily"] }) {
 export function StatsDialog({ onClose }: { onClose: () => void }) {
   const toast = useApp((s) => s.toast);
   const [s, setS] = useState<StatsReport | null>(null);
+  const visible = useVisible();
   useEffect(() => {
     let alive = true;
     const load = () => api.statistics().then((r) => alive && setS(r)).catch((e) => alive && toast("error", errorText(e)));
     load();
-    const iv = setInterval(load, 2000);
+    const iv = visible ? window.setInterval(load, 2000) : undefined;
     return () => {
       alive = false;
-      clearInterval(iv);
+      if (iv !== undefined) window.clearInterval(iv);
     };
-  }, [toast]);
+  }, [toast, visible]);
 
   if (!s) return null;
   const a = s.all_time;

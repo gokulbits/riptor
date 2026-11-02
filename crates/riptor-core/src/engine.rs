@@ -196,6 +196,21 @@ fn parse_hash(s: &str) -> anyhow::Result<Id20> {
     Id20::from_str(s).map_err(|e| anyhow::anyhow!("invalid torrent id: {e}"))
 }
 
+/// What one torrent looked like at the start of a tick. Gathered before the
+/// record lock is taken, because every field here reaches into librqbit or
+/// another mutex.
+struct Observed {
+    hash: Id20,
+    handle: Arc<ManagedTorrent>,
+    stats: librqbit::TorrentStats,
+    live: Option<Arc<librqbit::TorrentStateLive>>,
+    tracker: Option<String>,
+    swarm: Option<crate::swarm::Swarm>,
+    scrub: Option<f32>,
+    /// Name findings for a torrent that had none yet.
+    findings: Option<Vec<Finding>>,
+}
+
 fn delta(now: u64, before: u64) -> u64 {
     // librqbit's live counters restart when a torrent is resumed.
     if now >= before {
@@ -2277,11 +2292,56 @@ impl Engine {
         let prefs = self.settings.read().seeding.clone();
         let mot = self.settings.read().mark_of_the_web;
 
-        let mut views = Vec::with_capacity(handles.len());
-        let mut summaries = Vec::with_capacity(handles.len());
+        // Names of torrents still waiting for their findings; normally none.
+        let want_findings: HashMap<Id20, String> = self
+            .records
+            .read()
+            .iter()
+            .filter(|(_, r)| r.findings.is_none())
+            .map(|(h, r)| (*h, r.name.clone()))
+            .collect();
+        let missing: Vec<(Id20, String)> = self
+            .missing
+            .lock()
+            .iter()
+            .map(|(h, why)| (*h, why.clone()))
+            .collect();
+        let observed: Vec<Observed> = handles
+            .into_iter()
+            .map(|h| {
+                let hash = h.info_hash();
+                Observed {
+                    hash,
+                    stats: h.stats(),
+                    live: h.live(),
+                    tracker: h
+                        .shared()
+                        .trackers
+                        .iter()
+                        .filter_map(|u| u.host_str())
+                        .min()
+                        .map(str::to_string),
+                    swarm: crate::swarm::get(&hash),
+                    scrub: self.data_check_progress(&hash),
+                    findings: want_findings
+                        .get(&hash)
+                        .and_then(|name| h.with_metadata(|m| name_findings(&m.info, name)).ok()),
+                    handle: h,
+                }
+            })
+            .collect();
+
+        let mut views = Vec::with_capacity(observed.len());
+        let mut summaries = Vec::with_capacity(observed.len());
         let mut by_id: HashMap<usize, (Id20, Arc<ManagedTorrent>)> = HashMap::new();
         let mut web_wanted = Vec::new();
         let mut finished = Vec::new();
+        // Done once the record lock is back off: each one calls into librqbit
+        // or takes a lock of its own.
+        let mut limits = Vec::new();
+        let mut priorities = Vec::new();
+        let mut moves = Vec::new();
+        let mut scans = Vec::new();
         let (mut sum_dd, mut sum_ud, mut sum_waste) = (0u64, 0u64, 0u64);
         let gone_from_session;
         let mut global = GlobalStats {
@@ -2295,40 +2355,36 @@ impl Engine {
             let mut records = self.records.write();
             normalize_queue(&mut records);
             let mut rt = self.runtime.lock();
-            for h in handles {
-                let hash = h.info_hash();
+            for o in &observed {
+                let hash = o.hash;
                 let Some(rec) = records.get_mut(&hash) else {
                     continue;
                 };
-                let stats = h.stats();
+                let stats = &o.stats;
                 let r = rt.entry(hash).or_default();
-                if let Some(live) = h.live() {
-                    apply_speed_limits(live.ratelimits(), rec.dl_limit_kib, rec.ul_limit_kib);
-                    let key = Arc::as_ptr(&live) as usize;
+                if let Some(live) = &o.live {
+                    limits.push((live.clone(), rec.dl_limit_kib, rec.ul_limit_kib));
+                    let key = Arc::as_ptr(live) as usize;
                     if r.priorities_applied != Some(key) {
                         let len = rec.file_priority.keys().max().map_or(0, |m| m + 1);
                         let mut levels = vec![FilePriority::Normal.level(); len];
                         for (i, p) in &rec.file_priority {
                             levels[*i] = p.level();
                         }
-                        live.set_file_priority_levels(&levels);
+                        priorities.push((live.clone(), levels));
                         r.priorities_applied = Some(key);
                     }
                 }
                 if rec.completed_on.is_some() {
                     if let Some(dest) = &rec.move_on_complete {
-                        if self.moving.lock().insert(hash) {
-                            self.queued_moves.lock().push((hash, dest.clone()));
-                        }
+                        moves.push((hash, dest.clone()));
                     } else if rec.content_findings.is_none() {
-                        self.queue_job(Job::ContentScan(hash));
+                        scans.push(Job::ContentScan(hash));
                     }
                 }
-                if rec.findings.is_none() {
-                    if let Ok(f) = h.with_metadata(|m| name_findings(&m.info, &rec.name)) {
-                        rec.findings = Some(f);
-                        self.dirty.store(true, Ordering::Relaxed);
-                    }
+                if let (None, Some(f)) = (&rec.findings, &o.findings) {
+                    rec.findings = Some(f.clone());
+                    self.dirty.store(true, Ordering::Relaxed);
                 }
                 let running = matches!(stats.state, TorrentStatsState::Live);
                 let (fetched, uploaded, checked, peers, seen) = stats
@@ -2414,9 +2470,9 @@ impl Engine {
                 let since = rec
                     .last_activity
                     .max(rec.completed_on.unwrap_or(rec.added_on));
-                let swarm = crate::swarm::get(&hash);
+                let swarm = o.swarm;
                 views.push(TorrentView {
-                    id: h.id(),
+                    id: o.handle.id(),
                     intent: rec.intent,
                     running,
                     finished: stats.finished,
@@ -2437,33 +2493,41 @@ impl Engine {
                     limits: rec.limits,
                     limit_action: rec.limit_action,
                 });
-                let tracker = h
-                    .shared()
-                    .trackers
-                    .iter()
-                    .filter_map(|u| u.host_str())
-                    .min()
-                    .map(str::to_string);
-                let mut summary = summarize(rec, &stats, r, peers, seen, tracker);
+                let mut summary = summarize(rec, stats, r, peers, seen, o.tracker.clone());
                 summary.swarm_seeds = swarm.map(|s| s.seeders);
                 summary.swarm_leechers = swarm.map(|s| s.leechers);
-                summary.scrub = self.data_check_progress(&hash);
+                summary.scrub = o.scrub;
                 summaries.push(summary);
                 if running && !stats.finished {
-                    if let Some(live) = h.live() {
-                        web_wanted.push((hash, h.clone(), live));
+                    if let Some(live) = &o.live {
+                        web_wanted.push((hash, o.handle.clone(), live.clone()));
                     }
                 }
-                by_id.insert(h.id(), (hash, h.clone()));
+                by_id.insert(o.handle.id(), (hash, o.handle.clone()));
             }
             gone_from_session = records.len() > by_id.len();
             // Still listed: a torrent that won't load must not just vanish.
             let shown: HashSet<Id20> = by_id.values().map(|(hash, _)| *hash).collect();
-            for (hash, why) in self.missing.lock().iter() {
+            for (hash, why) in &missing {
                 if let Some(rec) = records.get(hash).filter(|_| !shown.contains(hash)) {
                     summaries.push(missing_summary(rec, why));
                 }
             }
+        }
+
+        for (live, dl, ul) in limits {
+            apply_speed_limits(live.ratelimits(), dl, ul);
+        }
+        for (live, levels) in priorities {
+            live.set_file_priority_levels(&levels);
+        }
+        for (hash, dest) in moves {
+            if self.moving.lock().insert(hash) {
+                self.queued_moves.lock().push((hash, dest));
+            }
+        }
+        for job in scans {
+            self.queue_job(job);
         }
 
         {

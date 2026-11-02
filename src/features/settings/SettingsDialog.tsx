@@ -10,6 +10,7 @@ import { AboutSection } from "./AboutSection";
 import { AssociationSection } from "./AssociationSection";
 import { BackupSection } from "./BackupSection";
 import { RemoteControlSection } from "./RemoteControlSection";
+import { useVisible } from "../../lib/visible";
 
 export type Section = "downloads" | "connection" | "speed" | "bittorrent" | "storage" | "privacy" | "apps" | "backup" | "remote" | "about";
 
@@ -239,16 +240,17 @@ function DataUse({ s, set }: { s: Settings; set: (patch: Partial<Settings>) => v
 /** Country codes next to peers, from DB-IP's free list. */
 function PeerCountries({ s, set }: { s: Settings; set: (patch: Partial<Settings>) => void }) {
   const [status, setStatus] = useState<CountryStatus | null>(null);
+  const visible = useVisible();
   useEffect(() => {
     let alive = true;
     const load = () => api.countryStatus().then((v) => alive && setStatus(v), () => {});
     load();
-    const t = window.setInterval(load, 3000);
+    const t = visible ? window.setInterval(load, 3000) : undefined;
     return () => {
       alive = false;
-      window.clearInterval(t);
+      if (t !== undefined) window.clearInterval(t);
     };
-  }, []);
+  }, [visible]);
   const saved = status?.enabled;
   let line: string | null = null;
   if (s.peer_countries && saved) {

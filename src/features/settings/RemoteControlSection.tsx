@@ -5,6 +5,7 @@ import { Field, Toggle } from "../../components/ui";
 import { api, errorText } from "../../lib/ipc";
 import type { Settings, WebUiSettings, WebUiState } from "../../lib/types";
 import { useApp } from "../../stores/app";
+import { useVisible } from "../../lib/visible";
 
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -44,6 +45,7 @@ export function RemoteControlSection({ s, set }: { s: Settings; set: (patch: Par
   const toast = useApp((st) => st.toast);
   const w = s.web_ui;
   const edit = (patch: Partial<WebUiSettings>) => set({ web_ui: { ...w, ...patch } });
+  const visible = useVisible();
   const [state, setState] = useState<WebUiState | null>(null);
   const [password, setPassword] = useState("");
   const [ddnsPassword, setDdnsPassword] = useState("");
@@ -53,9 +55,10 @@ export function RemoteControlSection({ s, set }: { s: Settings; set: (patch: Par
   const refresh = () => api.webuiState().then(setState, () => {});
   useEffect(() => {
     refresh();
+    if (!visible) return;
     const t = window.setInterval(refresh, 3000);
     return () => window.clearInterval(t);
-  }, []);
+  }, [visible]);
 
   const run = (p: Promise<unknown>, done: string) =>
     p.then(

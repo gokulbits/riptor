@@ -5,6 +5,7 @@ import { Dialog } from "../../components/ui";
 import { api, errorText } from "../../lib/ipc";
 import type { LogLine } from "../../lib/types";
 import { useApp } from "../../stores/app";
+import { useVisible } from "../../lib/visible";
 
 type Level = "all" | "info" | "warn" | "error";
 
@@ -17,6 +18,7 @@ const asText = (l: LogLine) => `${new Date(l.time).toISOString()} ${l.level.toUp
 export function LogsDialog({ onClose }: { onClose: () => void }) {
   const toast = useApp((s) => s.toast);
   const [lines, setLines] = useState<LogLine[]>([]);
+  const visible = useVisible();
   const [level, setLevel] = useState<Level>("all");
   const [follow, setFollow] = useState(true);
   const bottom = useRef<HTMLDivElement>(null);
@@ -27,9 +29,10 @@ export function LogsDialog({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     load();
+    if (!visible) return;
     const t = window.setInterval(load, 2000);
     return () => window.clearInterval(t);
-  }, [load]);
+  }, [load, visible]);
 
   const shown = useMemo(() => lines.filter((l) => RANK[l.level] >= MIN[level]), [lines, level]);
 

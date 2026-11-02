@@ -7,6 +7,7 @@ import type { FileEntry, FilePriority, Limit, PeerInfo, PieceMap, TorrentSummary
 import { countryName, peerIp, sortPeers } from "./peers";
 import { ProgressBar, StateLabel, Tabs } from "../../components/ui";
 import { loadPref, savePref, useApp } from "../../stores/app";
+import { useVisible } from "../../lib/visible";
 import { PreviewDialog } from "./PreviewDialog";
 import { SafetyPanel } from "./SafetyPanel";
 import { SpeedGraph } from "./SpeedGraph";
@@ -32,6 +33,7 @@ function Row({ k, children }: { k: string; children: ReactNode }) {
 /** Downloaded parts along the torrent, refreshed every few seconds. */
 function Pieces({ t }: { t: TorrentSummary }) {
   const [map, setMap] = useState<PieceMap | null>(null);
+  const visible = useVisible();
   useEffect(() => {
     let alive = true;
     const load = () =>
@@ -40,12 +42,12 @@ function Pieces({ t }: { t: TorrentSummary }) {
         () => {},
       );
     load();
-    const iv = setInterval(load, 3000);
+    const iv = visible ? window.setInterval(load, 3000) : undefined;
     return () => {
       alive = false;
-      clearInterval(iv);
+      if (iv !== undefined) window.clearInterval(iv);
     };
-  }, [t.id]);
+  }, [t.id, visible]);
   if (!map || !map.total) return null;
   return (
     <div title={`${map.have} of ${map.total} pieces`} className="flex h-3 overflow-hidden rounded-sm bg-raised">
@@ -187,6 +189,7 @@ function RenameDialog({
 
 function Files({ t }: { t: TorrentSummary }) {
   const toast = useApp((s) => s.toast);
+  const visible = useVisible();
   const [files, setFiles] = useState<FileEntry[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [dirty, setDirty] = useState(false);
@@ -209,9 +212,10 @@ function Files({ t }: { t: TorrentSummary }) {
   }, [t.id]);
   useEffect(() => {
     load();
-    const iv = setInterval(load, 2000);
-    return () => clearInterval(iv);
-  }, [load]);
+    if (!visible) return;
+    const iv = window.setInterval(load, 2000);
+    return () => window.clearInterval(iv);
+  }, [load, visible]);
 
   if (!files) return <p className="p-3 text-muted">Loading…</p>;
   const toggle = (i: number) => {
@@ -439,6 +443,7 @@ function Trackers({ t }: { t: TorrentSummary }) {
 
 function Peers({ t }: { t: TorrentSummary }) {
   const [rows, setRows] = useState<PeerInfo[]>([]);
+  const visible = useVisible();
   useEffect(() => {
     let alive = true;
     const load = () =>
@@ -447,12 +452,12 @@ function Peers({ t }: { t: TorrentSummary }) {
         .then((peers) => alive && setRows(peers))
         .catch(() => alive && setRows([]));
     load();
-    const iv = setInterval(load, 2000);
+    const iv = visible ? window.setInterval(load, 2000) : undefined;
     return () => {
       alive = false;
-      clearInterval(iv);
+      if (iv !== undefined) window.clearInterval(iv);
     };
-  }, [t.id]);
+  }, [t.id, visible]);
   const toast = useApp((s) => s.toast);
   const [peer, setPeer] = useState("");
   const sorted = useMemo(() => sortPeers(rows), [rows]);

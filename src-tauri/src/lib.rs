@@ -100,9 +100,11 @@ fn forward_external(app: &AppHandle, items: Vec<Source>) {
 fn pump_events(app: AppHandle, engine: Arc<Engine>) {
     let mut rx = engine.subscribe();
     tauri::async_runtime::spawn(async move {
+        let mut unseen = 0u64;
         loop {
             match rx.recv().await {
                 Ok(ev) => {
+                    let mut skip = false;
                     match &ev {
                         Event::Finished { name, .. } => {
                             let _ = app
@@ -115,10 +117,20 @@ fn pump_events(app: AppHandle, engine: Arc<Engine>) {
                         Event::Tick { global, torrents } => {
                             tray::update(&app, global);
                             app.state::<when_done::WhenDone>().on_tick(&app, torrents);
+                            // Hidden to the tray: one tick in five keeps the view from
+                            // being stale when it comes back, without the per-second cost.
+                            if tray::main_visible(&app) {
+                                unseen = 0;
+                            } else {
+                                unseen += 1;
+                                skip = unseen % 5 != 0;
+                            }
                         }
                         _ => {}
                     }
-                    let _ = app.emit("riptor://event", ev);
+                    if !skip {
+                        let _ = app.emit("riptor://event", ev);
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(_) => break,
