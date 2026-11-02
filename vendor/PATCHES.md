@@ -6,6 +6,10 @@ Copied unmodified from crates.io (`librqbit-9.0.1`), plus the patches below.
 Every change is marked in the source with a `RIPTOR PATCH` comment. Re-apply them
 when upgrading, and try to upstream each one.
 
+The sibling crates that stay on crates.io (`librqbit-buffers`,
+`librqbit-clone-to-owned`, `librqbit-sha1-wrapper`, `librqbit-upnp`) belong to the
+same release as the fork, so keep them on 9.0.1 until the fork is rebased.
+
 | File | Change | Why | Upstream |
 | --- | --- | --- | --- |
 | `src/session_persistence/json.rs` | Lift the "only FilesystemStorageFactory can be persisted" check. | Riptor installs `CachedStorageFactory` as the session's *default* factory, so restored torrents use it correctly. Without persistence there is no fast-resume, and every restart would re-hash every torrent. | Not yet: propose "allow when the factory is the session default". |

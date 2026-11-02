@@ -112,6 +112,14 @@ impl ReadCache {
         }
     }
 
+    /// Drops everything held but keeps the configured size, for when nothing
+    /// is running and the memory is better off back with the OS.
+    pub fn release(&self) {
+        let mut g = self.inner.lock();
+        g.lru.clear();
+        g.bytes = 0;
+    }
+
     pub fn stats(&self) -> CacheStats {
         CacheStats {
             bytes: self.inner.lock().bytes,

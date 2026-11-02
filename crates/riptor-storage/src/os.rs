@@ -2,6 +2,43 @@
 
 use std::fs::File;
 use std::io;
+use std::sync::OnceLock;
+
+/// Physical memory in bytes, or `None` where we can't ask. Asked once.
+pub fn total_memory() -> Option<u64> {
+    static TOTAL: OnceLock<Option<u64>> = OnceLock::new();
+    *TOTAL.get_or_init(read_total_memory)
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn read_total_memory() -> Option<u64> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: an all-zero MEMORYSTATUSEX is valid; the call only needs dwLength
+    // set and writes nothing outside the struct.
+    let mut info: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    info.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    let ok = unsafe { GlobalMemoryStatusEx(&mut info) };
+    (ok != 0).then_some(info.ullTotalPhys)
+}
+
+#[cfg(target_os = "linux")]
+fn read_total_memory() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let kb: u64 = text
+        .lines()
+        .find_map(|l| l.strip_prefix("MemTotal:"))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
+    kb.checked_mul(1024)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn read_total_memory() -> Option<u64> {
+    None
+}
 
 /// NTFS needs the flag; Linux files are sparse already.
 #[cfg(windows)]

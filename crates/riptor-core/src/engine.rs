@@ -2529,6 +2529,11 @@ impl Engine {
         for job in scans {
             self.queue_job(job);
         }
+        // Nothing is running, so the read cache can't be serving anyone: give the
+        // memory back rather than holding it until something evicts it.
+        if global.read_cache.bytes > 0 && !views.iter().any(|v| v.running) {
+            self.storage.read_cache.release();
+        }
 
         {
             let mut st = self.statistics.lock();
