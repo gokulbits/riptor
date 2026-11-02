@@ -123,7 +123,7 @@ fn pump_events(app: AppHandle, engine: Arc<Engine>) {
                                 unseen = 0;
                             } else {
                                 unseen += 1;
-                                skip = unseen % 5 != 0;
+                                skip = !unseen.is_multiple_of(5);
                             }
                         }
                         _ => {}
