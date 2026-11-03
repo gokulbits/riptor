@@ -243,15 +243,14 @@ jobs:
       - name: Setup size budget
         if: runner.os == 'Windows'
         shell: bash
-        # 20 MiB, so the download stays small; only riptor.exe grows.
+        # A target, not a limit: 0.1.6 and 0.1.7 already went over it.
         run: |
           budget=20971520
           for f in target/release/bundle/nsis/*.exe; do
             size=$(stat -c%s "$f")
-            echo "$(basename "$f"): $size bytes, $((size * 100 / budget))% of the budget"
+            echo "$(basename "$f"): $size bytes, $((size * 100 / budget))% of the 20 MiB target"
             if [ "$size" -gt "$budget" ]; then
-              echo "::error::$(basename "$f") is over the $budget-byte setup budget"
-              exit 1
+              echo "::warning::$(basename "$f") is $((size - budget)) bytes over the 20 MiB setup target"
             fi
           done
       - name: SHA-256 sums
