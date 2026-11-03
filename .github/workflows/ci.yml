@@ -243,14 +243,15 @@ jobs:
       - name: Setup size budget
         if: runner.os == 'Windows'
         shell: bash
-        # A target, not a limit: 0.1.6 and 0.1.7 already went over it.
+        # 25 MiB; 0.1.7 is 20.22 MiB.
         run: |
-          budget=20971520
+          budget=26214400
           for f in target/release/bundle/nsis/*.exe; do
             size=$(stat -c%s "$f")
-            echo "$(basename "$f"): $size bytes, $((size * 100 / budget))% of the 20 MiB target"
+            echo "$(basename "$f"): $size bytes, $((size * 100 / budget))% of the 25 MiB limit"
             if [ "$size" -gt "$budget" ]; then
-              echo "::warning::$(basename "$f") is $((size - budget)) bytes over the 20 MiB setup target"
+              echo "::error::$(basename "$f") is $((size - budget)) bytes over the 25 MiB setup limit"
+              exit 1
             fi
           done
       - name: SHA-256 sums

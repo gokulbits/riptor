@@ -372,7 +372,7 @@ Done: the Windows setup with OpenVPN and Python bundled, `.deb` and `.rpm` packa
 - [ ] Try headless mode (`riptord`, `riptor-cli`) on real Linux.
 - [ ] Test the installers on clean Windows and Linux machines.
 - [ ] Code signing (optional).
-- [ ] Get the Windows setup back under 20 MiB (20.22 MiB for 0.1.7); CI reports the size but doesn't fail on it.
+- [ ] Keep the Windows setup under 25 MiB (20.22 MiB for 0.1.7); CI fails the build if it grows past that.
 
 ### Engine and storage
 Done: web seeds (BEP 19), peer traffic encryption (MSE/PE), runtime per-torrent speed limits, force recheck, moving and renaming a torrent's files, a free-space guard, editable trackers, peer bans, peer countries, a piece map, play-while-downloading, importing from other clients, and removing leftover session entries.
