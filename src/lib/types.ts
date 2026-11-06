@@ -135,6 +135,9 @@ export interface GlobalStats {
   network: "normal" | "vpn" | "blocked";
   dl_rate: number;
   ul_rate: number;
+  /** Transferred since Riptor started. */
+  session_downloaded: number;
+  session_uploaded: number;
   dht_nodes: number | null;
   listen_port: number | null;
   alt_speed: boolean;

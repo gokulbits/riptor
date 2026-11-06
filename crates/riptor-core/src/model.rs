@@ -176,6 +176,9 @@ pub struct GlobalStats {
     pub network: String,
     pub dl_rate: u64,
     pub ul_rate: u64,
+    /// Transferred since Riptor started.
+    pub session_downloaded: u64,
+    pub session_uploaded: u64,
     pub dht_nodes: Option<usize>,
     pub listen_port: Option<u16>,
     pub alt_speed: bool,

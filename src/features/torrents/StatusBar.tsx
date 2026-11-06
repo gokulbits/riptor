@@ -58,14 +58,17 @@ function RateButton({ dir }: { dir: "down" | "up" }) {
   const apply = (s: Settings, kib: number | null) =>
     api.updateSettings({ ...s, [key]: kib }).catch((err) => toast("error", errorText(err)));
   const Icon = dir === "down" ? ArrowDown : ArrowUp;
+  const total = (dir === "down" ? g?.session_downloaded : g?.session_uploaded) ?? 0;
   return (
     <>
       <button
         onClick={open}
-        className="flex w-28 items-center justify-end gap-1 rounded-sm px-1 tabular-nums text-fg hover:bg-raised"
-        title={`${dir === "down" ? "Download" : "Upload"} limit${alt ? " (alternative)" : ""}: click to change`}
+        className="flex items-center justify-end gap-1 rounded-sm px-1 tabular-nums text-fg hover:bg-raised"
+        title={`${dir === "down" ? "Downloaded" : "Uploaded"} since Riptor started: ${formatBytes(total)}. ${dir === "down" ? "Download" : "Upload"} limit${alt ? " (alternative)" : ""}: click to change`}
       >
-        <Icon size={12} className={dir === "down" ? "text-accent" : "text-ok"} /> {formatRate((dir === "down" ? g?.dl_rate : g?.ul_rate) ?? 0)}
+        <Icon size={12} className={dir === "down" ? "text-accent" : "text-ok"} />
+        <span className="w-20 text-right">{formatRate((dir === "down" ? g?.dl_rate : g?.ul_rate) ?? 0)}</span>
+        <span className="w-16 text-right text-muted">{formatBytes(total)}</span>
       </button>
       {menu && (
         <ContextMenu
