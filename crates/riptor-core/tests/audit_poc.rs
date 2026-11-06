@@ -105,48 +105,69 @@ async fn a1_forged_backup_cannot_enable_remote_control() {
     );
 }
 
-/// A2: `check_save_root` compares paths textually, so Windows spellings of a
-/// protected folder other than the one it looked for are accepted. Asserts the
-/// defect, so it fails once the check canonicalises its input.
+/// A2: `check_save_root` used to compare paths textually, so other spellings of
+/// a protected folder got through. Every spelling must now be refused.
 #[test]
 #[cfg(windows)]
-fn a2_check_save_root_misses_windows_path_aliases() {
+fn a2_windows_path_aliases_cannot_reach_protected_folders() {
     use riptor_core::paths::check_save_root;
 
-    // The spelling it does catch.
-    assert!(
-        check_save_root(Path::new(r"C:\Windows\System32"), None).is_err(),
-        "the plain spelling is refused"
-    );
-
-    // Verbatim prefix: the same folder, accepted today.
-    assert!(
-        check_save_root(Path::new(r"\\?\C:\Windows\System32"), None).is_ok(),
-        "FINDING A2 is fixed: the verbatim prefix is now refused"
-    );
+    for spelling in [
+        r"C:\Windows\System32",
+        r"\\?\C:\Windows\System32",
+        r"\\.\C:\Windows\System32",
+        r"C:\Windows\..\Windows\System32",
+        r"C:/Windows/System32",
+    ] {
+        assert!(
+            check_save_root(Path::new(spelling), None).is_err(),
+            "accepted {spelling}"
+        );
+    }
 
     // 8.3 short name, where the volume keeps them.
     if Path::new(r"C:\PROGRA~1").is_dir() {
         assert!(
-            check_save_root(Path::new(r"C:\PROGRA~1\Riptor"), None).is_ok(),
-            "FINDING A2 is fixed: the 8.3 short name is now refused"
+            check_save_root(Path::new(r"C:\PROGRA~1\Riptor"), None).is_err(),
+            "accepted the 8.3 short name for Program Files"
         );
     }
+
+    // An administrative share is the whole drive.
+    assert!(check_save_root(Path::new(r"\\127.0.0.1\C$\Windows"), None).is_err());
+
+    // A normal folder, and a normal network share, still work.
+    let ok = std::env::temp_dir().join("riptor-a2-ok");
+    assert!(check_save_root(&ok, None).is_ok(), "{ok:?} refused");
+    assert!(check_save_root(Path::new(r"\\nas\media\torrents"), None).is_ok());
 }
 
-/// A2 (Unix side): a symlinked save folder is not resolved either, so a link to
-/// /etc passes. Asserts the defect.
+/// A2 (Unix side): a symlinked save folder must be resolved before the check.
 #[test]
 #[cfg(unix)]
-fn a2_check_save_root_does_not_resolve_symlinks() {
+fn a2_symlinked_save_folders_cannot_reach_protected_folders() {
     use riptor_core::paths::check_save_root;
     let d = tempfile::tempdir().unwrap();
-    let link = d.path().join("downloads");
-    std::os::unix::fs::symlink("/etc", &link).unwrap();
+
+    let direct = d.path().join("to-etc");
+    std::os::unix::fs::symlink("/etc", &direct).unwrap();
     assert!(
-        check_save_root(&link, None).is_ok(),
-        "FINDING A2 is fixed: a symlink to /etc is now refused"
+        check_save_root(&direct, None).is_err(),
+        "a symlink to /etc was accepted"
     );
+
+    // The link is a parent of the folder, which does not exist yet.
+    let parent = d.path().join("to-usr");
+    std::os::unix::fs::symlink("/usr", &parent).unwrap();
+    assert!(
+        check_save_root(&parent.join("share").join("dl"), None).is_err(),
+        "a folder under a symlink to /usr was accepted"
+    );
+
+    // A plain folder is still fine.
+    let fine = d.path().join("downloads");
+    std::fs::create_dir_all(&fine).unwrap();
+    assert!(check_save_root(&fine, None).is_ok());
 }
 
 /// A3: a `.torrent` whose `piece length` is 0 used to divide by zero in
@@ -207,4 +228,32 @@ fn sane_torrent() -> Vec<u8> {
     b.extend_from_slice(&[0u8; 20]);
     b.extend_from_slice(b"ee");
     b
+}
+
+/// A4: `move_files` used to check the destination and then let `fs::rename`
+/// replace it. The move itself must refuse, with no check-then-act window.
+#[test]
+fn a4_moving_never_overwrites_the_destination() {
+    use riptor_core::relocate::move_files;
+
+    let d = tempfile::tempdir().unwrap();
+    let from = d.path().join("src.bin");
+    let to = d.path().join("sub").join("dst.bin");
+    std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+    std::fs::write(&from, b"new").unwrap();
+    std::fs::write(&to, b"precious").unwrap();
+
+    let err = move_files(&[(from.clone(), to.clone())]).expect_err("overwrote the destination");
+    assert!(
+        format!("{err:#}").contains("won't overwrite"),
+        "unhelpful error: {err:#}"
+    );
+    assert_eq!(std::fs::read(&to).unwrap(), b"precious", "destination changed");
+    assert!(from.is_file(), "source was removed anyway");
+
+    // With the destination gone it moves, and the source is cleaned up.
+    std::fs::remove_file(&to).unwrap();
+    move_files(&[(from.clone(), to.clone())]).unwrap();
+    assert_eq!(std::fs::read(&to).unwrap(), b"new");
+    assert!(!from.exists());
 }
