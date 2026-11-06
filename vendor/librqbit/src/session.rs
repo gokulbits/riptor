@@ -60,7 +60,7 @@ use librqbit_core::{
     magnet::Magnet,
     peer_id::generate_azereus_style,
     spawn_utils::spawn_with_cancel,
-    torrent_metainfo::{TorrentMetaV1Owned, ValidatedTorrentMetaV1Info},
+    torrent_metainfo::{TorrentMetaV1Info, TorrentMetaV1Owned, ValidatedTorrentMetaV1Info},
 };
 use librqbit_lsd::{LocalServiceDiscovery, LocalServiceDiscoveryOptions};
 use librqbit_utp::BindDevice;
@@ -91,6 +91,18 @@ fn torrent_from_bytes(bytes: Bytes) -> anyhow::Result<ParsedTorrentFile> {
         meta: parsed.clone_to_owned(Some(&bytes)),
         torrent_bytes: bytes,
     })
+}
+
+// RIPTOR PATCH: Lengths::new divides by piece length without checking it.
+const MAX_PIECE_LENGTH: u32 = 256 * 1024 * 1024;
+
+fn checked_validate<B: AsRef<[u8]>>(
+    info: TorrentMetaV1Info<B>,
+) -> crate::Result<ValidatedTorrentMetaV1Info<B>> {
+    if info.piece_length == 0 || info.piece_length > MAX_PIECE_LENGTH {
+        return Err(librqbit_core::Error::BadTorrentZeroLength.into());
+    }
+    Ok(info.validate()?)
 }
 
 #[derive(Default)]
@@ -1209,7 +1221,8 @@ impl Session {
                     InternalAddResult {
                         info_hash: torrent.meta.info_hash,
                         metadata: Some(TorrentMetadata::new(
-                            torrent.meta.info.data.validate()?,
+                            // RIPTOR PATCH: bounds piece length.
+                            checked_validate(torrent.meta.info.data)?,
                             torrent.torrent_bytes,
                             torrent.meta.info.raw_bytes.0,
                         )?),
@@ -1777,7 +1790,8 @@ impl Session {
                 seen,
             } => {
                 trace!(?info, "received result from DHT");
-                let info = info.validate()?;
+                // RIPTOR PATCH: bounds piece length; peers send this.
+                let info = checked_validate(info)?;
                 Ok(ResolveMagnetResult {
                     metadata: TorrentMetadata::new(
                         info,

@@ -9,48 +9,46 @@ use std::path::Path;
 use riptor_core::backup::{self, BackupPayload};
 use riptor_core::{Engine, EngineConfig, RestoreOptions, Settings};
 
-/// A1: a forged, password-less backup turns remote control on with authentication
-/// bypassed for every address, and asks the router to forward the port.
-///
-/// `Settings::validate()` only checks the shape of `web_ui`, and `restore_backup`
-/// applies it as soon as validation passes, so nothing stops this.
+/// A1: a forged, password-less backup must not be able to turn remote control
+/// on or bypass its authentication. A password-protected one still may, since
+/// it is not forgeable.
 #[tokio::test]
-async fn a1_forged_backup_enables_unauthenticated_remote_control() {
+async fn a1_forged_backup_cannot_enable_remote_control() {
     let d = tempfile::tempdir().unwrap();
     let dl = d.path().join("downloads");
     std::fs::create_dir_all(&dl).unwrap();
 
-    let mut hostile = Settings::default();
-    hostile.download_dir = dl.clone();
-    hostile.web_ui.enabled = true;
-    hostile.web_ui.bypass_localhost = true;
-    hostile.web_ui.bypass_subnets = true;
-    hostile.web_ui.subnet_whitelist = vec!["0.0.0.0/0".into(), "::/0".into()];
-    hostile.web_ui.allow_public = true;
-    hostile.web_ui.upnp = true;
-    hostile.web_ui.csrf_protection = false;
+    let hostile = |dl: &Path| {
+        let mut s = Settings {
+            download_dir: dl.to_path_buf(),
+            ..Default::default()
+        };
+        s.web_ui.enabled = true;
+        s.web_ui.bypass_localhost = true;
+        s.web_ui.bypass_subnets = true;
+        s.web_ui.subnet_whitelist = vec!["0.0.0.0/0".into(), "::/0".into()];
+        s.web_ui.allow_public = true;
+        s.web_ui.upnp = true;
+        s.web_ui.csrf_protection = false;
+        s
+    };
+    let seal = |s: Settings, password: Option<&str>| {
+        backup::seal(
+            &BackupPayload {
+                created: 0,
+                app_version: "0.1.8".into(),
+                settings: s,
+                categories: BTreeMap::new(),
+                torrents: vec![],
+                statistics: Default::default(),
+            },
+            password,
+        )
+        .unwrap()
+    };
 
-    // Nothing rejects it, and no password is needed to seal it.
-    hostile.validate().expect("FINDING A1: hostile web_ui validates");
-    let sealed = backup::seal(
-        &BackupPayload {
-            created: 0,
-            app_version: "0.1.8".into(),
-            settings: hostile,
-            categories: BTreeMap::new(),
-            torrents: vec![],
-            statistics: Default::default(),
-        },
-        None,
-    )
-    .unwrap();
-    assert!(
-        !backup::is_password_protected(&sealed).unwrap(),
-        "the app key seals it, so anyone can forge one"
-    );
-
-    let file = d.path().join("forged.riptorbackup");
-    std::fs::write(&file, &sealed).unwrap();
+    let forged = d.path().join("forged.riptorbackup");
+    std::fs::write(&forged, seal(hostile(&dl), None)).unwrap();
 
     let engine = Engine::start(EngineConfig {
         data_dir: d.path().join("data"),
@@ -59,29 +57,51 @@ async fn a1_forged_backup_enables_unauthenticated_remote_control() {
     .unwrap();
     assert!(!engine.settings().web_ui.enabled, "off before the restore");
 
-    let report = engine
-        .restore_backup(
-            &file,
-            None,
-            RestoreOptions {
-                settings: true,
-                torrents: false,
-                statistics: false,
-                resume_torrents: false,
-            },
-        )
-        .await
-        .unwrap();
+    let opts = RestoreOptions {
+        settings: true,
+        torrents: false,
+        statistics: false,
+        resume_torrents: false,
+    };
+    let report = engine.restore_backup(&forged, None, opts).await.unwrap();
 
-    assert!(report.settings_restored, "the forged settings were applied");
+    assert!(
+        report.settings_restored,
+        "the rest of the settings came back"
+    );
+    assert_eq!(
+        engine.settings().download_dir,
+        dl,
+        "a harmless setting is still restored"
+    );
     let w = engine.settings().web_ui;
     assert!(
-        w.enabled && w.bypass_localhost && w.bypass_subnets && w.allow_public && w.upnp,
-        "FINDING A1: forged backup enabled remote control with auth bypassed: {w:?}"
+        !w.enabled && !w.bypass_localhost && !w.bypass_subnets && !w.allow_public && !w.upnp,
+        "a forged backup must not open remote control: {w:?}"
     );
     assert!(
-        w.subnet_whitelist.iter().any(|s| s == "0.0.0.0/0"),
-        "FINDING A1: every IPv4 client bypasses authentication"
+        w.subnet_whitelist.is_empty() && w.csrf_protection,
+        "nor weaken it: {w:?}"
+    );
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.contains("remote control settings")),
+        "the user is told: {:?}",
+        report.skipped
+    );
+
+    // The owner's own password-protected backup is not forgeable, so it still applies.
+    let mine = d.path().join("mine.riptorbackup");
+    std::fs::write(&mine, seal(hostile(&dl), Some("correct horse"))).unwrap();
+    engine
+        .restore_backup(&mine, Some("correct horse".into()), opts)
+        .await
+        .unwrap();
+    assert!(
+        engine.settings().web_ui.enabled,
+        "a password-protected backup still restores remote control"
     );
 }
 
@@ -129,88 +149,62 @@ fn a2_check_save_root_does_not_resolve_symlinks() {
     );
 }
 
-/// A3: a `.torrent` whose `piece length` is 0 divides by zero in
-/// `librqbit_core::lengths::Lengths::new` (no guard before the `div_ceil`).
-/// Release builds use `panic = "abort"`, so this aborts the process.
-///
-/// Runs the parse on its own thread and asserts it panicked, so the suite stays
-/// green; invert it once the metadata is rejected with an error instead.
-#[test]
-fn a3_zero_piece_length_panics_instead_of_erroring() {
-    // d8:announce..4:infod6:lengthi1e4:name1:x12:piece lengthi0e6:pieces20:<20 zeros>ee
-    let mut b = b"d4:infod6:lengthi1e4:name1:x12:piece lengthi0e6:pieces20:".to_vec();
-    b.extend_from_slice(&[0u8; 20]);
-    b.extend_from_slice(b"ee");
-
-    let bytes = b.clone();
-    let outcome = std::thread::Builder::new()
-        .spawn(move || {
-            // Quiet: the panic hook would otherwise print a scary backtrace.
-            let prev = std::panic::take_hook();
-            if std::env::var_os("AUDIT_SHOW_PANIC").is_none() {
-                std::panic::set_hook(Box::new(|_| {}));
-            }
-            let r = std::panic::catch_unwind(|| {
-                librqbit::torrent_from_bytes(&bytes)
-                    .map_err(|e| format!("{e:?}"))
-                    .and_then(|t| t.info.data.validate().map(|_| ()).map_err(|e| format!("{e:?}")))
-            });
-            std::panic::set_hook(prev);
-            r
-        })
-        .unwrap()
-        .join()
-        .unwrap();
-
-    assert!(
-        outcome.is_err(),
-        "FINDING A3 is fixed: zero piece length now returns an error, not a panic ({:?})",
-        outcome.map(|r| r.is_ok())
-    );
-}
-
-/// A3, reachability: the same metadata through `Engine::preview`, the call every
-/// add path uses (file, URL, magnet, RSS pick, remote-control upload, import).
-/// Runs on its own thread; if it aborts rather than unwinding the test harness
-/// reports a signal, which is the point.
+/// A3: a `.torrent` whose `piece length` is 0 used to divide by zero in
+/// `librqbit_core::lengths::Lengths::new`. Both the early check in
+/// `riptor_core::input` and the vendored session's own bound must refuse it,
+/// and it must be an error, never a panic.
 #[tokio::test]
-async fn a3_zero_piece_length_reaches_engine_preview() {
+async fn a3_zero_piece_length_is_refused_not_a_panic() {
     let d = tempfile::tempdir().unwrap();
-    let mut b = b"d4:infod6:lengthi1e4:name1:x12:piece lengthi0e6:pieces20:".to_vec();
-    b.extend_from_slice(&[0u8; 20]);
-    b.extend_from_slice(b"ee");
-    let file = d.path().join("zero.torrent");
-    std::fs::write(&file, &b).unwrap();
-
     let engine = Engine::start(EngineConfig {
         data_dir: d.path().join("data"),
     })
     .await
     .unwrap();
 
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let got = std::panic::AssertUnwindSafe(engine.preview(riptor_core::Source::File(file)))
-        .catch_unwind_here()
-        .await;
-    std::panic::set_hook(prev);
+    for (name, piece_len) in [("zero", "0"), ("huge", "4294967295"), ("tiny", "1024")] {
+        let mut b = format!("d4:infod6:lengthi1e4:name1:x12:piece lengthi{piece_len}e6:pieces20:")
+            .into_bytes();
+        b.extend_from_slice(&[0u8; 20]);
+        b.extend_from_slice(b"ee");
 
-    assert!(
-        got.is_err(),
-        "FINDING A3 is fixed: preview now returns an error for zero piece length"
-    );
+        assert!(
+            riptor_core::input::check_metadata(&b).is_err(),
+            "{name}: check_metadata accepted it"
+        );
+
+        let file = d.path().join(format!("{name}.torrent"));
+        std::fs::write(&file, &b).unwrap();
+        let err = engine
+            .preview(riptor_core::Source::File(file))
+            .await
+            .expect_err(&format!("{name}: preview accepted it"));
+        assert!(
+            format!("{err:#}").contains("piece length"),
+            "{name}: unhelpful error {err:#}"
+        );
+    }
+
+    // A normal piece length still works.
+    assert!(riptor_core::input::check_metadata(&sane_torrent()).is_ok());
     engine.shutdown().await.unwrap();
 }
 
-/// Small helper: catch_unwind around a future.
-trait CatchUnwindHere: Sized {
-    #[allow(async_fn_in_trait)]
-    async fn catch_unwind_here(self) -> Result<(), ()>;
+/// A3: parsing was always safe; it was validating that divided by zero. Metadata
+/// peers send over BEP 9 never passes through `riptor_core::input`, so the
+/// vendored session carries its own bound at both of its validate sites.
+#[test]
+fn a3_parsing_is_safe_validating_was_not() {
+    let mut b = b"d4:infod6:lengthi1e4:name1:x12:piece lengthi0e6:pieces20:".to_vec();
+    b.extend_from_slice(&[0u8; 20]);
+    b.extend_from_slice(b"ee");
+    let parsed = librqbit::torrent_from_bytes(&b).expect("parses");
+    assert_eq!(parsed.info.data.piece_length, 0);
 }
 
-impl<F: std::future::Future> CatchUnwindHere for std::panic::AssertUnwindSafe<F> {
-    async fn catch_unwind_here(self) -> Result<(), ()> {
-        use futures::FutureExt;
-        self.catch_unwind().await.map(|_| ()).map_err(|_| ())
-    }
+fn sane_torrent() -> Vec<u8> {
+    let mut b = b"d4:infod6:lengthi1e4:name1:x12:piece lengthi16384e6:pieces20:".to_vec();
+    b.extend_from_slice(&[0u8; 20]);
+    b.extend_from_slice(b"ee");
+    b
 }

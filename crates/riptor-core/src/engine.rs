@@ -2015,7 +2015,7 @@ impl Engine {
         password: Option<String>,
         opts: RestoreOptions,
     ) -> anyhow::Result<RestoreReport> {
-        let (payload, _) = Self::read_backup(path, password.as_deref())?;
+        let (payload, protected) = Self::read_backup(path, password.as_deref())?;
         let mut report = RestoreReport::default();
 
         for (name, folder) in &payload.categories {
@@ -2034,11 +2034,22 @@ impl Engine {
         }
 
         if opts.settings {
-            let s = payload.settings.clone();
+            let mut s = payload.settings.clone();
+            // Anyone can forge a backup with no password, so it can't open a door.
+            let changed = !protected && s.web_ui != self.settings().web_ui;
+            if !protected {
+                s.web_ui = self.settings().web_ui.clone();
+            }
             match s.validate().and_then(|_| self.check_root(&s.download_dir)) {
                 Ok(()) => {
                     self.update_settings(s).await?;
                     report.settings_restored = true;
+                    if changed {
+                        report.skipped.push(
+                            "remote control settings: a backup with no password can't change them"
+                                .into(),
+                        );
+                    }
                 }
                 Err(e) => report.skipped.push(format!("settings: {e:#}")),
             }
@@ -2091,6 +2102,7 @@ impl Engine {
         );
         let file_count = parsed.info.data.files.as_ref().map_or(1, |f| f.len());
         drop(parsed);
+        input::check_metadata(&bytes)?;
 
         let mut rec = t.record;
         rec.info_hash = hash.as_string();
@@ -2600,6 +2612,11 @@ impl Engine {
             }
         }
         global.network = self.network.read().label().to_string();
+        {
+            let tally = self.session_tally.lock();
+            global.session_downloaded = tally.downloaded;
+            global.session_uploaded = tally.uploaded;
+        }
         global.hold = hold.all.or(hold.downloads);
         global.data_cap = self.data_cap_usage();
         global.untrusted_network = self.untrusted_network();
