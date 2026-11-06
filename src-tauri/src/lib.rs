@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 mod associations;
 mod autostart;
 mod commands;
