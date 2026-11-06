@@ -1,6 +1,6 @@
 # Riptor: notes for Claude
 
-Riptor is a Tauri 2 + Rust + React BitTorrent client for Windows and Linux. It was renamed from the working name "Swarm"; any `swarm` left anywhere is a bug. The user-facing overview and the full task list are in README.md. **Keep this file's "What's left to do" and the README's "Roadmap" in sync when finishing or adding work.**
+Riptor is a Tauri 2 + Rust + React BitTorrent client for Windows and Linux. It was renamed from the working name "Swarm"; any `swarm` left anywhere is a bug. README.md is the user-facing overview; it carries no task list. **The remaining work lives only in this file's "What's left to do" — keep it current when finishing or adding work, and don't put a roadmap back in the README.**
 
 ## Ground rules
 
