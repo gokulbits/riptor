@@ -133,7 +133,8 @@ cargo bench -p riptor-storage
    - Bump the embedded Python pin in `pyembed.rs` with Python security releases (3.14.10 is current).
    - On the VPN, searches, scrapes and URL adds go through the tunnel, and plugins through a loopback proxy (`proxy.rs`) bound to it; LAN/loopback hosts stay direct (`riptor_net::stays_local`). A plugin that ignores proxy settings and opens its own sockets would bypass it.
 6. **Security and quality:**
-   - A security review before each release.
+   - A security review before each release. The last one is `audit/AUDIT-2026-11-06.md`, which also covers the dependency advisories.
+   - Open from that audit, worst first: `check_save_root` is lexical, so `\\?\C:\Windows`, 8.3 short names and symlinks reach protected folders (A2); `relocate::move_files` checks the destination then lets `fs::rename` overwrite it (A4); `src-tauri/src/lib.rs` has no `#![deny(unsafe_code)]`, so the rule isn't enforced in that crate (A5); the elevated Windows helper trusts `SystemRoot` and `ProgramData` from its caller (A6); the Linux plugin sandbox keeps loopback access (A7).
    - Hostile-input tests exist for torrents, bencode, backups, search replies, plugin results, scrapes and VPN profiles (`tests/hostile_input.rs` in core, search and vpn). Extend them with new parsers.
-   - Privately report librqbit's Windows path escape and the bencode crashes (now patched in `vendor/librqbit-bencode`) upstream. Needs the user's OK.
+   - Privately report librqbit's Windows path escape, the bencode crashes and the `piece length 0` divide by zero (all patched in `vendor/`) upstream. Needs the user's OK.
    - Test on real Linux.
