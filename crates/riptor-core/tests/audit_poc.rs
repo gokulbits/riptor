@@ -248,7 +248,11 @@ fn a4_moving_never_overwrites_the_destination() {
         format!("{err:#}").contains("won't overwrite"),
         "unhelpful error: {err:#}"
     );
-    assert_eq!(std::fs::read(&to).unwrap(), b"precious", "destination changed");
+    assert_eq!(
+        std::fs::read(&to).unwrap(),
+        b"precious",
+        "destination changed"
+    );
     assert!(from.is_file(), "source was removed anyway");
 
     // With the destination gone it moves, and the source is cleaned up.

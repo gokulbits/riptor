@@ -246,7 +246,8 @@ fn words(line: &str) -> Vec<String> {
 fn option_name(o: &str) -> String {
     let ok = !o.is_empty()
         && o.len() <= 32
-        && o.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        && o.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
     if ok {
         o.to_string()
     } else {
