@@ -327,6 +327,7 @@ jobs:
           - **Fedora / openSUSE:** \`sudo dnf install ./Riptor-${TAG#v}-1.x86_64.rpm\` (or \`zypper install\`)
 
           The Linux packages pull in their dependencies (openvpn, python3, bubblewrap, pkexec) through your package manager.
+          They need webkit2gtk 4.1, so Ubuntu 22.04, Debian 12 or Fedora 36 and newer; Ubuntu 20.04 and Debian 11 ship only 4.0 and cannot install it.
 
           Verify downloads against \`SHA256SUMS.txt\`, e.g. \`sha256sum -c SHA256SUMS.txt --ignore-missing\`.
           NOTES

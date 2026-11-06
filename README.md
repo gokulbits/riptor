@@ -29,8 +29,14 @@ Grab the latest build from the [releases page](https://github.com/gokulbits/ript
 | Platform | File | Install |
 | --- | --- | --- |
 | Windows 10/11 (64-bit) | `Riptor_<version>_x64-setup.exe` | Run the setup |
-| Debian, Ubuntu | `Riptor_<version>_amd64.deb` | `sudo apt install ./Riptor_<version>_amd64.deb` |
-| Fedora, openSUSE | `Riptor-<version>-1.x86_64.rpm` | `sudo dnf install ./Riptor-<version>-1.x86_64.rpm` |
+| Debian 12+, Ubuntu 22.04+ | `Riptor_<version>_amd64.deb` | `sudo apt install ./Riptor_<version>_amd64.deb` |
+| Fedora 36+, openSUSE | `Riptor-<version>-1.x86_64.rpm` | `sudo dnf install ./Riptor-<version>-1.x86_64.rpm` |
+
+On Linux, Riptor needs **webkit2gtk 4.1** (`libwebkit2gtk-4.1-0`), which is what the
+system WebView is built on. Ubuntu 20.04 and Debian 11 only ship webkit2gtk 4.0, so
+the package won't install there — apt reports `Depends: libwebkit2gtk-4.1-0 but it is
+not installable`. Ubuntu 22.04, Debian 12 and Fedora 36 are the first releases with
+4.1; there is no backport, so older distributions need an upgrade.
 
 You never need to install anything else for a Riptor feature. The Windows setup installs for all users and silently installs the OpenVPN command-line client (unless it's already there); it also carries its own copy of Python for search plugins, kept inside Riptor's folder and off your `PATH`. Uninstalling Riptor leaves OpenVPN alone, since other programs may use it. The Linux packages pull in `openvpn`, `pkexec`, `python3` and `bubblewrap`, and install a polkit policy so Riptor can ask for administrator rights when you connect the VPN.
 
