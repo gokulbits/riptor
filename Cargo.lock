@@ -5088,7 +5088,7 @@ dependencies = [
 
 [[package]]
 name = "riptor"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -5124,7 +5124,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "argon2",
@@ -5166,7 +5166,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-daemon"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "riptor-core",
@@ -5182,7 +5182,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-net"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "reqwest 0.12.28",
  "tokio",
@@ -5191,7 +5191,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-rss"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "parking_lot",
@@ -5207,7 +5207,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-search"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5232,7 +5232,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-seeding"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -5240,7 +5240,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-storage"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "criterion",
@@ -5261,7 +5261,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-vpn"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -5276,7 +5276,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-vpn-helper"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "riptor-vpn",
@@ -5286,7 +5286,7 @@ dependencies = [
 
 [[package]]
 name = "riptor-webapi"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "argon2",
