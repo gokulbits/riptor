@@ -31,13 +31,68 @@ fn normalize(p: &Path) -> PathBuf {
 
 fn starts_with(p: &Path, base: &Path) -> bool {
     if cfg!(windows) {
-        let p = p.to_string_lossy().to_lowercase().replace('/', "\\");
-        let b = base.to_string_lossy().to_lowercase().replace('/', "\\");
+        let p = strip_verbatim(p).to_lowercase().replace('/', "\\");
+        let b = strip_verbatim(base).to_lowercase().replace('/', "\\");
         let b = b.trim_end_matches('\\');
         p == b || p.starts_with(&format!("{b}\\"))
     } else {
         p.starts_with(base)
     }
+}
+
+/// `canonicalize` hands back `\\?\C:\...`, which no protected root is spelled as.
+fn strip_verbatim(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => s.strip_prefix(r"\\?\").unwrap_or(&s).to_string(),
+    }
+}
+
+/// Deepest ancestor that exists, so a folder not created yet can still be
+/// resolved through the links above it.
+fn resolved(p: &Path) -> Option<PathBuf> {
+    let mut tail = Vec::new();
+    let mut cur = p;
+    loop {
+        if let Ok(real) = cur.canonicalize() {
+            let mut out = real;
+            for part in tail.iter().rev() {
+                out.push(part);
+            }
+            return Some(out);
+        }
+        tail.push(cur.file_name()?.to_os_string());
+        cur = cur.parent()?;
+    }
+}
+
+/// Only a plain drive or a network share. Verbatim and device spellings name the
+/// same folders by another string, which the checks below would not recognise.
+#[cfg(windows)]
+fn check_prefix(p: &Path) -> anyhow::Result<()> {
+    use std::path::Prefix;
+    let Some(Component::Prefix(pre)) = p.components().next() else {
+        bail!("save folder must be an absolute path");
+    };
+    match pre.kind() {
+        Prefix::Disk(_) => Ok(()),
+        Prefix::UNC(_, share) => {
+            // \\host\C$ is the whole of someone's drive.
+            let s = share.to_string_lossy();
+            ensure!(
+                !(s.len() == 2 && s.ends_with('$')),
+                "an administrative share cannot be used as a save folder"
+            );
+            Ok(())
+        }
+        _ => bail!("write the save folder as a normal drive or network path"),
+    }
+}
+
+#[cfg(not(windows))]
+fn check_prefix(_p: &Path) -> anyhow::Result<()> {
+    Ok(())
 }
 
 fn protected_roots(data_dir: Option<&Path>) -> Vec<PathBuf> {
@@ -97,13 +152,22 @@ fn protected_roots(data_dir: Option<&Path>) -> Vec<PathBuf> {
 
 pub fn check_save_root(p: &Path, data_dir: Option<&Path>) -> anyhow::Result<()> {
     ensure!(p.is_absolute(), "save folder must be an absolute path");
+    check_prefix(p)?;
     let n = normalize(p);
     ensure!(
         n.parent().is_some(),
         "a drive or filesystem root cannot be used as a save folder"
     );
+    // Both spellings: the text given, and what links and short names resolve to.
+    let mine = [Some(normalize(p)), resolved(&n)];
     for root in protected_roots(data_dir) {
-        if starts_with(&n, &normalize(&root)) {
+        let lexical = normalize(&root);
+        let theirs = [Some(lexical.clone()), resolved(&lexical)];
+        let hit = mine
+            .iter()
+            .flatten()
+            .any(|m| theirs.iter().flatten().any(|t| starts_with(m, t)));
+        if hit {
             bail!(
                 "{} is a protected system location and cannot be used as a save folder",
                 n.display()

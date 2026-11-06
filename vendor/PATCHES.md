@@ -28,9 +28,16 @@ same release as the fork, so keep them on 9.0.1 until the fork is rebased.
 | `src/mse.rs` (new), `src/peer_connection.rs`, `src/session.rs`, `src/stream_connect.rs`, `src/lib.rs`, `Cargo.toml` | MSE/PE peer encryption: the handshake for both sides, RC4 reader/writer wrappers, `ConnectionOptions::encryption` (`EncryptionPolicy`: disabled, prefer, require), outgoing in `manage_peer_outgoing` with a plain reconnect under prefer and a bounded plain-only memory, incoming in `check_incoming_connection`. Adds `num-bigint` and `rc4`. | librqbit has no protocol encryption; some networks throttle plain BitTorrent and some peers require it. | Not yet; would need upstream's design for the option. |
 | `src/read_buf.rs` | `read_handshake` keeps reading, under one deadline, until the whole 68-byte handshake is in. | It assumed one read returns all of it, which encrypted streams (and slow links) don't guarantee. | Not yet; a plain robustness fix. |
 | `src/riptor_observe.rs`, `src/peer_connection.rs`, `src/lib.rs` | A process-wide observer told each peer's `yourip` from its extended handshake (BEP 10). | Riptor's swarm leak check compares the address peers see with the VPN's (`riptor-core/src/seen_ip.rs`). | Not yet; upstream might prefer it in per-peer stats. |
+| `src/session.rs` | `checked_validate` bounds `piece length` (non-zero, at most 256 MiB) at both places metadata is validated: the torrent-file path and the BEP 9 path. | `librqbit_core::lengths::Lengths::new` guards `total_length` but divides by `piece_length` without checking it, so metadata claiming 0 aborts the process. Peers send metadata too, so it can't be checked only on the way in; `riptor_core::input::check_metadata` is the earlier, friendlier check for bytes Riptor holds. `librqbit-core` is not vendored, so this is the lowest layer Riptor can reach. | Worth reporting: the fix belongs in `Lengths::new`. |
 
 ### Security findings to report upstream
 
+* **Divide by zero on `piece length` 0:** `librqbit_core::lengths::Lengths::new`
+  checks `total_length` but not `piece_length`, so a `.torrent` — or metadata a
+  peer sends over BEP 9 — claiming `piece length 0` panics, and with
+  `panic = "abort"` takes the process with it. Patched in `session.rs` above;
+  the real fix is a guard in `Lengths::new`. Report privately with the bencode
+  crashes and the path escape.
 * **Windows path escape:** `FileIteratorName::to_pathbuf()` builds paths with `PathBuf::push`. A torrent path component with a drive prefix (for example `C:x`) *replaces* the whole path on Windows, so `FilesystemStorage` can write outside the output folder. Riptor is not affected: `riptor-storage` rebuilds every path from the raw components (`crates/riptor-storage/src/sanitize.rs`). Report this privately to the maintainer before it is mentioned publicly.
 * `Session::delete` with `delete_files` calls `remove_directory_if_empty("")` on the torrent's output folder whenever that folder isn't the session default. That can remove a user-chosen, empty save folder. Riptor's storage only removes folders it created.
 

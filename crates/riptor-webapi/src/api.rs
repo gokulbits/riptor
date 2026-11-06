@@ -377,14 +377,14 @@ async fn dispatch(
         return text(StatusCode::UNAUTHORIZED, "");
     }
     let signed_in = ctx.signed_in(ctx.client_ip(remote, &headers), &headers);
+    if !signed_in {
+        return text(StatusCode::FORBIDDEN, "Forbidden");
+    }
     if path == "auth/logout" {
         if let Some(sid) = session_id(&headers) {
             ctx.auth.logout(sid);
         }
         return ok();
-    }
-    if !signed_in {
-        return text(StatusCode::FORBIDDEN, "Forbidden");
     }
     let mut p = form(query.unwrap_or_default().as_bytes());
     let is_form = headers

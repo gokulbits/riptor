@@ -234,9 +234,7 @@ fn stop_previous(dir: &Path, exe: &Path) {
     #[cfg(windows)]
     {
         let _ = exe;
-        let sys =
-            Path::new(&std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()))
-                .join("System32");
+        let sys = system32();
         let listed = Command::new(sys.join("tasklist.exe"))
             .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
             .stderr(Stdio::null())
@@ -260,6 +258,38 @@ fn stop_previous(dir: &Path, exe: &Path) {
                 .status();
         }
     }
+}
+
+/// Never the environment: the caller picks that, and this runs elevated.
+#[cfg(windows)]
+fn from_hklm(subkey: &str, name: &str, fallback: &str) -> PathBuf {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    winreg::RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(subkey)
+        .ok()
+        .and_then(|k| k.get_value::<String, _>(name).ok())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute() && p.is_dir())
+        .unwrap_or_else(|| PathBuf::from(fallback))
+}
+
+#[cfg(windows)]
+fn system32() -> PathBuf {
+    from_hklm(
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+        "SystemRoot",
+        r"C:\Windows",
+    )
+    .join("System32")
+}
+
+#[cfg(windows)]
+fn program_data() -> PathBuf {
+    from_hklm(
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+        "Common AppData",
+        r"C:\ProgramData",
+    )
 }
 
 /// Never PATH.
@@ -299,16 +329,10 @@ fn openvpn_exe() -> anyhow::Result<PathBuf> {
 fn private_dir() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
     {
-        let base = std::env::var_os("ProgramData")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| r"C:\ProgramData".into());
-        let dir = base.join("Riptor").join("vpn");
+        let dir = program_data().join("Riptor").join("vpn");
         std::fs::create_dir_all(&dir)?;
         // SYSTEM and Administrators only.
-        let icacls =
-            Path::new(&std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()))
-                .join("System32")
-                .join("icacls.exe");
+        let icacls = system32().join("icacls.exe");
         let ok = Command::new(icacls)
             .arg(&dir)
             .args([

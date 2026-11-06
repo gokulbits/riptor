@@ -294,3 +294,27 @@ AllStats=@Variant(\0\0\0\x1c\0\0\0\x2\0\0\0\x12\0\x41\0l\0l\0t\0i\0m\0\x65\0\x44
         }
     }
 }
+
+#[test]
+fn absurd_piece_lengths_are_refused() {
+    let torrent = |piece_len: &str| {
+        let mut b = format!("d4:infod6:lengthi1e4:name1:x12:piece lengthi{piece_len}e6:pieces20:")
+            .into_bytes();
+        b.extend_from_slice(&[0u8; 20]);
+        b.extend_from_slice(b"ee");
+        b
+    };
+    // Zero used to divide by zero in librqbit-core and abort the process.
+    for bad in ["0", "1", "1024", "4294967295"] {
+        assert!(
+            riptor_core::input::check_metadata(&torrent(bad)).is_err(),
+            "piece length {bad}"
+        );
+    }
+    for ok in ["16384", "262144", "67108864"] {
+        assert!(
+            riptor_core::input::check_metadata(&torrent(ok)).is_ok(),
+            "piece length {ok}"
+        );
+    }
+}

@@ -170,6 +170,11 @@ fn command(py: &Python, dir: &Path, args: &[&str], proxy: Option<&str>) -> Comma
         if let Some(home) = std::env::var_os("HOME") {
             c.arg("--tmpfs").arg(home);
         }
+        // Riptor's own data, whether or not HOME covers it: the plugin keeps its
+        // engines and loses the auth file, the sealed history and the profiles.
+        if let Some(data) = dir.parent() {
+            c.arg("--tmpfs").arg(data);
+        }
         c.arg("--ro-bind").arg(dir).arg(dir);
         c.args([
             "--unshare-all",

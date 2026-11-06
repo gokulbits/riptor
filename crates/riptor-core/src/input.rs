@@ -9,6 +9,9 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_TORRENT_BYTES: usize = 16 * 1024 * 1024;
+pub const MIN_PIECE_LENGTH: u32 = 16 * 1024;
+/// Clients offer up to 64 MiB, and a whole piece is held in memory.
+pub const MAX_PIECE_LENGTH: u32 = 256 * 1024 * 1024;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,6 +55,18 @@ pub fn validate_magnet(m: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// librqbit divides by piece length, so a bad one would abort the process.
+pub fn check_metadata(bytes: &[u8]) -> anyhow::Result<()> {
+    let t = librqbit_core::torrent_metainfo::torrent_from_bytes(bytes)
+        .context("not a valid torrent file")?;
+    let len = t.info.data.piece_length;
+    ensure!(
+        (MIN_PIECE_LENGTH..=MAX_PIECE_LENGTH).contains(&len),
+        "torrent claims a piece length of {len} bytes"
+    );
+    Ok(())
+}
+
 pub async fn resolve(src: &Source, client: &reqwest::Client) -> anyhow::Result<Resolved> {
     match src {
         Source::Magnet(m) => {
@@ -69,9 +84,15 @@ pub async fn resolve(src: &Source, client: &reqwest::Client) -> anyhow::Result<R
                 matches!(url.scheme(), "http" | "https"),
                 "only http(s) and magnet links are supported"
             );
-            Ok(Resolved::Bytes(fetch_capped(client, url).await?))
+            let bytes = fetch_capped(client, url).await?;
+            check_metadata(&bytes)?;
+            Ok(Resolved::Bytes(bytes))
         }
-        Source::File(p) => Ok(Resolved::Bytes(read_torrent_file(p)?)),
+        Source::File(p) => {
+            let bytes = read_torrent_file(p)?;
+            check_metadata(&bytes)?;
+            Ok(Resolved::Bytes(bytes))
+        }
     }
 }
 
