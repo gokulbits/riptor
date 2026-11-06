@@ -4,7 +4,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use anyhow::{ensure, Context};
+use anyhow::{bail, ensure, Context};
 
 /// Missing sources are skipped; existing targets are never overwritten.
 pub fn move_files(pairs: &[(PathBuf, PathBuf)]) -> anyhow::Result<u64> {
@@ -47,20 +47,38 @@ fn move_one(from: &Path, to: &Path) -> anyhow::Result<()> {
     if let Some(dir) = to.parent() {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
-    match fs::rename(from, to) {
-        Ok(()) => Ok(()),
-        // Another drive: copy, make sure it's on disk, then delete.
-        Err(e) if e.kind() != io::ErrorKind::NotFound => {
-            let copied = fs::copy(from, to).and_then(|_| fs::File::open(to)?.sync_all());
-            if let Err(c) = copied {
-                let _ = fs::remove_file(to);
-                return Err(anyhow::Error::from(c)
-                    .context(format!("rename failed ({e}), and so did copying")));
-            }
-            fs::remove_file(from).with_context(|| format!("removing {}", from.display()))
+    // A link fails if the target is there, where rename would replace it. Checking
+    // first and then renaming leaves a window a file could appear in.
+    match fs::hard_link(from, to) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            bail!("{} already exists; Riptor won't overwrite it", to.display())
         }
-        Err(e) => Err(e.into()),
+        // Another drive, or a filesystem without links: copy instead.
+        Err(e) => {
+            if let Err(c) = copy_new(from, to) {
+                if c.kind() != io::ErrorKind::AlreadyExists {
+                    let _ = fs::remove_file(to);
+                }
+                return Err(anyhow::Error::from(c)
+                    .context(format!("linking failed ({e}), and so did copying")));
+            }
+        }
     }
+    // Both names exist until this point, so undo it rather than leave a copy.
+    if let Err(e) = fs::remove_file(from) {
+        let _ = fs::remove_file(to);
+        return Err(anyhow::Error::from(e).context(format!("removing {}", from.display())));
+    }
+    Ok(())
+}
+
+/// Never truncates an existing file, unlike `fs::copy`.
+fn copy_new(from: &Path, to: &Path) -> io::Result<()> {
+    let mut src = fs::File::open(from)?;
+    let mut dst = fs::File::options().write(true).create_new(true).open(to)?;
+    io::copy(&mut src, &mut dst)?;
+    dst.sync_all()
 }
 
 /// Removes `dirs` that are empty, deepest first.
