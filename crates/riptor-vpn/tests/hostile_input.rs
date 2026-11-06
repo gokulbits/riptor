@@ -159,3 +159,19 @@ fn random_protocol_messages_never_panic() {
         let _ = mgmt::parse(&format!(">PASSWORD:{line}"));
     }
 }
+
+#[test]
+fn errors_never_echo_a_line_of_another_file() {
+    // The elevated helper re-runs sanitize on whatever path it was given, and its
+    // stderr reaches Riptor's log as the unprivileged user.
+    let shadow = b"root:$6$saltsalt$0123456789abcdefghijklmnopqrstuvwxyzHASH:19000:0:99999:7:::\n";
+    let err = riptor_vpn::ovpn::sanitize(shadow).expect_err("accepted a shadow file");
+    let text = format!("{err}");
+    for secret in ["$6$", "saltsalt", "HASH", "19000"] {
+        assert!(!text.contains(secret), "{secret:?} leaked in {text:?}");
+    }
+
+    // A real option name is still named, so the user can fix their profile.
+    let err = riptor_vpn::ovpn::sanitize(b"client\ndev tun\nkeysize 256\n").expect_err("accepted");
+    assert!(format!("{err}").contains("keysize"), "{err}");
+}

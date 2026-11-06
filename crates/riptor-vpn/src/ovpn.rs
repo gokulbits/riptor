@@ -241,6 +241,19 @@ fn words(line: &str) -> Vec<String> {
     out
 }
 
+/// An option name, or a placeholder. The elevated helper re-runs this and its
+/// errors reach Riptor's log, so a line of some other file must not echo there.
+fn option_name(o: &str) -> String {
+    let ok = !o.is_empty()
+        && o.len() <= 32
+        && o.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if ok {
+        o.to_string()
+    } else {
+        "(not an option name)".to_string()
+    }
+}
+
 fn safe_token(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 255
@@ -282,7 +295,7 @@ pub fn sanitize(input: &[u8]) -> Result<Sanitized, OvpnError> {
                 });
             }
             if !INLINE_BLOCKS.contains(&tag) {
-                return Err(OvpnError::UnsupportedBlock(tag.chars().take(40).collect()));
+                return Err(OvpnError::UnsupportedBlock(option_name(tag)));
             }
             let end = format!("</{tag}>");
             let mut body = String::new();
@@ -337,7 +350,7 @@ pub fn sanitize(input: &[u8]) -> Result<Sanitized, OvpnError> {
         if !ALLOWED.contains(&opt.as_str()) {
             return Err(OvpnError::Unsupported {
                 line: n,
-                option: opt.chars().take(60).collect(),
+                option: option_name(&opt),
             });
         }
         if !args.iter().all(|a| safe_token(a)) {
