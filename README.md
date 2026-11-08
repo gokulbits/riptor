@@ -133,6 +133,8 @@ systemctl --user enable --now riptord
 riptor-cli add 'magnet:?xt=urn:btih:...' --dir ~/Downloads
 ```
 
+`riptor-cli --help` lists the commands, and `riptor-cli <command> --help` explains one.
+
 ### Backups
 
 **Settings > Backup & restore** writes a `.riptorbackup` file holding your torrents, settings, categories and statistics, restorable on any Riptor install. Add a password for real protection: without one the file is only tamper-evident.

@@ -21,78 +21,8 @@ mod unix {
     use std::path::PathBuf;
 
     use anyhow::{bail, Context};
+    use riptor_daemon::cli::{self, Parsed};
     use riptor_daemon::{Request, Response};
-
-    const USAGE: &str = "riptor-cli list
-riptor-cli stats
-riptor-cli add <magnet | https link | /path/file.torrent> [--dir FOLDER] [--category NAME] [--paused]
-riptor-cli stop <id...|all>
-riptor-cli start <id...|all>
-riptor-cli remove <id...> [--delete-files]
-riptor-cli shutdown
-
-Ids are info hashes; 6 or more leading characters are enough.";
-
-    fn request(args: &[String]) -> anyhow::Result<Request> {
-        let (cmd, rest) = args.split_first().context(USAGE)?;
-        let flag = |name: &str| rest.iter().any(|a| a == name);
-        let value = |name: &str| -> anyhow::Result<Option<String>> {
-            match rest.iter().position(|a| a == name) {
-                Some(i) => Ok(Some(
-                    rest.get(i + 1)
-                        .cloned()
-                        .with_context(|| format!("{name} needs a value"))?,
-                )),
-                None => Ok(None),
-            }
-        };
-        let ids = || -> Vec<String> {
-            rest.iter()
-                .filter(|a| !a.starts_with("--"))
-                .cloned()
-                .collect()
-        };
-        Ok(match cmd.as_str() {
-            "list" | "ls" => Request::List,
-            "stats" => Request::Stats,
-            "add" => {
-                let source = rest
-                    .first()
-                    .filter(|s| !s.starts_with("--"))
-                    .cloned()
-                    .context(USAGE)?;
-                // Relative paths mean nothing to the daemon.
-                let source = if !source.contains(':') && !source.starts_with('/') {
-                    std::env::current_dir()?
-                        .join(&source)
-                        .to_string_lossy()
-                        .into_owned()
-                } else {
-                    source
-                };
-                Request::Add {
-                    source,
-                    dir: value("--dir")?
-                        .map(|d| std::env::current_dir().map(|c| c.join(d)))
-                        .transpose()?,
-                    category: value("--category")?,
-                    paused: flag("--paused"),
-                }
-            }
-            "stop" | "pause" => Request::Stop { ids: ids() },
-            "start" | "resume" => Request::Start { ids: ids() },
-            "remove" | "rm" => Request::Remove {
-                ids: ids(),
-                delete_files: flag("--delete-files"),
-            },
-            "shutdown" => Request::Shutdown,
-            "-h" | "--help" | "help" => {
-                println!("{USAGE}");
-                std::process::exit(0);
-            }
-            other => bail!("unknown command {other}\n\n{USAGE}"),
-        })
-    }
 
     fn rate(bps: u64) -> String {
         match bps {
@@ -142,7 +72,13 @@ Ids are info hashes; 6 or more leading characters are enough.";
 
     pub fn run() -> anyhow::Result<()> {
         let args: Vec<String> = std::env::args().skip(1).collect();
-        let req = request(&args)?;
+        let req = match cli::parse(&args, &std::env::current_dir()?)? {
+            Parsed::Run(req) => req,
+            Parsed::Help(text) => {
+                println!("{text}");
+                return Ok(());
+            }
+        };
         let sock: PathBuf = riptor_daemon::socket_path();
         let mut stream = UnixStream::connect(&sock).with_context(|| {
             format!("can't reach riptord at {} (is it running?)", sock.display())

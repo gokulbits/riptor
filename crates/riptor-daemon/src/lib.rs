@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use anyhow::{bail, ensure};
 use serde::{Deserialize, Serialize};
 
+pub mod cli;
+
 /// One request per line; longer lines are refused.
 pub const MAX_LINE: usize = 64 * 1024;
 
