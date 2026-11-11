@@ -1071,11 +1071,19 @@ struct Batch {
 
 impl Batch {
     fn reserve(ctx: &Arc<Ctx>, n: usize) -> Option<Self> {
-        ctx.adds_waiting
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |w| {
-                w.checked_add(n).filter(|t| *t <= MAX_ADDS_WAITING)
-            })
-            .ok()?;
+        let mut cur = ctx.adds_waiting.load(Ordering::Acquire);
+        loop {
+            let next = cur.checked_add(n).filter(|t| *t <= MAX_ADDS_WAITING)?;
+            match ctx.adds_waiting.compare_exchange_weak(
+                cur,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(seen) => cur = seen,
+            }
+        }
         Some(Self {
             ctx: ctx.clone(),
             waiting: n,
