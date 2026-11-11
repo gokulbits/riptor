@@ -120,13 +120,15 @@ impl Ctx {
             .unwrap_or(peer.ip())
     }
 
-    fn bypassed(&self, ip: IpAddr) -> bool {
-        (self.cfg.bypass_localhost && ip.is_loopback())
-            || (self.cfg.bypass_subnets && self.whitelist.iter().any(|c| cidr_contains(*c, ip)))
+    // Only when Host can't be a rebound attacker name.
+    fn bypassed(&self, ip: IpAddr, headers: &HeaderMap) -> bool {
+        ((self.cfg.bypass_localhost && ip.is_loopback())
+            || (self.cfg.bypass_subnets && self.whitelist.iter().any(|c| cidr_contains(*c, ip))))
+            && host_pinned(&self.cfg.server_domains, headers)
     }
 
     fn signed_in(&self, ip: IpAddr, headers: &HeaderMap) -> bool {
-        if self.bypassed(ip) {
+        if self.bypassed(ip, headers) {
             return true;
         }
         let bearer = headers
@@ -146,12 +148,8 @@ impl Ctx {
 
 /// IP addresses and localhost always pass; names must match a server domain (`*` wildcards).
 fn host_allowed(domains: &str, headers: &HeaderMap) -> bool {
-    let Some(host) = headers.get(header::HOST).and_then(|h| h.to_str().ok()) else {
+    let Some(name) = host_name(headers) else {
         return false;
-    };
-    let name = match host.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or(""),
-        None => host.rsplit_once(':').map_or(host, |(h, _)| h),
     };
     if name.parse::<IpAddr>().is_ok() || name.eq_ignore_ascii_case("localhost") {
         return true;
@@ -161,6 +159,24 @@ fn host_allowed(domains: &str, headers: &HeaderMap) -> bool {
         .map(str::trim)
         .filter(|d| !d.is_empty())
         .any(|d| wildcard(&d.to_ascii_lowercase(), &name.to_ascii_lowercase()))
+}
+
+/// Like `host_allowed`, but catch-all entries such as `*` don't count.
+fn host_pinned(domains: &str, headers: &HeaderMap) -> bool {
+    let named: Vec<&str> = domains
+        .split(';')
+        .filter(|d| d.trim().chars().any(|c| c != '*'))
+        .collect();
+    host_allowed(&named.join(";"), headers)
+}
+
+// The Host header without its port or IPv6 brackets.
+fn host_name(headers: &HeaderMap) -> Option<&str> {
+    let host = headers.get(header::HOST)?.to_str().ok()?;
+    Some(match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => host.rsplit_once(':').map_or(host, |(h, _)| h),
+    })
 }
 
 fn wildcard(pattern: &str, s: &str) -> bool {
@@ -283,7 +299,7 @@ async fn login(
         p.get("username").map_or("", String::as_str),
         p.get("password").map_or("", String::as_str),
     );
-    let result = if ctx.bypassed(ip) {
+    let result = if ctx.bypassed(ip, &headers) {
         Login::Ok(ctx.auth.new_session())
     } else {
         ctx.auth.login(ip, user, pass).await
@@ -1136,4 +1152,31 @@ fn describe(src: &Source) -> String {
         .filter(|c| !c.is_control())
         .take(120)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pinned(domains: &str, host: Option<&'static str>) -> bool {
+        let mut h = HeaderMap::new();
+        if let Some(host) = host {
+            h.insert(header::HOST, HeaderValue::from_static(host));
+        }
+        host_pinned(domains, &h)
+    }
+
+    #[test]
+    fn only_real_names_pin_the_host() {
+        assert!(!pinned("*", Some("attacker.example")));
+        assert!(!pinned("**", Some("attacker.example")));
+        assert!(!pinned("*; ;", Some("attacker.example")));
+        assert!(pinned("*.example.org", Some("box.example.org:8080")));
+        assert!(!pinned("*.example.org", Some("attacker.example")));
+        assert!(pinned("riptor.example.org", Some("riptor.example.org")));
+        assert!(pinned("*", Some("127.0.0.1:8080")));
+        assert!(pinned("*", Some("[::1]:8080")));
+        assert!(pinned("*", Some("localhost:8080")));
+        assert!(!pinned("*", None));
+    }
 }

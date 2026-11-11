@@ -564,6 +564,47 @@ async fn options_from_the_settings() {
         .await
         .unwrap();
     assert_eq!(r.text().await.unwrap(), "v5.0.0");
+
+    // A name rebound to 127.0.0.1 doesn't get the bypass.
+    let local = format!("http://{}/api/v2/", server.addr);
+    let r = http
+        .get(format!("{local}app/version"))
+        .header("Host", "attacker.example")
+        .header("Origin", "http://attacker.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 403);
+    let r = http
+        .post(format!("{local}auth/login"))
+        .header("Host", "attacker.example")
+        .header("Origin", "http://attacker.example")
+        .form(&[("username", "admin"), ("password", "wrong")])
+        .send()
+        .await
+        .unwrap();
+    assert!(r.headers().get("set-cookie").is_none());
+    assert_eq!(r.text().await.unwrap(), "Fails.");
+    drop(server);
+
+    // A name listed in the server domains does.
+    let cfg = WebUi {
+        enabled: true,
+        https: false,
+        bypass_localhost: true,
+        server_domains: "riptor.example.org".into(),
+        ..WebUi::default()
+    };
+    let server = riptor_webapi::start(e.clone(), &data, &cfg, (Ipv4Addr::LOCALHOST, 0).into())
+        .await
+        .unwrap();
+    let r = http
+        .get(format!("http://{}/api/v2/app/version", server.addr))
+        .header("Host", "riptor.example.org")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.text().await.unwrap(), "v5.0.0");
     drop(server);
     e.shutdown().await.unwrap();
 }
