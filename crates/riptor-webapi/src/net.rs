@@ -1,15 +1,19 @@
 //! The listening side: who may connect, the self-signed certificate, and TLS handshakes kept off
 //! the accept loop.
 
+use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{self, Poll};
 use std::time::Duration;
 
 use anyhow::Context;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Semaphore};
 use tokio_rustls::server::TlsStream;
@@ -61,7 +65,6 @@ pub fn refusal(
 
 /// Logs a connection problem, at most once a minute for each address and kind.
 pub fn note(ip: IpAddr, kind: &'static str, text: std::fmt::Arguments<'_>) {
-    use std::collections::HashMap;
     use std::time::Instant;
     static SEEN: parking_lot::Mutex<Option<HashMap<(IpAddr, &'static str), Instant>>> =
         parking_lot::Mutex::new(None);
@@ -153,7 +156,98 @@ pub fn tls_acceptor(cert: &Cert) -> anyhow::Result<TlsAcceptor> {
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
-pub type Io = Either<TcpStream, TlsStream<TcpStream>>;
+pub type Io = Conn;
+
+const MAX_CONNECTIONS: usize = 256;
+const MAX_PER_CLIENT: usize = 64;
+
+struct Limits {
+    total: usize,
+    per_client: usize,
+    live: parking_lot::Mutex<(usize, HashMap<IpAddr, usize>)>,
+}
+
+fn take_slot(limits: &Arc<Limits>, ip: IpAddr) -> Option<Slot> {
+    let key = crate::auth::client_key(ip);
+    let mut g = limits.live.lock();
+    let (open, clients) = &mut *g;
+    let mine = clients.get(&key).copied().unwrap_or(0);
+    if *open >= limits.total || mine >= limits.per_client {
+        return None;
+    }
+    *open += 1;
+    clients.insert(key, mine + 1);
+    Some(Slot {
+        limits: limits.clone(),
+        key,
+    })
+}
+
+// Holds a connection's place in the limits until it's dropped.
+struct Slot {
+    limits: Arc<Limits>,
+    key: IpAddr,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let mut g = self.limits.live.lock();
+        let (open, clients) = &mut *g;
+        *open = open.saturating_sub(1);
+        if let Some(n) = clients.get_mut(&self.key) {
+            *n -= 1;
+            if *n == 0 {
+                clients.remove(&self.key);
+            }
+        }
+    }
+}
+
+/// A client connection, plain or TLS, that keeps its slot while open.
+pub struct Conn {
+    inner: Either<TcpStream, TlsStream<TcpStream>>,
+    _slot: Slot,
+}
+
+impl AsyncRead for Conn {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Conn {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+}
 
 /// The client's address, for handlers (axum only provides it for its own listener).
 #[derive(Clone, Copy, Debug)]
@@ -169,6 +263,8 @@ impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, Gate
 pub struct Gate {
     rx: mpsc::Receiver<(Io, SocketAddr)>,
     local: SocketAddr,
+    #[cfg(test)]
+    limits: Arc<Limits>,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -178,9 +274,26 @@ impl Gate {
         tls: Option<TlsAcceptor>,
         policy: impl Fn(SocketAddr, SocketAddr) -> Option<&'static str> + Send + Sync + 'static,
     ) -> io::Result<Self> {
+        Self::with_caps(listener, tls, policy, MAX_CONNECTIONS, MAX_PER_CLIENT)
+    }
+
+    pub(crate) fn with_caps(
+        listener: TcpListener,
+        tls: Option<TlsAcceptor>,
+        policy: impl Fn(SocketAddr, SocketAddr) -> Option<&'static str> + Send + Sync + 'static,
+        total: usize,
+        per_client: usize,
+    ) -> io::Result<Self> {
         let local = listener.local_addr()?;
         let (tx, rx) = mpsc::channel(16);
         let slots = Arc::new(Semaphore::new(MAX_HANDSHAKES));
+        let limits = Arc::new(Limits {
+            total,
+            per_client,
+            live: parking_lot::Mutex::new((0, HashMap::new())),
+        });
+        #[cfg(test)]
+        let kept = limits.clone();
         let task = tokio::spawn(async move {
             loop {
                 let (tcp, remote) = match listener.accept().await {
@@ -199,8 +312,23 @@ impl Gate {
                     );
                     continue;
                 }
+                let Some(conn_slot) = take_slot(&limits, remote.ip()) else {
+                    note(
+                        remote.ip(),
+                        "too many",
+                        format_args!(
+                            "remote control turned away {}: too many open connections",
+                            remote.ip()
+                        ),
+                    );
+                    continue;
+                };
                 let Some(acceptor) = tls.clone() else {
-                    if tx.send((Either::Left(tcp), remote)).await.is_err() {
+                    let conn = Conn {
+                        inner: Either::Left(tcp),
+                        _slot: conn_slot,
+                    };
+                    if tx.send((conn, remote)).await.is_err() {
                         return;
                     }
                     continue;
@@ -214,7 +342,11 @@ impl Gate {
                     let _slot = slot;
                     match tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await {
                         Ok(Ok(stream)) => {
-                            let _ = tx.send((Either::Right(stream), remote)).await;
+                            let conn = Conn {
+                                inner: Either::Right(stream),
+                                _slot: conn_slot,
+                            };
+                            let _ = tx.send((conn, remote)).await;
                         }
                         // Usually an app that doesn't trust the certificate, or plain http to an https port.
                         Ok(Err(e)) => note(
@@ -240,6 +372,8 @@ impl Gate {
         Ok(Self {
             rx,
             local,
+            #[cfg(test)]
+            limits: kept,
             _task: task,
         })
     }
@@ -319,5 +453,40 @@ mod tests {
         assert_eq!(a.fingerprint, b.fingerprint);
         assert_eq!(a.fingerprint.len(), 32 * 3 - 1);
         assert!(tls_acceptor(&a).is_ok());
+    }
+
+    #[tokio::test]
+    async fn connections_past_the_cap_are_dropped_and_slots_come_back() {
+        use axum::serve::Listener;
+        use tokio::io::AsyncReadExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut gate = Gate::with_caps(listener, None, |_, _| None, 16, 2).unwrap();
+        let wait = Duration::from_secs(5);
+
+        let _c1 = TcpStream::connect(addr).await.unwrap();
+        let _c2 = TcpStream::connect(addr).await.unwrap();
+        let (a1, _) = tokio::time::timeout(wait, gate.accept()).await.unwrap();
+        let (a2, _) = tokio::time::timeout(wait, gate.accept()).await.unwrap();
+
+        // A third from the same address is closed without reaching axum.
+        let mut c3 = TcpStream::connect(addr).await.unwrap();
+        let mut buf = [0u8; 1];
+        let read = tokio::time::timeout(wait, c3.read(&mut buf)).await.unwrap();
+        assert!(matches!(read, Ok(0) | Err(_)), "{read:?}");
+        let more = tokio::time::timeout(Duration::from_millis(100), gate.accept()).await;
+        assert!(more.is_err());
+
+        // Closing one frees its slot.
+        drop(a1);
+        let _c4 = TcpStream::connect(addr).await.unwrap();
+        let (a4, _) = tokio::time::timeout(wait, gate.accept()).await.unwrap();
+
+        drop(a2);
+        drop(a4);
+        let live = gate.limits.live.lock();
+        assert_eq!(live.0, 0);
+        assert!(live.1.is_empty());
     }
 }
