@@ -97,7 +97,13 @@ pub async fn resolve(src: &Source, client: &reqwest::Client) -> anyhow::Result<R
 }
 
 async fn fetch_capped(client: &reqwest::Client, url: url::Url) -> anyhow::Result<Bytes> {
-    let resp = client.get(url).send().await?.error_for_status()?;
+    // Callers pass clients with different timeouts.
+    let resp = client
+        .get(url)
+        .timeout(FETCH_TIMEOUT)
+        .send()
+        .await?
+        .error_for_status()?;
     if let Some(len) = resp.content_length() {
         ensure!(
             len as usize <= MAX_TORRENT_BYTES,

@@ -126,6 +126,8 @@ pub struct Engine {
     scheduler: Mutex<Scheduler>,
     events: broadcast::Sender<Event>,
     http: reqwest::Client,
+    /// Refuses local and private addresses after DNS and on redirects.
+    public_http: reqwest::Client,
     epoch: Instant,
     last_tick: Mutex<Instant>,
     ticks: Mutex<u64>,
@@ -310,6 +312,7 @@ impl Engine {
             scheduler: Mutex::new(Scheduler::new()),
             events,
             http: input::http_client()?,
+            public_http: webseed::client(None, false)?,
             epoch: Instant::now(),
             last_tick: Mutex::new(Instant::now()),
             ticks: Mutex::new(0),
@@ -745,7 +748,8 @@ impl Engine {
         let lan = url::Url::parse(url).is_ok_and(|u| riptor_net::stays_local(&u));
         match self.network() {
             _ if lan => Ok(self.http.clone()),
-            NetworkMode::Normal => Ok(self.http.clone()),
+            // A public link must not be steered at the LAN by a redirect or DNS.
+            NetworkMode::Normal => Ok(self.public_http.clone()),
             NetworkMode::Vpn(b) => webseed::client(Some(&b.end()), false),
             NetworkMode::Blocked => {
                 bail!("waiting for the VPN: the kill switch holds downloads while it's down")

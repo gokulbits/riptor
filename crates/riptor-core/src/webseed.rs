@@ -545,6 +545,69 @@ mod tests {
         assert_eq!(m.spans(12, 4), vec![(2, 4, 4)]);
     }
 
+    // A loopback port that should never see a connection.
+    fn victim() -> (std::net::TcpListener, u16) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let port = l.local_addr().unwrap().port();
+        (l, port)
+    }
+
+    fn untouched(l: &std::net::TcpListener) -> bool {
+        matches!(l.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock)
+    }
+
+    #[tokio::test]
+    async fn public_client_never_reaches_local_addresses() {
+        let http = client(None, false).unwrap();
+
+        // A name that resolves to loopback.
+        let (direct, port) = victim();
+        let err = http
+            .get(format!("http://localhost:{port}/x.torrent"))
+            .send()
+            .await
+            .unwrap_err();
+        let msg = format!("{:#}", anyhow::Error::from(err));
+        assert!(
+            msg.contains("refusing to contact a local or private address"),
+            "{msg}"
+        );
+        assert!(untouched(&direct));
+
+        // Literal addresses skip the resolver, so this origin stands in for a public one.
+        let (target, port) = victim();
+        let origin = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin_port = origin.local_addr().unwrap().port();
+        let hops = [
+            format!("http://localhost:{port}/x.torrent"),
+            format!("http://127.0.0.1:{port}/x.torrent"),
+        ];
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            for hop in hops {
+                let Ok((mut s, _)) = origin.accept().await else {
+                    return;
+                };
+                let _ = s.read(&mut [0; 4096]).await;
+                let head = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: {hop}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = s.write_all(head.as_bytes()).await;
+            }
+        });
+        let start = format!("http://127.0.0.1:{origin_port}/x.torrent");
+        let err = http.get(&start).send().await.unwrap_err();
+        let msg = format!("{:#}", anyhow::Error::from(err));
+        assert!(
+            msg.contains("refusing to contact a local or private address"),
+            "{msg}"
+        );
+        let stopped = http.get(&start).send().await.unwrap();
+        assert_eq!(stopped.status(), reqwest::StatusCode::FOUND);
+        assert!(untouched(&target));
+    }
+
     #[test]
     fn handles_are_never_real_peers() {
         for n in 0..MAX_SEEDS * PER_SEED {
