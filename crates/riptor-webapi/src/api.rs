@@ -4,17 +4,21 @@
 use std::collections::{BTreeSet, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path as FsPath, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Multipart, Path, RawQuery, State};
+use axum::extract::{
+    ConnectInfo, DefaultBodyLimit, FromRequest, Multipart, Path, RawQuery, Request, State,
+};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::Router;
 use riptor_core::settings::{cidr_contains, parse_cidr};
-use riptor_core::{AddParams, Engine, FilePriority, QueueMove, ShareLimits, Source, WebUi};
+use riptor_core::{
+    AddParams, Engine, FilePriority, NoticeLevel, QueueMove, ShareLimits, Source, WebUi,
+};
 use serde_json::{json, Value};
 
 use crate::auth::{Auth, Login};
@@ -25,6 +29,9 @@ const MAX_FORM: usize = 1024 * 1024;
 const MAX_UPLOAD: usize = 64 * 1024 * 1024;
 const MAX_ADD_ITEMS: usize = 50;
 const MAX_PIECES: usize = 200_000;
+// Adds fetching metadata at once, and sources accepted but not finished.
+const ADDS_AT_ONCE: usize = 4;
+const MAX_ADDS_WAITING: usize = 100;
 
 pub struct Ctx {
     pub engine: Arc<Engine>,
@@ -32,6 +39,8 @@ pub struct Ctx {
     pub data_dir: PathBuf,
     pub cfg: WebUi,
     rid: AtomicU64,
+    adds: tokio::sync::Semaphore,
+    adds_waiting: AtomicUsize,
     whitelist: Vec<(IpAddr, u8)>,
     proxies: Vec<(IpAddr, u8)>,
     headers: Vec<(header::HeaderName, HeaderValue)>,
@@ -84,6 +93,8 @@ impl Ctx {
             data_dir,
             cfg,
             rid: AtomicU64::new(0),
+            adds: tokio::sync::Semaphore::new(ADDS_AT_ONCE),
+            adds_waiting: AtomicUsize::new(0),
             whitelist,
             proxies,
             headers,
@@ -109,13 +120,15 @@ impl Ctx {
             .unwrap_or(peer.ip())
     }
 
-    fn bypassed(&self, ip: IpAddr) -> bool {
-        (self.cfg.bypass_localhost && ip.is_loopback())
-            || (self.cfg.bypass_subnets && self.whitelist.iter().any(|c| cidr_contains(*c, ip)))
+    // Only when Host can't be a rebound attacker name.
+    fn bypassed(&self, ip: IpAddr, headers: &HeaderMap) -> bool {
+        ((self.cfg.bypass_localhost && ip.is_loopback())
+            || (self.cfg.bypass_subnets && self.whitelist.iter().any(|c| cidr_contains(*c, ip))))
+            && host_pinned(&self.cfg.server_domains, headers)
     }
 
     fn signed_in(&self, ip: IpAddr, headers: &HeaderMap) -> bool {
-        if self.bypassed(ip) {
+        if self.bypassed(ip, headers) {
             return true;
         }
         let bearer = headers
@@ -135,12 +148,8 @@ impl Ctx {
 
 /// IP addresses and localhost always pass; names must match a server domain (`*` wildcards).
 fn host_allowed(domains: &str, headers: &HeaderMap) -> bool {
-    let Some(host) = headers.get(header::HOST).and_then(|h| h.to_str().ok()) else {
+    let Some(name) = host_name(headers) else {
         return false;
-    };
-    let name = match host.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or(""),
-        None => host.rsplit_once(':').map_or(host, |(h, _)| h),
     };
     if name.parse::<IpAddr>().is_ok() || name.eq_ignore_ascii_case("localhost") {
         return true;
@@ -150,6 +159,24 @@ fn host_allowed(domains: &str, headers: &HeaderMap) -> bool {
         .map(str::trim)
         .filter(|d| !d.is_empty())
         .any(|d| wildcard(&d.to_ascii_lowercase(), &name.to_ascii_lowercase()))
+}
+
+/// Like `host_allowed`, but catch-all entries such as `*` don't count.
+fn host_pinned(domains: &str, headers: &HeaderMap) -> bool {
+    let named: Vec<&str> = domains
+        .split(';')
+        .filter(|d| d.trim().chars().any(|c| c != '*'))
+        .collect();
+    host_allowed(&named.join(";"), headers)
+}
+
+// The Host header without its port or IPv6 brackets.
+fn host_name(headers: &HeaderMap) -> Option<&str> {
+    let host = headers.get(header::HOST)?.to_str().ok()?;
+    Some(match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => host.rsplit_once(':').map_or(host, |(h, _)| h),
+    })
 }
 
 fn wildcard(pattern: &str, s: &str) -> bool {
@@ -272,7 +299,7 @@ async fn login(
         p.get("username").map_or("", String::as_str),
         p.get("password").map_or("", String::as_str),
     );
-    let result = if ctx.bypassed(ip) {
+    let result = if ctx.bypassed(ip, &headers) {
         Login::Ok(ctx.auth.new_session())
     } else {
         ctx.auth.login(ip, user, pass).await
@@ -898,7 +925,7 @@ async fn add(
     State(ctx): State<Arc<Ctx>>,
     ConnectInfo(net::Client(remote)): ConnectInfo<net::Client>,
     headers: HeaderMap,
-    mut multipart: Multipart,
+    req: Request,
 ) -> Response {
     if !ctx.request_ok(&headers) {
         return text(StatusCode::UNAUTHORIZED, "");
@@ -906,28 +933,27 @@ async fn add(
     if !ctx.signed_in(ctx.client_ip(remote, &headers), &headers) {
         return text(StatusCode::FORBIDDEN, "Forbidden");
     }
-    let mut fields: HashMap<String, String> = HashMap::new();
-    let mut files: Vec<Bytes> = Vec::new();
-    loop {
-        let field = match multipart.next_field().await {
-            Ok(Some(f)) => f,
-            Ok(None) => break,
-            Err(_) => return bad("invalid upload"),
-        };
-        let name = field.name().unwrap_or_default().to_string();
-        let is_file = name == "torrents" || field.file_name().is_some();
-        let Ok(data) = field.bytes().await else {
+    let url_encoded = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.to_ascii_lowercase()
+                .starts_with("application/x-www-form-urlencoded")
+        });
+    let (fields, files) = if url_encoded {
+        match axum::body::to_bytes(req.into_body(), MAX_FORM).await {
+            Ok(body) => (form(&body), Vec::new()),
+            Err(_) => return bad("invalid form"),
+        }
+    } else {
+        let Ok(multipart) = <Multipart as FromRequest<()>>::from_request(req, &()).await else {
             return bad("invalid upload");
         };
-        if is_file {
-            if files.len() >= MAX_ADD_ITEMS || data.len() > riptor_core::input::MAX_TORRENT_BYTES {
-                return bad("too many or too large torrent files");
-            }
-            files.push(data);
-        } else if data.len() <= MAX_FORM {
-            fields.insert(name, String::from_utf8_lossy(&data).into_owned());
+        match read_upload(multipart).await {
+            Ok(v) => v,
+            Err(msg) => return bad(msg),
         }
-    }
+    };
     let flag = |k: &str| fields.get(k).is_some_and(|v| v == "true");
     let save = fields
         .get("savepath")
@@ -947,6 +973,12 @@ async fn add(
         start_paused: flag("stopped") || flag("paused"),
         ..Default::default()
     };
+    let fails = || text(StatusCode::OK, "Fails.");
+    if let Some(dir) = &params.save_path {
+        if ctx.engine.check_root(dir).is_err() {
+            return fails();
+        }
+    }
     let mut sources = Vec::new();
     for line in fields
         .get("urls")
@@ -956,30 +988,203 @@ async fn add(
         .take(MAX_ADD_ITEMS)
     {
         let lower = line.to_ascii_lowercase();
-        if lower.starts_with("magnet:") {
-            sources.push(Source::Magnet(line));
+        let src = if lower.starts_with("magnet:") {
+            Source::Magnet(line)
         } else if lower.starts_with("http://") || lower.starts_with("https://") {
-            sources.push(Source::Url(line));
+            Source::Url(line)
         } else if line.len() == 40 && line.bytes().all(|b| b.is_ascii_hexdigit()) {
-            sources.push(Source::Magnet(format!("magnet:?xt=urn:btih:{line}")));
+            Source::Magnet(format!("magnet:?xt=urn:btih:{line}"))
+        } else {
+            continue;
+        };
+        let valid = match &src {
+            Source::Magnet(m) => riptor_core::input::validate_magnet(m).is_ok(),
+            _ => true,
+        };
+        if valid {
+            sources.push(src);
         }
     }
-    let mut added = 0;
-    let mut temp = Vec::new();
+    let files: Vec<Bytes> = files
+        .into_iter()
+        .filter(|b| riptor_core::input::check_metadata(b).is_ok())
+        .collect();
+    let wanted = sources.len() + files.len();
+    if wanted == 0 {
+        return fails();
+    }
+    // Refused while too many earlier adds are still fetching.
+    let Some(mut batch) = Batch::reserve(&ctx, wanted) else {
+        return fails();
+    };
     for bytes in files {
         let path = temp_path(&ctx, "upload");
         if riptor_core::state_file::save_bytes(&path, &bytes).is_ok() {
             sources.push(Source::File(path.clone()));
-            temp.push(path);
+            batch.temp.push(path);
+        } else {
+            batch.done_one();
         }
     }
+    if sources.is_empty() {
+        return fails();
+    }
+    // Metadata can take minutes, so reply now like qBittorrent and add in the background.
+    tokio::spawn(add_in_background(batch, sources, params));
+    text(StatusCode::OK, "Ok.")
+}
+
+async fn read_upload(
+    mut multipart: Multipart,
+) -> Result<(HashMap<String, String>, Vec<Bytes>), &'static str> {
+    let mut fields: HashMap<String, String> = HashMap::new();
+    let mut files: Vec<Bytes> = Vec::new();
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(_) => return Err("invalid upload"),
+        };
+        let name = field.name().unwrap_or_default().to_string();
+        let is_file = name == "torrents" || field.file_name().is_some();
+        let Ok(data) = field.bytes().await else {
+            return Err("invalid upload");
+        };
+        if is_file {
+            if files.len() >= MAX_ADD_ITEMS || data.len() > riptor_core::input::MAX_TORRENT_BYTES {
+                return Err("too many or too large torrent files");
+            }
+            files.push(data);
+        } else if data.len() <= MAX_FORM {
+            fields.insert(name, String::from_utf8_lossy(&data).into_owned());
+        }
+    }
+    Ok((fields, files))
+}
+
+/// One request's accepted sources; frees its queue places and temp files when dropped.
+struct Batch {
+    ctx: Arc<Ctx>,
+    waiting: usize,
+    temp: Vec<PathBuf>,
+}
+
+impl Batch {
+    fn reserve(ctx: &Arc<Ctx>, n: usize) -> Option<Self> {
+        let mut cur = ctx.adds_waiting.load(Ordering::Acquire);
+        loop {
+            let next = cur.checked_add(n).filter(|t| *t <= MAX_ADDS_WAITING)?;
+            match ctx.adds_waiting.compare_exchange_weak(
+                cur,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(seen) => cur = seen,
+            }
+        }
+        Some(Self {
+            ctx: ctx.clone(),
+            waiting: n,
+            temp: Vec::new(),
+        })
+    }
+
+    fn done_one(&mut self) {
+        if self.waiting > 0 {
+            self.waiting -= 1;
+            self.ctx.adds_waiting.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+impl Drop for Batch {
+    fn drop(&mut self) {
+        self.ctx
+            .adds_waiting
+            .fetch_sub(self.waiting, Ordering::AcqRel);
+        for path in &self.temp {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+async fn add_in_background(mut batch: Batch, sources: Vec<Source>, params: AddParams) {
     for src in sources {
-        if ctx.engine.add_direct(src, params.clone()).await.is_ok() {
-            added += 1;
+        let what = describe(&src);
+        let result = {
+            let _slot = batch.ctx.adds.acquire().await;
+            add_one(&batch.ctx.engine, src, params.clone()).await
+        };
+        batch.done_one();
+        if let Err(e) = result {
+            tracing::warn!(target: "riptor::remote", "remote control couldn't add {what}: {e:#}");
+            batch.ctx.engine.notice(
+                NoticeLevel::Warning,
+                format!("Remote control couldn't add {what}: {e:#}"),
+            );
         }
     }
-    for path in temp {
-        let _ = std::fs::remove_file(path);
+}
+
+// Already in the list counts as done, as it does in qBittorrent.
+async fn add_one(engine: &Engine, src: Source, mut params: AddParams) -> anyhow::Result<()> {
+    let preview = engine.preview(src).await?;
+    if preview.already_added {
+        return Ok(());
     }
-    text(StatusCode::OK, if added > 0 { "Ok." } else { "Fails." })
+    params.info_hash = preview.info_hash;
+    engine.add(params).await.map(|_| ())
+}
+
+/// A short name for notices; link queries can hold tracker keys, so only the host.
+fn describe(src: &Source) -> String {
+    let named = match src {
+        Source::Magnet(m) => url::Url::parse(m)
+            .ok()
+            .and_then(|u| {
+                u.query_pairs()
+                    .find(|(k, _)| k == "dn")
+                    .map(|(_, v)| format!("\"{v}\""))
+            })
+            .unwrap_or_else(|| "a magnet link".to_string()),
+        Source::Url(u) => url::Url::parse(u)
+            .ok()
+            .and_then(|u| u.host_str().map(|h| format!("a link from {h}")))
+            .unwrap_or_else(|| "a link".to_string()),
+        Source::File(_) => "an uploaded torrent".to_string(),
+    };
+    named
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(120)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pinned(domains: &str, host: Option<&'static str>) -> bool {
+        let mut h = HeaderMap::new();
+        if let Some(host) = host {
+            h.insert(header::HOST, HeaderValue::from_static(host));
+        }
+        host_pinned(domains, &h)
+    }
+
+    #[test]
+    fn only_real_names_pin_the_host() {
+        assert!(!pinned("*", Some("attacker.example")));
+        assert!(!pinned("**", Some("attacker.example")));
+        assert!(!pinned("*; ;", Some("attacker.example")));
+        assert!(pinned("*.example.org", Some("box.example.org:8080")));
+        assert!(!pinned("*.example.org", Some("attacker.example")));
+        assert!(pinned("riptor.example.org", Some("riptor.example.org")));
+        assert!(pinned("*", Some("127.0.0.1:8080")));
+        assert!(pinned("*", Some("[::1]:8080")));
+        assert!(pinned("*", Some("localhost:8080")));
+        assert!(!pinned("*", None));
+    }
 }

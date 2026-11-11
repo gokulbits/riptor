@@ -313,6 +313,96 @@ async fn controls_riptor_like_a_remote_app() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn add_answers_before_metadata_arrives() {
+    let tmp = tempfile::tempdir().unwrap();
+    let e = engine(tmp.path()).await;
+    let data = tmp.path().join("data");
+    let server = serve(&e, &data, false).await;
+    let mut api = Api::new(server.addr, false);
+    assert_eq!(api.login("admin", PASSWORD).await, (200, "Ok.".into()));
+
+    let add = |form: reqwest::multipart::Form| {
+        api.with_sid(api.http.post(format!("{}torrents/add", api.base)))
+            .multipart(form)
+            .send()
+    };
+
+    // No DHT and no trackers, so this magnet's metadata never comes.
+    let magnet = format!("magnet:?xt=urn:btih:{}&dn=nowhere", "5a".repeat(20));
+    let started = std::time::Instant::now();
+    let r = add(reqwest::multipart::Form::new().text("urls", magnet))
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    assert_eq!(r.text().await.unwrap(), "Ok.");
+    assert!(started.elapsed() < Duration::from_secs(5));
+
+    // Bad input is still refused up front.
+    let r = add(reqwest::multipart::Form::new().text("urls", "magnet:?xt=urn:btih:nothex"))
+        .await
+        .unwrap();
+    assert_eq!(r.text().await.unwrap(), "Fails.");
+    let junk = reqwest::multipart::Part::bytes(b"not a torrent".to_vec()).file_name("x.torrent");
+    let r = add(reqwest::multipart::Form::new().part("torrents", junk))
+        .await
+        .unwrap();
+    assert_eq!(r.text().await.unwrap(), "Fails.");
+    let r = add(reqwest::multipart::Form::new()
+        .text("urls", "c3".repeat(20))
+        .text("savepath", "relative/folder"))
+    .await
+    .unwrap();
+    assert_eq!(r.text().await.unwrap(), "Fails.");
+
+    // A url-encoded form works too.
+    let hash = "7b".repeat(20);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        api.post("torrents/add", &[("urls", hash.as_str())]).await,
+        (200, "Ok.".into())
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(
+        api.post("torrents/add", &[("urls", "not a link")]).await,
+        (200, "Fails.".into())
+    );
+
+    // An uploaded file still lands in the list.
+    let bytes = torrent_of(tmp.path(), "content", 9);
+    let file = reqwest::multipart::Part::bytes(bytes).file_name("content.torrent");
+    let r = add(reqwest::multipart::Form::new()
+        .part("torrents", file)
+        .text("stopped", "true"))
+    .await
+    .unwrap();
+    assert_eq!(r.text().await.unwrap(), "Ok.");
+    wait_for(&api, "the uploaded torrent", |v| {
+        v["torrents"]
+            .as_object()
+            .is_some_and(|t| t.values().any(|t| t["name"] == "content"))
+    })
+    .await;
+    // Its temp copy goes once the add is done.
+    let leftovers = || {
+        std::fs::read_dir(&data)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|f| f.file_name().to_string_lossy().starts_with("webui-upload-"))
+            .count()
+    };
+    for _ in 0..50 {
+        if leftovers() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(leftovers(), 0);
+
+    drop(server);
+    e.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn https_and_bans() {
     let tmp = tempfile::tempdir().unwrap();
     let e = engine(tmp.path()).await;
@@ -470,6 +560,47 @@ async fn options_from_the_settings() {
         .unwrap();
     let r = http
         .get(format!("http://{}/api/v2/app/version", server.addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.text().await.unwrap(), "v5.0.0");
+
+    // A name rebound to 127.0.0.1 doesn't get the bypass.
+    let local = format!("http://{}/api/v2/", server.addr);
+    let r = http
+        .get(format!("{local}app/version"))
+        .header("Host", "attacker.example")
+        .header("Origin", "http://attacker.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 403);
+    let r = http
+        .post(format!("{local}auth/login"))
+        .header("Host", "attacker.example")
+        .header("Origin", "http://attacker.example")
+        .form(&[("username", "admin"), ("password", "wrong")])
+        .send()
+        .await
+        .unwrap();
+    assert!(r.headers().get("set-cookie").is_none());
+    assert_eq!(r.text().await.unwrap(), "Fails.");
+    drop(server);
+
+    // A name listed in the server domains does.
+    let cfg = WebUi {
+        enabled: true,
+        https: false,
+        bypass_localhost: true,
+        server_domains: "riptor.example.org".into(),
+        ..WebUi::default()
+    };
+    let server = riptor_webapi::start(e.clone(), &data, &cfg, (Ipv4Addr::LOCALHOST, 0).into())
+        .await
+        .unwrap();
+    let r = http
+        .get(format!("http://{}/api/v2/app/version", server.addr))
+        .header("Host", "riptor.example.org")
         .send()
         .await
         .unwrap();
