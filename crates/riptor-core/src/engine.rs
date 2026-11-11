@@ -376,7 +376,7 @@ impl Engine {
             .context("torrent not found")
     }
 
-    fn notice(&self, level: NoticeLevel, message: impl Into<String>) {
+    pub fn notice(&self, level: NoticeLevel, message: impl Into<String>) {
         let _ = self.events.send(Event::Notice {
             level,
             message: message.into(),
