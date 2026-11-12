@@ -37,6 +37,8 @@ pub const MAX_PLUGIN_BYTES: usize = 1024 * 1024;
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(45);
 const CAPS_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_OUTPUT: usize = 4 * 1024 * 1024;
+const MAX_TORRENT: u64 = 16 * 1024 * 1024;
+const MAX_MAGNET: usize = 8 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Python {
@@ -150,8 +152,15 @@ pub fn install_shim(dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `proxy` carries the plugin's web requests (the VPN tunnel).
-fn command(py: &Python, dir: &Path, args: &[&str], proxy: Option<&str>) -> Command {
+/// `proxy` carries the plugin's web requests (the VPN tunnel); `scratch` is
+/// the only folder it may write to.
+fn command(
+    py: &Python,
+    dir: &Path,
+    args: &[&str],
+    proxy: Option<&str>,
+    scratch: Option<&Path>,
+) -> Command {
     let script = dir.join("nova2.py");
     #[cfg(target_os = "linux")]
     if let Some(bwrap) = find_in_path("bwrap") {
@@ -176,6 +185,9 @@ fn command(py: &Python, dir: &Path, args: &[&str], proxy: Option<&str>) -> Comma
             c.arg("--tmpfs").arg(data);
         }
         c.arg("--ro-bind").arg(dir).arg(dir);
+        if let Some(s) = scratch {
+            c.arg("--bind").arg(s).arg(s);
+        }
         c.args([
             "--unshare-all",
             "--share-net",
@@ -187,16 +199,16 @@ fn command(py: &Python, dir: &Path, args: &[&str], proxy: Option<&str>) -> Comma
             .args(["-I", "-X", "utf8", "-B"])
             .arg(&script)
             .args(args);
-        finish(&mut c, dir, proxy);
+        finish(&mut c, dir, proxy, scratch);
         return c;
     }
     let mut c = Command::new(&py.exe);
     c.args(["-I", "-X", "utf8", "-B"]).arg(&script).args(args);
-    finish(&mut c, dir, proxy);
+    finish(&mut c, dir, proxy, scratch);
     c
 }
 
-fn finish(c: &mut Command, dir: &Path, proxy: Option<&str>) {
+fn finish(c: &mut Command, dir: &Path, proxy: Option<&str>, scratch: Option<&Path>) {
     c.current_dir(dir).env_clear();
     for var in [
         "SYSTEMROOT",
@@ -217,6 +229,12 @@ fn finish(c: &mut Command, dir: &Path, proxy: Option<&str>) {
     if !cfg!(windows) {
         c.env("HOME", "/tmp");
     }
+    // Python's tempfile reads these, so downloaded files land where we look.
+    if let Some(s) = scratch {
+        for var in ["TMPDIR", "TEMP", "TMP"] {
+            c.env(var, s);
+        }
+    }
     if let Some(p) = proxy {
         for var in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
             c.env(var, p);
@@ -229,20 +247,18 @@ fn finish(c: &mut Command, dir: &Path, proxy: Option<&str>) {
 async fn tail(mut r: impl tokio::io::AsyncRead + Unpin) -> String {
     let mut buf = Vec::new();
     let _ = (&mut r).take(64 * 1024).read_to_end(&mut buf).await;
-    let s = String::from_utf8_lossy(&buf);
-    let last = s
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .to_string();
-    last.chars().take(300).collect()
+    last_line(&String::from_utf8_lossy(&buf))
+}
+
+fn last_line(s: &str) -> String {
+    let last = s.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+    last.trim().chars().take(300).collect()
 }
 
 pub async fn capabilities(py: &Python, dir: &Path) -> anyhow::Result<Vec<PluginCaps>> {
     let out = tokio::time::timeout(
         CAPS_TIMEOUT,
-        command(py, dir, &["capabilities"], None).output(),
+        command(py, dir, &["capabilities"], None, None).output(),
     )
     .await
     .context("reading plugins timed out")??;
@@ -292,7 +308,7 @@ pub async fn search(
     validate_id(engine)?;
     let mut args = vec!["search", engine, category];
     args.extend(query.split_whitespace());
-    let mut child = command(py, dir, &args, proxy)
+    let mut child = command(py, dir, &args, proxy, None)
         .spawn()
         .context("could not start Python")?;
     let stdout = child.stdout.take().context("no stdout")?;
@@ -344,38 +360,137 @@ pub async fn search(
     }
 }
 
-/// For sites that need cookies. Returns a temp file path.
+/// What a plugin's download step gave back.
+#[derive(Debug, PartialEq)]
+pub enum Fetched {
+    Magnet(String),
+    File(PathBuf),
+}
+
+/// For sites that need cookies or hide the magnet on a details page.
 pub async fn download(
     py: &Python,
     dir: &Path,
     engine: &str,
     url: &str,
     proxy: Option<&str>,
-) -> anyhow::Result<PathBuf> {
+) -> anyhow::Result<Fetched> {
     validate_id(engine)?;
     let u = url::Url::parse(url)?;
     ensure!(
         matches!(u.scheme(), "http" | "https"),
         "only http(s) links can be downloaded"
     );
-    let out = tokio::time::timeout(
-        Duration::from_secs(60),
-        command(py, dir, &["download", engine, url], proxy).output(),
-    )
-    .await
-    .context("download timed out")??;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let path = text
+    let name = unique_name();
+    let downloads = dir.join("downloads");
+    let scratch = downloads.join(format!("{name}.work"));
+    std::fs::create_dir_all(&scratch)?;
+    let res = async {
+        let out = tokio::time::timeout(
+            Duration::from_secs(60),
+            command(py, dir, &["download", engine, url], proxy, Some(&scratch)).output(),
+        )
+        .await
+        .context("download timed out")??;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let Some(reply) = parse_reply(&stdout, url) else {
+            let why = last_line(&String::from_utf8_lossy(&out.stderr));
+            if why.is_empty() {
+                bail!("the plugin did not return a torrent");
+            }
+            bail!("the plugin did not return a torrent: {why}");
+        };
+        if reply.starts_with("magnet:") {
+            return Ok(Fetched::Magnet(check_magnet(reply)?));
+        }
+        let bytes = read_torrent(&scratch, Path::new(reply))?;
+        let dest = downloads.join(format!("{name}.torrent"));
+        std::fs::write(&dest, bytes)?;
+        Ok(Fetched::File(dest))
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&scratch);
+    res
+}
+
+/// The plugin prints "path url" or "magnet url" as its last line.
+fn parse_reply<'a>(stdout: &'a str, url: &str) -> Option<&'a str> {
+    let line = stdout
         .lines()
-        .last()
-        .and_then(|l| l.rsplit_once(' '))
-        .map(|(p, _)| PathBuf::from(p.trim()));
-    let path = path.context("the plugin did not return a file")?;
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())?;
+    let what = match line.strip_suffix(url) {
+        Some(rest) => rest.trim_end(),
+        None => line.rsplit_once(' ').map_or(line, |(p, _)| p.trim_end()),
+    };
+    (!what.is_empty()).then_some(what)
+}
+
+fn check_magnet(m: &str) -> anyhow::Result<String> {
     ensure!(
-        path.is_absolute() && path.extension().is_some_and(|e| e == "torrent"),
+        m.len() <= MAX_MAGNET
+            && m.starts_with("magnet:?")
+            && m.contains("xt=urn:bt")
+            && !m.chars().any(char::is_control),
+        "the plugin returned a broken magnet link"
+    );
+    // Some plugins unquote the name, spaces and all.
+    Ok(m.replace(' ', "%20"))
+}
+
+/// Only a file inside the plugin's scratch folder, and only if it looks like a torrent.
+fn read_torrent(scratch: &Path, path: &Path) -> anyhow::Result<Vec<u8>> {
+    ensure!(path.is_absolute(), "the plugin returned an unexpected file");
+    let real = std::fs::canonicalize(path).context("the plugin's file is missing")?;
+    ensure!(
+        real.starts_with(std::fs::canonicalize(scratch)?),
+        "the plugin returned a file outside its download folder"
+    );
+    let meta = std::fs::metadata(&real)?;
+    ensure!(
+        meta.is_file() && meta.len() <= MAX_TORRENT,
         "the plugin returned an unexpected file"
     );
-    Ok(path)
+    let bytes = std::fs::read(&real)?;
+    ensure!(
+        bytes.first() == Some(&b'd') && bytes.last() == Some(&b'e'),
+        "the plugin's file is not a torrent"
+    );
+    Ok(bytes)
+}
+
+fn unique_name() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    format!("{:x}-{nanos:x}-{n}", std::process::id())
+}
+
+/// Drops plugin downloads older than a day.
+pub fn clean_downloads(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir.join("downloads")) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(24 * 3600));
+        if !old {
+            continue;
+        }
+        let p = e.path();
+        let _ = match e.file_type() {
+            Ok(t) if t.is_dir() => std::fs::remove_dir_all(p),
+            _ => std::fs::remove_file(p),
+        };
+    }
 }
 
 pub fn validate_id(id: &str) -> anyhow::Result<()> {
@@ -462,7 +577,60 @@ class demo(object):
                            "desc_link": self.url + "/%d" % i, "pub_date": 1700000000})
         prettyPrinter({"link": "magnet:?xt=urn:btih:%040d" % 2, "name": "Strings", "size": "-1",
                        "seeds": "1,234", "leech": " 56 ", "engine_url": self.url})
+
+    def download_torrent(self, info):
+        import os, tempfile
+        kind = info.rsplit("/", 1)[1]
+        if kind == "magnet":
+            print("magnet:?xt=urn:btih:%040d&dn=Big Buck Bunny %s" % (7, info))
+        elif kind == "file":
+            fd, path = tempfile.mkstemp()
+            with os.fdopen(fd, "wb") as f:
+                f.write(b"d4:infod4:name1:xee")
+            print(path + " " + info)
+        elif kind == "outside":
+            print(os.path.abspath(__file__) + " " + info)
+        else:
+            raise ValueError("no torrent here")
 "#;
+
+    #[test]
+    fn reads_plugin_replies() {
+        let u = "https://x.example/t/1";
+        assert_eq!(
+            parse_reply("noise\n/tmp/a b.torrent https://x.example/t/1\n\n", u),
+            Some("/tmp/a b.torrent")
+        );
+        assert_eq!(
+            parse_reply("magnet:?xt=urn:btih:1&dn=A B https://other\n", u),
+            Some("magnet:?xt=urn:btih:1&dn=A B")
+        );
+        assert_eq!(parse_reply("\n \n", u), None);
+        assert_eq!(
+            check_magnet("magnet:?xt=urn:btih:1&dn=A B").unwrap(),
+            "magnet:?xt=urn:btih:1&dn=A%20B"
+        );
+        assert!(check_magnet("magnet:?dn=no-hash").is_err());
+        assert!(check_magnet("magnet:?xt=urn:btih:1\n").is_err());
+        assert!(check_magnet(&format!("magnet:?xt=urn:btih:{}", "a".repeat(MAX_MAGNET))).is_err());
+    }
+
+    #[test]
+    fn only_takes_torrents_from_the_scratch_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let scratch = d.path().join("s");
+        std::fs::create_dir(&scratch).unwrap();
+        let outside = d.path().join("secret.torrent");
+        std::fs::write(&outside, b"d1:ae").unwrap();
+        assert!(read_torrent(&scratch, &outside).is_err());
+        assert!(read_torrent(&scratch, &scratch.join("../secret.torrent")).is_err());
+        let inside = scratch.join("tmp1");
+        std::fs::write(&inside, b"d1:ae").unwrap();
+        assert_eq!(read_torrent(&scratch, &inside).unwrap(), b"d1:ae");
+        std::fs::write(&inside, b"<html>").unwrap();
+        assert!(read_torrent(&scratch, &inside).is_err());
+        assert!(read_torrent(&scratch, Path::new("tmp1")).is_err());
+    }
 
     #[test]
     fn inspect_checks_names_and_shape() {
@@ -516,13 +684,47 @@ class demo(object):
         .await
         .unwrap();
         assert_eq!(n, 3);
-        assert_eq!(got[1].name, "Result | 1 big+buck");
+        assert_eq!(got[1].name, "Result | 1 big%20buck");
         assert_eq!(got[1].size, Some(1_610_612_736));
         assert_eq!(got[1].seeders, Some(1));
         assert_eq!(got[1].leechers, None);
         assert_eq!(got[2].seeders, Some(1234), "thousands separators");
         assert_eq!(got[2].leechers, Some(56));
         assert_eq!(got[2].size, None);
+
+        // Downloads: a magnet reply, and a file written to the plugin's temp folder.
+        let dl = |kind: &str| format!("https://demo.example/t/{kind}");
+        let m = download(&py, d.path(), "demo", &dl("magnet"), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            m,
+            Fetched::Magnet(format!(
+                "magnet:?xt=urn:btih:{:040}&dn=Big%20Buck%20Bunny",
+                7
+            ))
+        );
+        let Fetched::File(f) = download(&py, d.path(), "demo", &dl("file"), None)
+            .await
+            .unwrap()
+        else {
+            panic!("expected a file");
+        };
+        assert_eq!(std::fs::read(&f).unwrap(), b"d4:infod4:name1:xee");
+        assert!(f.starts_with(d.path().join("downloads")));
+        let e = download(&py, d.path(), "demo", &dl("outside"), None)
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("outside"), "{e}");
+        let e = download(&py, d.path(), "demo", &dl("none"), None)
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("no torrent here"), "{e}");
+        let left: Vec<_> = std::fs::read_dir(d.path().join("downloads"))
+            .unwrap()
+            .collect();
+        assert_eq!(left.len(), 1, "scratch folders are removed");
+
         assert!(search(
             &py,
             d.path(),

@@ -52,7 +52,8 @@ def search(engine_id, category, words):
     supported = getattr(engine, "supported_categories", {"all": ""})
     if category not in supported:
         return
-    query = "+".join(urllib.parse.quote(w, safe="") for w in words)
+    # Plugins expect %20 between words; several turn it into "-" for their URLs.
+    query = urllib.parse.quote(" ".join(words), safe="")
     engine.search(query, category)
 
 

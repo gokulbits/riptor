@@ -592,17 +592,35 @@ pub fn search_set_scrape(state: State<'_, AppState>, enabled: bool) -> Res<()> {
     search(&state)?.set_scrape(enabled).map_err(err)
 }
 
-/// Returns a temp .torrent path for the add dialog.
+/// Same shape as the UI's `Source`.
+#[derive(serde::Serialize)]
+pub struct PluginSource {
+    kind: &'static str,
+    value: String,
+}
+
+/// A magnet, or a .torrent path for the add dialog.
 #[tauri::command]
 pub async fn search_plugin_download(
     state: State<'_, AppState>,
     provider: String,
     url: String,
-) -> Res<String> {
+) -> Res<PluginSource> {
+    use riptor_search::nova::Fetched;
     let s = search(&state)?;
     route_search(&state, &s);
-    let p = s.plugin_download(&provider, &url).await.map_err(err)?;
-    Ok(p.to_string_lossy().into_owned())
+    Ok(
+        match s.plugin_download(&provider, &url).await.map_err(err)? {
+            Fetched::Magnet(m) => PluginSource {
+                kind: "magnet",
+                value: m,
+            },
+            Fetched::File(p) => PluginSource {
+                kind: "file",
+                value: p.to_string_lossy().into_owned(),
+            },
+        },
+    )
 }
 
 // ---------------------------------------------------------------- VPN

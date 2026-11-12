@@ -118,6 +118,7 @@ impl SearchManager {
     pub fn new(data_dir: &Path, http: reqwest::Client) -> anyhow::Result<Arc<Self>> {
         let dir = data_dir.join("search");
         nova::install_shim(&dir)?;
+        nova::clean_downloads(&dir);
         let config = match std::fs::read(dir.join("config.json")) {
             Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
                 warn!("search config unreadable ({e}); starting fresh");
@@ -528,7 +529,11 @@ impl SearchManager {
         Ok(())
     }
 
-    pub async fn plugin_download(&self, provider: &str, url: &str) -> anyhow::Result<PathBuf> {
+    pub async fn plugin_download(
+        &self,
+        provider: &str,
+        url: &str,
+    ) -> anyhow::Result<nova::Fetched> {
         let short = provider
             .strip_prefix("plugin:")
             .context("not a plugin result")?;

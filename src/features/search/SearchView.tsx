@@ -149,7 +149,7 @@ export function SearchView() {
   const [busyLink, setBusyLink] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; r: SearchResult } | null>(null);
   const [details, setDetails] = useState<SearchResult | null>(null);
-  const pluginFiles = useRef(new Map<string, string>());
+  const pluginFiles = useRef(new Map<string, Source>());
   const parent = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const virtualizer = useVirtualizer({ count: rows.length, getScrollElement: () => parent.current, estimateSize: () => ROW, overscan: 12 });
@@ -202,12 +202,12 @@ export function SearchView() {
     if (r.link.startsWith("magnet:")) return { kind: "magnet", value: r.link };
     if (!r.via_plugin) return { kind: "url", value: r.link };
     const key = `${r.engine}|${r.link}`;
-    let path = pluginFiles.current.get(key);
-    if (!path) {
-      path = await api.pluginDownload(r.engine, r.link);
-      pluginFiles.current.set(key, path);
+    let src = pluginFiles.current.get(key);
+    if (!src) {
+      src = await api.pluginDownload(r.engine, r.link);
+      pluginFiles.current.set(key, src);
     }
-    return { kind: "file", value: path };
+    return src;
   }, []);
 
   const download = async (r: SearchResult) => {
