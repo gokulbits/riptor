@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, ensure};
+use riptor_core::PieceOrder;
 use serde::{Deserialize, Serialize};
 
 pub mod cli;
@@ -32,6 +33,10 @@ pub enum Request {
     Remove {
         ids: Vec<String>,
         delete_files: bool,
+    },
+    Order {
+        ids: Vec<String>,
+        order: PieceOrder,
     },
     Shutdown,
 }
@@ -130,6 +135,21 @@ mod tests {
         assert!(line.starts_with("{\"cmd\":\"add\""));
         assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), r);
         assert!(serde_json::from_str::<Request>("{\"cmd\":\"rm -rf\"}").is_err());
+    }
+
+    #[test]
+    fn order_requests_use_the_engine_names() {
+        let r = Request::Order {
+            ids: vec!["abcdef".into()],
+            order: PieceOrder::Rarest,
+        };
+        let line = serde_json::to_string(&r).unwrap();
+        assert_eq!(line, r#"{"cmd":"order","ids":["abcdef"],"order":"rarest"}"#);
+        assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), r);
+        assert!(
+            serde_json::from_str::<Request>(r#"{"cmd":"order","ids":[],"order":"random"}"#)
+                .is_err()
+        );
     }
 
     #[test]

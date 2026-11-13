@@ -4,6 +4,8 @@ use std::path::Path;
 
 use anyhow::{bail, Context};
 
+use riptor_core::PieceOrder;
+
 use crate::Request;
 
 pub enum Parsed {
@@ -74,6 +76,14 @@ const COMMANDS: &[Command] = &[
         usage: "riptor-cli remove <id...> [--delete-files]",
         about: "Removes torrents from Riptor. Their files stay unless you ask otherwise.",
         options: &[("--delete-files", "Delete the downloaded files too")],
+        takes_ids: true,
+    },
+    Command {
+        name: "order",
+        aliases: &[],
+        usage: "riptor-cli order <sequential|rarest> <id...|all>",
+        about: "Sets the order pieces are downloaded in. Sequential fetches each file from its start; rarest asks for the pieces fewest peers have, which helps the swarm. New torrents follow the default set in the app.",
+        options: &[],
         takes_ids: true,
     },
     Command {
@@ -202,6 +212,22 @@ pub fn parse(args: &[String], cwd: &Path) -> anyhow::Result<Parsed> {
             ids: words,
             delete_files: flag("--delete-files"),
         },
+        "order" => {
+            let Some((order, ids)) = words.split_first() else {
+                bail!(
+                    "order needs sequential or rarest, then torrents; see riptor-cli order --help"
+                );
+            };
+            let order = match order.to_ascii_lowercase().as_str() {
+                "sequential" => PieceOrder::Sequential,
+                "rarest" | "rarest-first" => PieceOrder::Rarest,
+                other => bail!("{other} isn't an order; use sequential or rarest"),
+            };
+            Request::Order {
+                ids: ids.to_vec(),
+                order,
+            }
+        }
         "shutdown" => Request::Shutdown,
         _ => unreachable!("every command is handled"),
     }))
@@ -311,6 +337,20 @@ mod tests {
             }
         );
         assert_eq!(
+            request(&["order", "rarest", "abcdef", "all"]),
+            Request::Order {
+                ids: vec!["abcdef".into(), "all".into()],
+                order: PieceOrder::Rarest,
+            }
+        );
+        assert_eq!(
+            request(&["order", "Sequential", "abcdef"]),
+            Request::Order {
+                ids: vec!["abcdef".into()],
+                order: PieceOrder::Sequential,
+            }
+        );
+        assert_eq!(
             request(&["rm", "abcdef", "--delete-files", "123456"]),
             Request::Remove {
                 ids: vec!["abcdef".into(), "123456".into()],
@@ -329,5 +369,7 @@ mod tests {
         assert!(error(&["add"]).contains("add needs one torrent"));
         assert!(error(&["add", "a.torrent", "b.torrent"]).contains("add needs one torrent"));
         assert!(error(&["list", "extra"]).contains("list takes no arguments"));
+        assert!(error(&["order"]).contains("order needs sequential or rarest"));
+        assert!(error(&["order", "random", "abcdef"]).contains("random isn't an order"));
     }
 }

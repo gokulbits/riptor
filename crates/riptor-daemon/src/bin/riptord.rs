@@ -222,6 +222,10 @@ mod unix {
                     .await?;
                 serde_json::Value::Null
             }
+            Request::Order { ids, order } => {
+                engine.set_piece_order(&resolve_ids(&known(engine), &ids)?, order)?;
+                serde_json::Value::Null
+            }
             Request::Shutdown => serde_json::Value::Null,
         })
     }

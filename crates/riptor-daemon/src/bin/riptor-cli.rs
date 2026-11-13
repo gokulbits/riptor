@@ -40,16 +40,17 @@ mod unix {
                     println!("No torrents.");
                 }
                 println!(
-                    "{:<10} {:<12} {:>6} {:>11} {:>11}  NAME",
-                    "ID", "STATE", "DONE", "DOWN", "UP"
+                    "{:<10} {:<12} {:<10} {:>6} {:>11} {:>11}  NAME",
+                    "ID", "STATE", "ORDER", "DONE", "DOWN", "UP"
                 );
                 for t in list {
                     let s = |k: &str| t[k].as_str().unwrap_or("").to_string();
                     let n = |k: &str| t[k].as_u64().unwrap_or(0);
                     println!(
-                        "{:<10} {:<12} {:>5.1}% {:>11} {:>11}  {}",
+                        "{:<10} {:<12} {:<10} {:>5.1}% {:>11} {:>11}  {}",
                         s("id").chars().take(10).collect::<String>(),
                         s("state"),
+                        s("piece_order"),
                         t["progress"].as_f64().unwrap_or(0.0) * 100.0,
                         rate(n("dl_rate")),
                         rate(n("ul_rate")),
