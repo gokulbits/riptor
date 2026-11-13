@@ -102,4 +102,59 @@ describe("SettingsDialog", () => {
     await open("connection");
     expect(screen.getByRole("switch", { name: /Show peer countries/ })).toBeTruthy();
   });
+
+  describe("search", () => {
+    const search = (text: string) => fireEvent.change(screen.getByRole("combobox", { name: "Search settings" }), { target: { value: text } });
+
+    it("lists matches and opens the one picked with Enter", async () => {
+      await open();
+      search("tracker");
+      expect(screen.getByRole("listbox", { name: "Matching settings" })).toBeTruthy();
+      expect(screen.getByRole("option", { name: /Add these trackers to new torrents/ })).toBeTruthy();
+      expect(screen.queryByRole("switch", { name: /Add new torrents stopped/ })).toBeNull();
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Search settings" }), { key: "Enter" });
+      expect(await screen.findByText("Add these trackers to new torrents")).toBeTruthy();
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+
+    it("puts focus on the setting it jumps to", async () => {
+      await open();
+      search("local peer discovery");
+      fireEvent.click(screen.getByRole("option", { name: /Local peer discovery/ }));
+      const sw = await screen.findByRole("switch", { name: /Local peer discovery/ });
+      await waitFor(() => expect(document.activeElement).toBe(sw));
+    });
+
+    it("finds a setting by a keyword it doesn't contain", async () => {
+      await open();
+      search("firewall");
+      expect(screen.getByRole("option", { name: /Port/ })).toBeTruthy();
+    });
+
+    it("says when nothing matches", async () => {
+      await open();
+      search("zebra");
+      expect(screen.getByText(/No settings match/)).toBeTruthy();
+    });
+
+    it("clears on Escape without closing the dialog", async () => {
+      const close = vi.fn();
+      render(<SettingsDialog onClose={close} />);
+      await screen.findByRole("button", { name: "Save" });
+      search("dht");
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Search settings" }), { key: "Escape" });
+      expect((screen.getByRole("combobox", { name: "Search settings" }) as HTMLInputElement).value).toBe("");
+      expect(close).not.toHaveBeenCalled();
+    });
+
+    it("never changes a setting", async () => {
+      await open();
+      search("dht");
+      fireEvent.click(screen.getByRole("option", { name: /DHT/ }));
+      await screen.findByRole("switch", { name: /DHT/ });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(saved).toHaveLength(1));
+      expect(saved[0]).toEqual(fixture);
+    });
+  });
 });

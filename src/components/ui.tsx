@@ -64,7 +64,7 @@ export function Dialog({
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   // Not space-y-1: v4 puts that gap on the inline label span, where it does nothing.
   return (
-    <label className="block [&>*+*]:mt-1">
+    <label className="block [&>*+*]:mt-1" data-label={label}>
       <span className="label">{label}</span>
       {children}
       {hint && <span className="block text-xs text-muted">{hint}</span>}
@@ -86,7 +86,10 @@ export function Toggle({
   disabled?: boolean;
 }) {
   return (
-    <label className={clsx("flex cursor-pointer items-start gap-3 py-1", disabled && "opacity-50")}>
+    <label
+      className={clsx("flex cursor-pointer items-start gap-3 py-1", disabled && "opacity-50")}
+      data-label={typeof label === "string" ? label : undefined}
+    >
       <button
         type="button"
         role="switch"

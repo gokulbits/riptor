@@ -1,7 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import clsx from "clsx";
-import { FolderOpen, Loader2, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { FolderOpen, Loader2, Plus, Search, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Dialog, Field, OptionalNumber, Toggle } from "../../components/ui";
 import { api, errorText } from "../../lib/ipc";
 import type { CountryStatus, DataCap, NetInfo, Settings, WatchedFolder } from "../../lib/types";
@@ -11,6 +11,8 @@ import { AssociationSection } from "./AssociationSection";
 import { BackupSection } from "./BackupSection";
 import { RemoteControlSection } from "./RemoteControlSection";
 import { useVisible } from "../../lib/visible";
+import { searchSettings, type SettingEntry } from "./searchIndex";
+import { reveal, SearchResults } from "./SettingsSearch";
 
 export type Section = "downloads" | "connection" | "speed" | "bittorrent" | "storage" | "privacy" | "apps" | "backup" | "remote" | "about";
 
@@ -287,12 +289,46 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
   const [s, setS] = useState<Settings | null>(null);
   const [section, setSection] = useState<Section>(initialSection);
   const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const content = useRef<HTMLDivElement>(null);
+  const pending = useRef<SettingEntry | null>(null);
+  const results = useMemo(() => searchSettings(query), [query]);
+  const searching = query.trim() !== "";
+  const view = searching ? null : section;
 
   useEffect(() => {
     api.settings().then(setS).catch((e) => toast("error", errorText(e)));
   }, [toast]);
 
+  // After a result is picked and the section has rendered, scroll to the setting.
+  useEffect(() => {
+    const p = pending.current;
+    if (!p || searching || !content.current || !s) return;
+    pending.current = null;
+    return reveal(content.current, p);
+  }, [section, searching, s]);
+
   if (!s) return null;
+  const pick = (r: SettingEntry) => {
+    pending.current = r;
+    setQuery("");
+    setSection(r.section);
+  };
+  const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape" && query) {
+      // Clears the search instead of closing the dialog.
+      e.stopPropagation();
+      setQuery("");
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = results.length;
+      if (n) setActive((a) => (a + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
+    } else if (e.key === "Enter" && results[active]) {
+      e.preventDefault();
+      pick(results[active]);
+    }
+  };
   const set = (patch: Partial<Settings>) => setS({ ...s, ...patch });
   const seeding = (patch: Partial<Settings["seeding"]>) => setS({ ...s, seeding: { ...s.seeding, ...patch } });
   const queue = (patch: Partial<Settings["seeding"]["queue"]>) =>
@@ -331,21 +367,44 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
       {/* Fixed height so switching sections doesn't resize the dialog; the section scrolls instead. */}
       <div className="flex h-[min(40rem,calc(90vh-9rem))] gap-6">
         <nav className="w-44 shrink-0 space-y-0.5">
+          <div className="relative mb-2">
+            <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
+            <input
+              className="input pl-8"
+              type="search"
+              role="combobox"
+              aria-label="Search settings"
+              aria-expanded={searching}
+              aria-controls="settings-results"
+              aria-activedescendant={searching && results[active] ? `settings-result-${active}` : undefined}
+              placeholder="Search settings"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setActive(0);
+              }}
+              onKeyDown={onSearchKey}
+            />
+          </div>
           {SECTIONS.map((x) => (
             <button
               key={x.id}
-              onClick={() => setSection(x.id)}
+              onClick={() => {
+                setQuery("");
+                setSection(x.id);
+              }}
               className={clsx(
                 "block w-full rounded-md px-3 py-1.5 text-left text-sm",
-                section === x.id ? "bg-accent/15 text-fg" : "text-muted hover:bg-raised hover:text-fg",
+                section === x.id && !searching ? "bg-accent/15 text-fg" : "text-muted hover:bg-raised hover:text-fg",
               )}
             >
               {x.label}
             </button>
           ))}
         </nav>
-        <div key={section} className="-mr-2 min-w-0 flex-1 space-y-6 overflow-y-auto pr-2">
-          {section === "downloads" && (
+        <div key={section} ref={content} className="-mr-2 min-w-0 flex-1 space-y-6 overflow-y-auto pr-2">
+          {searching && <SearchResults query={query} results={results} active={active} onPick={pick} onHover={setActive} />}
+          {view === "downloads" && (
             <Group title="Saving">
               <Field label="Default download folder">
                 <FolderInput value={s.download_dir} onChange={(v) => set({ download_dir: v })} />
@@ -391,7 +450,7 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
               />
             </Group>
           )}
-          {section === "downloads" && (
+          {view === "downloads" && (
             <Group title="Watched folders">
               <p className="text-xs text-muted">
                 .torrent files saved to these folders are added automatically, with the folder's category and save folder. Checked every few
@@ -400,7 +459,7 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
               <WatchedFolders value={s.watched_folders} onChange={(v) => set({ watched_folders: v, watched_folder: null })} />
             </Group>
           )}
-          {section === "downloads" && (
+          {view === "downloads" && (
             <Group title="Window">
               <Toggle
                 checked={s.close_to_tray}
@@ -412,7 +471,7 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
             </Group>
           )}
 
-          {section === "connection" && (
+          {view === "connection" && (
             <>
               <Group title="Listening">
                 <div className="grid grid-cols-2 gap-3">
@@ -490,7 +549,7 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
             </>
           )}
 
-          {section === "speed" && (
+          {view === "speed" && (
             <>
               <Group title="Global limits (KiB/s)">
                 <div className="grid grid-cols-2 gap-3">
@@ -565,7 +624,7 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
             </>
           )}
 
-          {section === "bittorrent" && (
+          {view === "bittorrent" && (
             <>
               <Group title="Seeding limits">
                 <div className="grid grid-cols-3 gap-3">
@@ -683,7 +742,7 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
             </>
           )}
 
-          {section === "storage" && (
+          {view === "storage" && (
             <Group title="Disk cache">
               <p className="text-xs text-muted">
                 Riptor keeps downloaded pieces in memory until they are verified, then writes each one in a few large writes.
@@ -744,12 +803,12 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
             </Group>
           )}
 
-          {section === "about" && <AboutSection checkUpdates={s.check_updates} onCheckUpdates={(v) => set({ check_updates: v })} />}
-          {section === "remote" && <RemoteControlSection s={s} set={set} />}
-          {section === "apps" && <AssociationSection />}
-          {section === "backup" && <BackupSection onSettingsRestored={() => api.settings().then(setS)} />}
+          {view === "about" && <AboutSection checkUpdates={s.check_updates} onCheckUpdates={(v) => set({ check_updates: v })} />}
+          {view === "remote" && <RemoteControlSection s={s} set={set} />}
+          {view === "apps" && <AssociationSection />}
+          {view === "backup" && <BackupSection onSettingsRestored={() => api.settings().then(setS)} />}
 
-          {section === "privacy" && (
+          {view === "privacy" && (
             <>
               <Group title="Privacy">
                 <Toggle
