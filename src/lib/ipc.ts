@@ -30,6 +30,7 @@ import type {
   MagnetLink,
   NetInfo,
   PeerInfo,
+  PieceOrder,
   RssArticle,
   RssOptions,
   RssRule,
@@ -101,6 +102,7 @@ export const api = {
   setSpeedLimits: (ids: string[], dlKib: number | null, ulKib: number | null) =>
     invoke<void>("set_speed_limits", { ids, dlKib, ulKib }),
   queueMove: (ids: string[], how: QueueMove) => invoke<void>("queue_move", { ids, how }),
+  setPieceOrder: (ids: string[], order: PieceOrder) => invoke<void>("set_piece_order", { ids, order }),
   categories: () => invoke<Record<string, string | null>>("get_categories"),
   saveCategory: (name: string, savePath: string | null) => invoke<void>("save_category", { name, savePath }),
   deleteCategory: (name: string) => invoke<void>("delete_category", { name }),

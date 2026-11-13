@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use riptor_core::{
-    AddParams, Engine, FileEntry, Preview, QueueMove, Settings, ShareLimitAction, ShareLimits,
-    Source,
+    AddParams, Engine, FileEntry, PieceOrder, Preview, QueueMove, Settings, ShareLimitAction,
+    ShareLimits, Source,
 };
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
@@ -183,6 +183,18 @@ pub async fn set_speed_limits(
     engine(&state)
         .await?
         .set_speed_limits(&ids, dl_kib, ul_kib)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn set_piece_order(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+    order: PieceOrder,
+) -> Res<()> {
+    engine(&state)
+        .await?
+        .set_piece_order(&ids, order)
         .map_err(err)
 }
 

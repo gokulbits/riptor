@@ -719,6 +719,7 @@ impl Engine {
                     has_executables: p.has_executables,
                     dl_limit_kib: None,
                     ul_limit_kib: None,
+                    piece_order: self.settings.read().piece_order,
                     move_on_complete: incomplete.map(|_| base.clone()),
                     file_priority: BTreeMap::new(),
                     renames: BTreeMap::new(),
@@ -1238,6 +1239,10 @@ impl Engine {
             r.dl_limit_kib = dl;
             r.ul_limit_kib = ul;
         })
+    }
+
+    pub fn set_piece_order(&self, ids: &[String], order: PieceOrder) -> anyhow::Result<()> {
+        self.edit_records(ids, |r| r.piece_order = order)
     }
 
     pub fn queue_move(&self, ids: &[String], how: QueueMove) -> anyhow::Result<()> {
@@ -2356,6 +2361,7 @@ impl Engine {
         // or takes a lock of its own.
         let mut limits = Vec::new();
         let mut priorities = Vec::new();
+        let mut counting = Vec::new();
         let mut moves = Vec::new();
         let mut scans = Vec::new();
         let (mut sum_dd, mut sum_ud, mut sum_waste) = (0u64, 0u64, 0u64);
@@ -2380,6 +2386,11 @@ impl Engine {
                 let r = rt.entry(hash).or_default();
                 if let Some(live) = &o.live {
                     limits.push((live.clone(), rec.dl_limit_kib, rec.ul_limit_kib));
+                    let rarest = rec.piece_order == PieceOrder::Rarest;
+                    live.set_rarest_first(rarest);
+                    if rarest && rec.completed_on.is_none() {
+                        counting.push(live.clone());
+                    }
                     let key = Arc::as_ptr(live) as usize;
                     if r.priorities_applied != Some(key) {
                         let len = rec.file_priority.keys().max().map_or(0, |m| m + 1);
@@ -2533,6 +2544,10 @@ impl Engine {
 
         for (live, dl, ul) in limits {
             apply_speed_limits(live.ratelimits(), dl, ul);
+        }
+        // Counted here, outside every lock, so the picker only reads the result.
+        for live in counting {
+            live.refresh_availability();
         }
         for (live, levels) in priorities {
             live.set_file_priority_levels(&levels);
@@ -3126,6 +3141,7 @@ fn summarize(
         has_executables: rec.has_executables,
         dl_limit_kib: rec.dl_limit_kib,
         ul_limit_kib: rec.ul_limit_kib,
+        piece_order: rec.piece_order,
         error: stats.error.clone(),
         checksum: rec
             .checksums

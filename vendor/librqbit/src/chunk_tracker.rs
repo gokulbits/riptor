@@ -248,6 +248,26 @@ impl ChunkTracker {
             .filter_map(|id| self.lengths.validate_piece_index(id))
     }
 
+    // RIPTOR PATCH: the queued pieces of each unfinished file, files in priority order.
+    pub(crate) fn queued_by_file(
+        &self,
+        file_priorities: &FilePriorities,
+        file_infos: &FileInfos,
+    ) -> Vec<Vec<ValidPieceIndex>> {
+        file_priorities
+            .iter()
+            .filter_map(|p| Some((*p, file_infos.get(*p)?)))
+            .filter(|(id, f)| self.per_file_bytes[*id] != f.len)
+            .map(|(_id, f)| {
+                f.iter_piece_priorities()
+                    .filter(|id| self.queue_pieces[*id])
+                    .filter_map(|id| id.try_into().ok())
+                    .filter_map(|id| self.lengths.validate_piece_index(id))
+                    .collect()
+            })
+            .collect()
+    }
+
     pub(crate) fn is_piece_have(&self, id: ValidPieceIndex) -> bool {
         self.have.as_slice()[id.get() as usize]
     }

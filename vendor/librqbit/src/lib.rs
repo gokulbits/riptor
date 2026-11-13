@@ -69,6 +69,8 @@ mod piece_tracker;
 mod read_buf;
 // RIPTOR PATCH: see riptor_observe.rs.
 pub mod riptor_observe;
+// RIPTOR PATCH: rarest-first piece choice.
+pub mod riptor_pick;
 mod session;
 mod session_persistence;
 pub mod session_stats;

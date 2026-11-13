@@ -4,7 +4,7 @@ const APP_COMMANDS = new Set([
   "engine_status", "take_startup_items", "preview_torrent", "add_torrent",
   "stop_torrents", "resume_torrents", "force_start_torrents", "remove_torrents", "set_files",
   "torrent_files", "torrent_trackers", "torrent_peers", "torrent_magnet", "free_space", "public_ip", "set_category", "move_torrents", "recheck_torrents", "set_tags",
-  "set_share_limits", "set_speed_limits", "queue_move", "get_categories", "save_category", "delete_category",
+  "set_share_limits", "set_speed_limits", "set_piece_order", "queue_move", "get_categories", "save_category", "delete_category",
   "get_settings", "update_settings", "set_alt_speed", "reveal_torrent", "open_web_url",
   "statistics", "create_backup", "inspect_backup", "restore_backup",
   "association_status", "make_default_app", "open_default_apps",

@@ -32,6 +32,7 @@ export const ENTRIES: SettingEntry[] = [
   e("downloads", "Saving", "Keep incomplete downloads in", "temporary partial unfinished temp folder move when complete"),
   e("downloads", "Saving", "Put multi-file torrents in their own folder", "subfolder directory create name"),
   e("downloads", "Saving", "Add new torrents stopped", "paused start automatically manual"),
+  e("downloads", "Saving", "Download order for new torrents", "sequential rarest first piece picking streaming in order strategy"),
   e("downloads", "Saving", "Pause downloads below this much free space (MiB)", "disk full low space minimum free gigabytes drive"),
   e("downloads", "Saving", "Move files when a torrent's category changes", "relocate category folder"),
   e("downloads", "Saving", "Mark downloaded files as coming from the internet", "mark of the web motw smartscreen windows security zone"),

@@ -10,6 +10,7 @@ import {
   Copy,
   Type,
   FileCheck2,
+  ListOrdered,
   FileDown,
   Link2,
   Folder,
@@ -30,7 +31,7 @@ import { useShallow } from "zustand/react/shallow";
 import { api, errorText, events } from "../lib/ipc";
 import { parseLinks } from "../lib/links";
 import { applyTheme, resolveTheme } from "../lib/themes";
-import type { Source, WhenDone } from "../lib/types";
+import type { PieceOrder, Source, WhenDone } from "../lib/types";
 import { Dialog } from "../components/ui";
 import { loadPref, savePref, useApp, visibleTorrents } from "../stores/app";
 import { AddDialog } from "../features/torrents/AddDialog";
@@ -415,6 +416,7 @@ export default function App() {
 
   const menuItems = (): (MenuItem | "sep")[] => {
     const allHave = (c: string | null) => selected.every((id) => (s.torrents.get(id)?.category ?? null) === c);
+    const allOrder = (o: PieceOrder) => selected.every((id) => s.torrents.get(id)?.piece_order === o);
     return [
       { label: "Resume", icon: <Play size={14} />, onClick: () => run(api.resume(selected)) },
       { label: "Stop", icon: <Pause size={14} />, onClick: () => run(api.stop(selected)) },
@@ -439,6 +441,14 @@ export default function App() {
         onClick: () => setModal({ kind: "tags", ids: selected }),
       },
       { label: "Limits…", icon: <Gauge size={14} />, onClick: () => setModal({ kind: "limits", ids: selected }) },
+      {
+        label: "Download order",
+        icon: <ListOrdered size={14} />,
+        children: [
+          { label: "Sequential", icon: allOrder("sequential") ? <Check size={14} /> : undefined, onClick: () => run(api.setPieceOrder(selected, "sequential")) },
+          { label: "Rarest first", icon: allOrder("rarest") ? <Check size={14} /> : undefined, onClick: () => run(api.setPieceOrder(selected, "rarest")) },
+        ],
+      },
       {
         label: "Queue",
         icon: <ChevronUp size={14} />,

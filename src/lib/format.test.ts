@@ -55,6 +55,7 @@ const t = (over: Partial<TorrentSummary>): TorrentSummary => ({
   has_executables: false,
   dl_limit_kib: null,
   ul_limit_kib: null,
+  piece_order: "sequential",
   error: null,
   checksum: null,
   suspicion: null,

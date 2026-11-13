@@ -365,6 +365,7 @@ pub fn run() {
             commands::set_share_limits,
             commands::set_speed_limits,
             commands::queue_move,
+            commands::set_piece_order,
             commands::get_categories,
             commands::save_category,
             commands::delete_category,

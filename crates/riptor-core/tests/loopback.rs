@@ -1403,3 +1403,166 @@ async fn imported_torrents_find_their_data() {
     assert_eq!(again.already_present, 1);
     engine.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn piece_order_follows_the_default_and_can_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let downloads = tmp.path().join("downloads");
+    let content = downloads.join("content");
+    make_content(&content);
+    let created = create_torrent(
+        &content,
+        CreateTorrentOptions {
+            name: Some("content"),
+            trackers: vec![],
+            piece_length: Some(256 * 1024),
+        },
+        &BlockingSpawner::new(4),
+    )
+    .await
+    .unwrap();
+    let torrent_file = tmp.path().join("content.torrent");
+    std::fs::write(&torrent_file, created.as_bytes().unwrap()).unwrap();
+    let data_dir = tmp.path().join("data");
+    let mut settings = quiet_settings(&downloads);
+    settings.piece_order = riptor_core::PieceOrder::Rarest;
+    riptor_core::state_file::save(&data_dir.join("settings.json"), &settings).unwrap();
+    let engine = Engine::start(EngineConfig {
+        data_dir: data_dir.clone(),
+    })
+    .await
+    .unwrap();
+    let mut events = engine.subscribe();
+    let id = engine
+        .add_direct(Source::File(torrent_file), AddParams::default())
+        .await
+        .unwrap();
+    let t = wait_for(&mut events, &id, "the summary", |_| true).await;
+    assert_eq!(t.piece_order, riptor_core::PieceOrder::Rarest);
+
+    engine
+        .set_piece_order(
+            std::slice::from_ref(&id),
+            riptor_core::PieceOrder::Sequential,
+        )
+        .unwrap();
+    wait_for(&mut events, &id, "the new order", |t| {
+        t.piece_order == riptor_core::PieceOrder::Sequential
+    })
+    .await;
+    assert!(engine
+        .set_piece_order(&["not a torrent".into()], riptor_core::PieceOrder::Rarest)
+        .is_err());
+
+    engine.shutdown().await.unwrap();
+    let saved = std::fs::read_to_string(data_dir.join("torrents.json")).unwrap();
+    assert!(saved.contains("\"piece_order\": \"sequential\""), "{saved}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rarest_first_download_completes_and_matches() {
+    let tmp = tempfile::tempdir().unwrap();
+    let seed_content = tmp.path().join("seed").join("content");
+    let files = make_content(&seed_content);
+    let created = create_torrent(
+        &seed_content,
+        CreateTorrentOptions {
+            name: Some("content"),
+            trackers: vec![],
+            piece_length: Some(64 * 1024),
+        },
+        &BlockingSpawner::new(4),
+    )
+    .await
+    .unwrap();
+    let hash = created.info_hash();
+    let bytes = created.as_bytes().unwrap();
+    let torrent_file = tmp.path().join("content.torrent");
+    std::fs::write(&torrent_file, &bytes).unwrap();
+
+    let seed_factory = CachedStorageFactory::new(Shared::new(StorageConfig::default()));
+    seed_factory.register(
+        hash,
+        TorrentRoot {
+            path: seed_content.clone(),
+            owned: false,
+            ..Default::default()
+        },
+    );
+    // A slow seed, so the download outlasts the engine's first look at the peers.
+    let seeder = Session::new_with_opts(
+        tmp.path().to_path_buf(),
+        SessionOptions {
+            dht: None,
+            persistence: None,
+            disable_local_service_discovery: true,
+            listen: Some(ListenerOptions {
+                listen_addr: (Ipv4Addr::LOCALHOST, 0).into(),
+                ipv4_only: true,
+                ..Default::default()
+            }),
+            default_storage_factory: Some(seed_factory.clone().into_boxed()),
+            ratelimits: librqbit::limits::LimitsConfig {
+                upload_bps: std::num::NonZeroU32::new(2 * 1024 * 1024),
+                download_bps: None,
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let h = seeder
+        .add_torrent(
+            AddTorrent::from_bytes(bytes),
+            Some(AddTorrentOptions {
+                overwrite: true,
+                output_folder: Some(seed_content.to_str().unwrap().into()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .into_handle()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(60), h.wait_until_completed())
+        .await
+        .unwrap()
+        .unwrap();
+    let seed_addr = SocketAddr::new(
+        Ipv4Addr::LOCALHOST.into(),
+        seeder.listen_addr().unwrap().port(),
+    );
+
+    let downloads = tmp.path().join("downloads");
+    let data_dir = tmp.path().join("data");
+    let mut settings = quiet_settings(&downloads);
+    settings.piece_order = riptor_core::PieceOrder::Rarest;
+    riptor_core::state_file::save(&data_dir.join("settings.json"), &settings).unwrap();
+    let engine = Engine::start(EngineConfig { data_dir }).await.unwrap();
+    let mut events = engine.subscribe();
+    let id = engine
+        .add_direct(Source::File(torrent_file), AddParams::default())
+        .await
+        .unwrap();
+    // It has to be running before it takes a peer.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while engine.add_peer(&id, &seed_addr.to_string()).is_err() {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("the torrent never started");
+    let done = wait_for(&mut events, &id, "the rarest-first download", complete).await;
+    assert_eq!(done.piece_order, riptor_core::PieceOrder::Rarest);
+    for (rel, len) in &files {
+        let got = downloads.join("content").join(rel);
+        assert_eq!(
+            std::fs::metadata(&got).unwrap().len() as usize,
+            *len,
+            "{rel:?}"
+        );
+        assert_eq!(sha(&got), sha(&seed_content.join(rel)), "{rel:?}");
+    }
+    engine.shutdown().await.unwrap();
+    seeder.stop().await;
+}

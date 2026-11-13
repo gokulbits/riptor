@@ -47,6 +47,9 @@ pub struct Record {
     pub dl_limit_kib: Option<u32>,
     #[serde(default)]
     pub ul_limit_kib: Option<u32>,
+    /// Which pieces to ask peers for first.
+    #[serde(default)]
+    pub piece_order: PieceOrder,
     /// Where the files go once complete (downloads start in the incomplete folder).
     #[serde(default)]
     pub move_on_complete: Option<PathBuf>,
@@ -78,6 +81,17 @@ impl Record {
             .filter_map(|f| crate::suspicion::worst(f))
             .max()
     }
+}
+
+/// How a download picks its next piece.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PieceOrder {
+    /// File by file, each from its start; suits watching while it downloads.
+    #[default]
+    Sequential,
+    /// The piece fewest peers have; spreads the torrent's rare parts.
+    Rarest,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +171,7 @@ pub struct TorrentSummary {
     pub has_executables: bool,
     pub dl_limit_kib: Option<u32>,
     pub ul_limit_kib: Option<u32>,
+    pub piece_order: PieceOrder,
     pub error: Option<String>,
     /// Checksum files: every listed file matches (true), some don't (false), or nothing checked.
     pub checksum: Option<bool>,

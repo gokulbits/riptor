@@ -431,6 +431,15 @@ export function SettingsDialog({ onClose, initialSection = "downloads" }: { onCl
                 hint="The add dialog starts with this ticked; watched folders and RSS rules follow it too."
               />
               <Field
+                label="Download order for new torrents"
+                hint="Sequential fetches each file from its start, which suits watching while it downloads. Rarest first asks for the pieces fewest peers have, which helps the swarm and finishes the whole torrent sooner. Each torrent can change its own from its right-click menu."
+              >
+                <select className="input" value={s.piece_order} onChange={(e) => set({ piece_order: e.target.value as Settings["piece_order"] })}>
+                  <option value="sequential">Sequential</option>
+                  <option value="rarest">Rarest first</option>
+                </select>
+              </Field>
+              <Field
                 label="Pause downloads below this much free space (MiB)"
                 hint="Checked on the drive each download saves to. They resume once there's room again. Empty turns it off."
               >

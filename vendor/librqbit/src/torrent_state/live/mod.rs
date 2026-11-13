@@ -214,12 +214,47 @@ pub struct TorrentStateLive {
         ChunkInfo,
     )>,
     ratelimits: Limits,
+
+    // RIPTOR PATCH: rarest-first piece order.
+    rarest_first: AtomicBool,
+    availability: RwLock<Arc<Vec<u16>>>,
+    pick_salt: AtomicU64,
 }
 
 impl TorrentStateLive {
     // RIPTOR PATCH: runtime per-torrent limits.
     pub fn ratelimits(&self) -> &Limits {
         &self.ratelimits
+    }
+
+    // RIPTOR PATCH: rarest-first order. Off means in order, file by file.
+    pub fn set_rarest_first(&self, on: bool) {
+        self.rarest_first.store(on, Ordering::Relaxed);
+    }
+
+    // Counts, for each piece, the live peers that have it. Called outside any peer lock.
+    pub fn refresh_availability(&self) {
+        let mut counts = vec![0u16; self.lengths.total_pieces() as usize];
+        for peer in self.peers.states.iter() {
+            let Some(live) = peer.value().get_live() else {
+                continue;
+            };
+            for i in live.bitfield.iter_ones() {
+                if let Some(c) = counts.get_mut(i) {
+                    *c = c.saturating_add(1);
+                }
+            }
+        }
+        *self.availability.write() = Arc::new(counts);
+    }
+
+    /// `None` while in order, or before the first count.
+    fn rarest_availability(&self) -> Option<Arc<Vec<u16>>> {
+        if !self.rarest_first.load(Ordering::Relaxed) {
+            return None;
+        }
+        let a = self.availability.read().clone();
+        (!a.is_empty()).then_some(a)
     }
 
     // RIPTOR PATCH: file priorities. Higher levels download first; ties keep name order.
@@ -269,6 +304,8 @@ impl TorrentStateLive {
             file_infos: &self.metadata.file_infos,
             peer_has_piece: |_| true,
             can_steal: |_| false,
+            availability: None,
+            salt: 0,
         }) {
             AcquireResult::Reserved(p) => Some((
                 p,
@@ -448,6 +485,9 @@ impl TorrentStateLive {
                 .collect(),
             ratelimit_upload_tx,
             ratelimits,
+            rarest_first: AtomicBool::new(false),
+            availability: RwLock::new(Arc::new(Vec::new())),
+            pick_salt: AtomicU64::new(0),
         });
 
         state.spawn(
@@ -1572,6 +1612,8 @@ impl PeerHandler {
 
         // Steal info to process after releasing the peer lock
         let mut steal_info: Option<(SocketAddr, ValidPieceIndex)> = None;
+        let availability = self.state.rarest_availability();
+        let salt = self.state.pick_salt.fetch_add(1, Ordering::Relaxed) ^ u64::from(self.addr.port());
 
         let result = self
             .state
@@ -1599,6 +1641,8 @@ impl PeerHandler {
                             .try_write()
                             .is_some()
                     },
+                    availability: availability.as_ref().map(|a| a.as_slice()),
+                    salt,
                 });
 
                 match result {

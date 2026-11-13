@@ -55,6 +55,7 @@ export interface TorrentSummary {
   has_executables: boolean;
   dl_limit_kib: number | null;
   ul_limit_kib: number | null;
+  piece_order: PieceOrder;
   error: string | null;
   /** Checksum files in the torrent: all match, some don't, or nothing checked. */
   checksum: boolean | null;
@@ -202,6 +203,9 @@ export interface PieceMap {
 
 export type FilePriority = "low" | "normal" | "high";
 
+/** Which pieces to ask peers for first. */
+export type PieceOrder = "sequential" | "rarest";
+
 export interface Preview {
   info_hash: string;
   name: string;
@@ -326,6 +330,7 @@ export interface Settings {
   incomplete_dir: string | null;
   extra_trackers: string[];
   add_stopped: boolean;
+  piece_order: PieceOrder;
   check_updates: boolean;
   min_free_mib: number | null;
   blocklist_file: string | null;

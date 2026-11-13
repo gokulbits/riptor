@@ -390,6 +390,8 @@ pub struct Settings {
     pub extra_trackers: Vec<String>,
     /// New torrents start stopped (the add dialog's default, the watched folder, RSS).
     pub add_stopped: bool,
+    /// The piece order new torrents start with; each torrent can change its own.
+    pub piece_order: crate::model::PieceOrder,
     /// Look for a new version shortly after start (Windows).
     pub check_updates: bool,
     /// Pause downloads when their drive has less free; `None` = never.
@@ -457,6 +459,7 @@ impl Default for Settings {
             incomplete_dir: None,
             extra_trackers: Vec::new(),
             add_stopped: false,
+            piece_order: crate::model::PieceOrder::default(),
             check_updates: true,
             min_free_mib: Some(1024),
             blocklist_file: None,
