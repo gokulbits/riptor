@@ -168,6 +168,7 @@ impl PersistentDht {
                 peer_store,
                 cancellation_token,
                 bind_device,
+                remembered_port: port.is_none() && stored_port.is_some(),
                 ..Default::default()
             };
             let dht = DhtState::with_config(dht_config).await?;

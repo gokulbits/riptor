@@ -1287,6 +1287,8 @@ pub struct DhtConfig<'a> {
     pub peer_store: Option<PeerStore>,
     pub cancellation_token: Option<CancellationToken>,
     pub bind_device: Option<&'a BindDevice>,
+    // RIPTOR PATCH: the port came from the saved table, not from the user, so a busy one isn't fatal.
+    pub remembered_port: bool,
 }
 
 impl DhtState {
@@ -1303,14 +1305,23 @@ impl DhtState {
             let addr = config
                 .listen_addr
                 .unwrap_or((Ipv6Addr::UNSPECIFIED, 0).into());
-            let socket = UdpSocket::bind_udp(
-                addr,
-                librqbit_dualstack_sockets::BindOpts {
-                    request_dualstack: true,
-                    reuseport: false,
-                    device: config.bind_device,
-                },
-            )
+            let bind = |addr: SocketAddr| {
+                UdpSocket::bind_udp(
+                    addr,
+                    librqbit_dualstack_sockets::BindOpts {
+                        request_dualstack: true,
+                        reuseport: false,
+                        device: config.bind_device,
+                    },
+                )
+            };
+            let socket = match bind(addr) {
+                Err(e) if config.remembered_port && addr.port() != 0 => {
+                    warn!("DHT: the saved port {} can't be used ({e:#}); picking another", addr.port());
+                    bind(SocketAddr::new(addr.ip(), 0))
+                }
+                r => r,
+            }
             .map_err(|e| Error::Bind(Box::new(e)))?;
 
             let listen_addr = socket.bind_addr();
