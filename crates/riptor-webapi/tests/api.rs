@@ -266,14 +266,20 @@ async fn controls_riptor_like_a_remote_app() {
     assert_eq!(t["up_limit"], 102400);
     assert!(api.json("torrents/categories").await["OS"].is_object());
 
-    // Refused on purpose, and unknown torrents.
-    assert_eq!(api.post("app/shutdown", &[]).await.0, 403);
+    // Download order flips between in order and rarest first.
     assert_eq!(
         api.post("torrents/toggleSequentialDownload", &[("hashes", hash)])
             .await
             .0,
-        409
+        200
     );
+    wait_for(&api, "rarest first", |v| {
+        v["torrents"][hash]["seq_dl"] == false
+    })
+    .await;
+
+    // Refused on purpose, and unknown torrents.
+    assert_eq!(api.post("app/shutdown", &[]).await.0, 403);
     assert_eq!(
         api.post("torrents/stop", &[("hashes", &"ab".repeat(20))])
             .await
@@ -420,7 +426,7 @@ async fn https_and_bans() {
         .is_err());
 
     let mut api = Api::new(server.addr, true);
-    // Opening the address in a browser says it's running; the API itself still needs a sign-in.
+    // Opening the address in a browser shows the web interface; the API itself still needs a sign-in.
     let root = api
         .http
         .get(format!("https://{}/", server.addr))
@@ -428,11 +434,7 @@ async fn https_and_bans() {
         .await
         .unwrap();
     assert_eq!(root.status().as_u16(), 200);
-    assert!(root
-        .text()
-        .await
-        .unwrap()
-        .contains("remote control is running"));
+    assert!(root.text().await.unwrap().contains("web/app.js"));
     assert_eq!(api.get("app/version").await.0, 403);
 
     for _ in 0..riptor_webapi::auth::MAX_FAILURES {
