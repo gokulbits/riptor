@@ -113,6 +113,7 @@ export const ENTRIES: SettingEntry[] = [
   e("remote", "Web user interface (remote control)", "Port", "listen web port"),
   e("remote", "Web user interface (remote control)", "Accept connections from outside the local network", "internet lan external public"),
   e("remote", "Web user interface (remote control)", "Use UPnP to forward the port from my router", "nat port forwarding"),
+  e("remote", "Web user interface (remote control)", "Allow installing search plugins remotely", "python code engines nova update"),
   e("remote", "HTTPS", "Use HTTPS instead of HTTP", "tls ssl encrypt certificate"),
   e("remote", "HTTPS", "Certificate (PEM)", "tls ssl cert file"),
   e("remote", "HTTPS", "Key (PEM)", "tls ssl private key file"),

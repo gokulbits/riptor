@@ -62,7 +62,7 @@ Release builds aren't code-signed, so Windows SmartScreen will warn the first ti
 
 **Storage engine.** Pieces are buffered in memory and flushed in a few large writes; hash checks read from that buffer. Seeding uses a shared read-ahead cache, so a peer reading a piece block by block costs one disk read instead of one per block. File handles are pooled under a cap that keeps large torrents inside OS limits. Preallocation is sparse by default.
 
-**The rest.** Encrypted, tamper-evident backup and restore with an optional password; a statistics page with a 30-day chart; a customisable torrent list with sidebar filters; a tray icon with live speeds; nine themes and custom accents; in-app updates on Windows; headless mode on Linux; remote control from phone apps that speak qBittorrent's Web API; and "open with" registration for `.torrent` files and magnet links.
+**The rest.** Encrypted, tamper-evident backup and restore with an optional password; a statistics page with a 30-day chart; a customisable torrent list with sidebar filters; a tray icon with live speeds; nine themes and custom accents; in-app updates on Windows; headless mode on Linux; a web interface and remote control from phone apps that speak qBittorrent's Web API; and "open with" registration for `.torrent` files and magnet links.
 
 ## Usage
 
@@ -113,13 +113,15 @@ Importing twice is safe: torrents already in Riptor are left alone and totals ar
 
 ### Remote control
 
-Riptor can speak qBittorrent's Web API, so apps like qBitController manage it over your network. It's off by default.
+Riptor can speak qBittorrent's Web API, so apps like qBitController manage it over your network, and it has its own web interface for any browser. It's off by default.
 
 1. In **Settings > Remote Control**, turn on **Allow remote control**, set a password, save.
-2. In the app, add a server at `https://<this computer's IP>:8080` with your username (`admin` unless you changed it) and that password.
-3. Turn on "trust self-signed certificates": Riptor makes its own unless you give it one.
+2. Open `https://<this computer's IP>:8080` in a browser and sign in, or add that address as a server in your app with your username (`admin` unless you changed it) and the password.
+3. Accept the self-signed certificate (in apps, "trust self-signed certificates"): Riptor makes its own unless you give it one.
 
-Only devices on your local network are accepted unless you allow more, and never anything arriving through the VPN tunnel. Search and RSS aren't available remotely, and a few qBittorrent-only switches answer "not supported".
+The web interface covers the torrent list with filters, details (files and priorities, trackers, peers, pieces), adding by link, file or drag and drop, search across your engines, RSS feeds and download rules, the log and the main options, with dark and light themes and a phone layout. Apps get the same: search and search plugins, RSS with rules, the log and preferences go through the same API.
+
+Only devices on your local network are accepted unless you allow more, and never anything arriving through the VPN tunnel. Every call needs a sign-in, unless you turn on one of the bypass options. Remote clients can't change remote control's own settings, shut Riptor down or browse its folders, and can install search plugins only if you allow it, since plugins run as code on this computer. RSS folders, episode filters and a few qBittorrent-only switches answer "not supported".
 
 ### Headless mode (Linux)
 
@@ -134,6 +136,46 @@ riptor-cli add 'magnet:?xt=urn:btih:...' --dir ~/Downloads
 ```
 
 `riptor-cli --help` lists the commands, and `riptor-cli <command> --help` explains one.
+
+### Docker
+
+The image runs headless mode with remote control and the web interface on, for a home server or NAS (amd64 and arm64). Each published release has an image at `ghcr.io/gokulbits/riptor`; [docker/compose.yaml](docker/compose.yaml) is a ready-made setup, or build one from a checkout with `docker build -t riptor .`.
+
+```bash
+docker run -d --name riptor --init --restart unless-stopped \
+  -e PUID=1000 -e PGID=1000 \
+  -v ./config:/config -v ./downloads:/downloads \
+  -p 8080:8080 -p 6881:6881 -p 6881:6881/udp \
+  ghcr.io/gokulbits/riptor:latest
+```
+
+Unless you set a password, the first start makes one and prints it once in `docker logs riptor`. Then open `https://<server IP>:8080` in a browser and sign in as `admin` (accept the self-signed certificate), or add that address in an app that speaks qBittorrent's Web API. The command line works inside the container too:
+
+```bash
+docker exec riptor riptor-cli add 'magnet:?xt=urn:btih:...'
+```
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `PUID`, `PGID` | `1000` | The user and group Riptor runs as, and who owns `/config` and new downloads. |
+| `UMASK` | `022` | Permissions for new files (`002` lets the group write). |
+| `TZ` | UTC | Time zone, for the speed schedule. |
+| `RIPTOR_DOWNLOAD_DIR` | `/downloads` | Where torrents are saved. |
+| `RIPTOR_INCOMPLETE_DIR` | | Keeps unfinished downloads here and moves them when done. |
+| `RIPTOR_WATCH_DIR` | | `.torrent` files put here are added. |
+| `RIPTOR_PEER_PORT` | `6881` | The BitTorrent port (TCP and UDP); publish the same port. |
+| `RIPTOR_WEBUI` | `on` | Remote control. |
+| `RIPTOR_WEBUI_PORT` | `8080` | Remote control port (1024 and up). |
+| `RIPTOR_WEBUI_USERNAME` | `admin` | Remote control user name. |
+| `RIPTOR_WEBUI_PASSWORD` | | The remote control password (8 to 256 characters). |
+| `RIPTOR_WEBUI_PASSWORD_FILE` | | Reads the password from a file instead, such as a Docker secret. |
+| `RIPTOR_WEBUI_HTTPS` | `on` | Turn off only behind a reverse proxy that adds HTTPS. |
+| `RIPTOR_WEBUI_TRUSTED_PROXIES` | | Reverse proxies (IPs or CIDR ranges) whose `X-Forwarded-For` is believed. |
+| `RIPTOR_WEBUI_PLUGIN_INSTALL` | `off` | Lets remote clients install and update search plugins. |
+
+A variable that's set wins over `settings.json` at every start; everything else (speed limits, seeding rules, categories, RSS) lives in `/config/settings.json` and the rest of `/config`. Stop the container before editing it. Run with `--user 1000:1000` instead of `PUID`/`PGID` if you'd rather the container never start as root.
+
+Like headless mode, the container has no VPN or kill switch. To keep its traffic on a VPN, run it inside a VPN container's network (`network_mode: service:<vpn>` in compose) and publish the ports there. Search works, including nova3 plugins (Python is in the image), but the plugin sandbox doesn't: Docker's default security profile doesn't allow the namespaces it needs, so plugins run as the container user with the container as their only fence. Torznab indexers need a system keyring for their API keys, which the image doesn't have.
 
 ### Backups
 

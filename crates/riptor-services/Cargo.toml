@@ -1,0 +1,19 @@
+[package]
+name = "riptor-services"
+description = "Search, RSS and logs shared by the app, riptord and remote control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+parking_lot.workspace = true
+riptor-core = { path = "../riptor-core" }
+riptor-net = { path = "../riptor-net" }
+riptor-search = { path = "../riptor-search" }
+riptor-rss = { path = "../riptor-rss" }

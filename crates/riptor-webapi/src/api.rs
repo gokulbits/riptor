@@ -17,7 +17,7 @@ use axum::routing::{any, get, post};
 use axum::Router;
 use riptor_core::settings::{cidr_contains, parse_cidr};
 use riptor_core::{
-    AddParams, Engine, FilePriority, NoticeLevel, QueueMove, ShareLimits, Source, WebUi,
+    AddParams, Engine, FilePriority, NoticeLevel, PieceOrder, QueueMove, ShareLimits, Source, WebUi,
 };
 use serde_json::{json, Value};
 
@@ -35,6 +35,7 @@ const MAX_ADDS_WAITING: usize = 100;
 
 pub struct Ctx {
     pub engine: Arc<Engine>,
+    pub hub: Arc<riptor_services::Hub>,
     pub auth: Auth,
     pub data_dir: PathBuf,
     pub cfg: WebUi,
@@ -47,7 +48,13 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    pub fn new(engine: Arc<Engine>, auth: Auth, data_dir: PathBuf, cfg: WebUi) -> Self {
+    pub fn new(
+        engine: Arc<Engine>,
+        hub: Arc<riptor_services::Hub>,
+        auth: Auth,
+        data_dir: PathBuf,
+        cfg: WebUi,
+    ) -> Self {
         let cidrs = |list: &mut dyn Iterator<Item = &str>| list.filter_map(parse_cidr).collect();
         let whitelist = cidrs(&mut cfg.subnet_whitelist.iter().map(String::as_str));
         let proxies = cidrs(&mut cfg.trusted_proxies.split(';'));
@@ -89,6 +96,7 @@ impl Ctx {
         }
         Self {
             engine,
+            hub,
             auth,
             data_dir,
             cfg,
@@ -190,6 +198,10 @@ fn wildcard(pattern: &str, s: &str) -> bool {
 
 async fn security_headers(State(ctx): State<Arc<Ctx>>, mut r: Response) -> Response {
     for (n, v) in &ctx.headers {
+        // The web pages carry their own, stricter policy.
+        if n == header::CONTENT_SECURITY_POLICY && r.headers().contains_key(n) {
+            continue;
+        }
         r.headers_mut().insert(n.clone(), v.clone());
     }
     r
@@ -203,16 +215,8 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
             post(add).layer(DefaultBodyLimit::max(MAX_UPLOAD)),
         )
         .route("/api/v2/{*path}", any(dispatch))
-        // No web pages here, only the API; say so to someone checking from a browser.
-        .route(
-            "/",
-            get(|| async {
-                text(
-                    StatusCode::OK,
-                    "Riptor remote control is running. Connect with an app made for qBittorrent's Web UI, such as qBitController.",
-                )
-            }),
-        )
+        .route("/", get(crate::web::index))
+        .route("/web/{name}", get(crate::web::asset))
         .fallback(|| async { (StatusCode::NOT_FOUND, "Not Found") })
         .layer(DefaultBodyLimit::max(MAX_FORM))
         .layer(axum::middleware::map_response_with_state(
@@ -222,7 +226,7 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .with_state(ctx)
 }
 
-fn text(code: StatusCode, body: impl Into<String>) -> Response {
+pub(crate) fn text(code: StatusCode, body: impl Into<String>) -> Response {
     (
         code,
         [(header::CONTENT_TYPE, "text/plain; charset=UTF-8")],
@@ -231,11 +235,11 @@ fn text(code: StatusCode, body: impl Into<String>) -> Response {
         .into_response()
 }
 
-fn ok() -> Response {
+pub(crate) fn ok() -> Response {
     text(StatusCode::OK, "")
 }
 
-fn json_body(v: Value) -> Response {
+pub(crate) fn json_body(v: Value) -> Response {
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
@@ -244,11 +248,11 @@ fn json_body(v: Value) -> Response {
         .into_response()
 }
 
-fn conflict(e: anyhow::Error) -> Response {
+pub(crate) fn conflict(e: anyhow::Error) -> Response {
     text(StatusCode::CONFLICT, format!("{e:#}"))
 }
 
-fn bad(msg: &str) -> Response {
+pub(crate) fn bad(msg: &str) -> Response {
     text(StatusCode::BAD_REQUEST, msg)
 }
 
@@ -375,7 +379,7 @@ fn summary(ctx: &Ctx, id: &str) -> Option<riptor_core::TorrentSummary> {
     ctx.engine.snapshot().0.into_iter().find(|t| t.id == id)
 }
 
-fn split_list(s: &str, sep: char) -> Vec<String> {
+pub(crate) fn split_list(s: &str, sep: char) -> Vec<String> {
     s.split(sep)
         .map(str::trim)
         .filter(|t| !t.is_empty())
@@ -383,11 +387,11 @@ fn split_list(s: &str, sep: char) -> Vec<String> {
         .collect()
 }
 
-fn param<'a>(p: &'a HashMap<String, String>, k: &str) -> &'a str {
+pub(crate) fn param<'a>(p: &'a HashMap<String, String>, k: &str) -> &'a str {
     p.get(k).map_or("", String::as_str)
 }
 
-fn engine_result(r: anyhow::Result<()>) -> Response {
+pub(crate) fn engine_result(r: anyhow::Result<()>) -> Response {
     r.map_or_else(conflict, |()| ok())
 }
 
@@ -428,6 +432,24 @@ async fn dispatch(
     }
 }
 
+/// Queues sources the way `torrents/add` does; false when too many adds are waiting.
+pub(crate) fn queue_adds(
+    ctx: &Arc<Ctx>,
+    sources: Vec<Source>,
+    temp: Vec<PathBuf>,
+    params: AddParams,
+) -> bool {
+    let Some(mut batch) = Batch::reserve(ctx, sources.len()) else {
+        for t in temp {
+            let _ = std::fs::remove_file(t);
+        }
+        return false;
+    };
+    batch.temp = temp;
+    tokio::spawn(add_in_background(batch, sources, params));
+    true
+}
+
 /// Calls that only read; `None` for anything else.
 async fn read(ctx: &Ctx, path: &str, p: &HashMap<String, String>) -> Option<Response> {
     let e = &ctx.engine;
@@ -435,6 +457,40 @@ async fn read(ctx: &Ctx, path: &str, p: &HashMap<String, String>) -> Option<Resp
         "app/version" => text(StatusCode::OK, qbt::VERSION),
         "app/webapiVersion" => text(StatusCode::OK, qbt::WEBAPI_VERSION),
         "app/defaultSavePath" => text(StatusCode::OK, e.settings().download_dir.to_string_lossy()),
+        "app/buildInfo" => json_body(json!({
+            "qt": "", "libtorrent": "", "boost": "", "openssl": "", "zlib": "",
+            "bitness": usize::BITS, "app": "Riptor", "version": env!("CARGO_PKG_VERSION"),
+        })),
+        "torrents/count" => text(StatusCode::OK, e.snapshot().0.len().to_string()),
+        "torrents/downloadLimit" | "torrents/uploadLimit" => match ids(ctx, p) {
+            Ok(ids) => {
+                let down = path.ends_with("downloadLimit");
+                let m: serde_json::Map<String, Value> = e
+                    .snapshot()
+                    .0
+                    .into_iter()
+                    .filter(|t| ids.contains(&t.id))
+                    .map(|t| {
+                        let k = if down { t.dl_limit_kib } else { t.ul_limit_kib };
+                        (t.id, json!(k.map_or(0, |k| i64::from(k) * 1024)))
+                    })
+                    .collect();
+                json_body(Value::Object(m))
+            }
+            Err(r) => *r,
+        },
+        "transfer/downloadLimit" | "transfer/uploadLimit" => {
+            let s = e.settings();
+            let k = if path.ends_with("downloadLimit") {
+                s.dl_limit_kib
+            } else {
+                s.ul_limit_kib
+            };
+            text(
+                StatusCode::OK,
+                k.map_or(0, |k| i64::from(k) * 1024).to_string(),
+            )
+        }
         "sync/maindata" => maindata(ctx),
         "sync/torrentPeers" => match one(ctx, p) {
             Ok(id) => match e.peers(&id) {
@@ -506,10 +562,7 @@ async fn read(ctx: &Ctx, path: &str, p: &HashMap<String, String>) -> Option<Resp
             StatusCode::OK,
             if e.snapshot().1.alt_speed { "1" } else { "0" },
         ),
-        // Riptor's logs stay on this computer; search and RSS aren't offered remotely.
-        "log/main" | "log/peers" | "search/plugins" => json_body(json!([])),
-        "rss/items" | "rss/rules" => json_body(json!({})),
-        _ => return None,
+        _ => return crate::remote::read(ctx, path, p).await,
     })
 }
 
@@ -633,7 +686,7 @@ fn export(ctx: &Ctx, id: &str) -> Response {
 }
 
 /// Calls that change something; POST only.
-async fn act(ctx: &Ctx, path: &str, p: &HashMap<String, String>) -> Response {
+async fn act(ctx: &Arc<Ctx>, path: &str, p: &HashMap<String, String>) -> Response {
     let e = &ctx.engine;
     macro_rules! hashes {
         () => {
@@ -799,6 +852,27 @@ async fn act(ctx: &Ctx, path: &str, p: &HashMap<String, String>) -> Response {
             }
             ok()
         }
+        "torrents/toggleSequentialDownload" => {
+            let ids = hashes!();
+            for t in e.snapshot().0.into_iter().filter(|t| ids.contains(&t.id)) {
+                let next = match t.piece_order {
+                    PieceOrder::Sequential => PieceOrder::Rarest,
+                    PieceOrder::Rarest => PieceOrder::Sequential,
+                };
+                if let Err(err) = e.set_piece_order(std::slice::from_ref(&t.id), next) {
+                    return conflict(err);
+                }
+            }
+            ok()
+        }
+        "transfer/setSpeedLimitsMode" => {
+            let want = param(p, "mode") == "1";
+            if e.snapshot().1.alt_speed == want {
+                ok()
+            } else {
+                engine_result(e.set_alt_speed(want))
+            }
+        }
         "torrents/topPrio" => engine_result(e.queue_move(&hashes!(), QueueMove::Top)),
         "torrents/bottomPrio" => engine_result(e.queue_move(&hashes!(), QueueMove::Bottom)),
         "torrents/increasePrio" => engine_result(e.queue_move(&hashes!(), QueueMove::Up)),
@@ -869,15 +943,18 @@ async fn act(ctx: &Ctx, path: &str, p: &HashMap<String, String>) -> Response {
             ok()
         }
         // Not something a remote app should be able to do to this computer.
-        "app/shutdown" | "app/getDirectoryContent" | "app/setPreferences" => {
+        "app/shutdown" | "app/getDirectoryContent" => {
             text(StatusCode::FORBIDDEN, "Not allowed over remote control")
         }
-        _ => text(StatusCode::CONFLICT, "Riptor doesn't support this"),
+        _ => match crate::remote::act(ctx, path, p).await {
+            Some(r) => r,
+            None => text(StatusCode::CONFLICT, "Riptor doesn't support this"),
+        },
     }
 }
 
 /// Bytes/s from the API; 0 or less means no limit.
-fn limit_kib(v: &str) -> Option<u32> {
+pub(crate) fn limit_kib(v: &str) -> Option<u32> {
     let b = v.trim().parse::<i64>().ok()?;
     (b > 0).then(|| u32::try_from(b.saturating_add(1023) / 1024).unwrap_or(u32::MAX))
 }

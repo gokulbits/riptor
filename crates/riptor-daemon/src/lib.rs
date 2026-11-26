@@ -8,6 +8,7 @@ use riptor_core::PieceOrder;
 use serde::{Deserialize, Serialize};
 
 pub mod cli;
+pub mod env;
 
 /// One request per line; longer lines are refused.
 pub const MAX_LINE: usize = 64 * 1024;
@@ -108,6 +109,10 @@ pub fn default_data_dir() -> anyhow::Result<PathBuf> {
 
 #[cfg(unix)]
 pub fn socket_dir() -> PathBuf {
+    // Containers set this so `docker exec` finds the socket whichever user it runs as.
+    if let Some(d) = env_dir("RIPTOR_SOCKET_DIR") {
+        return d;
+    }
     match env_dir("XDG_RUNTIME_DIR") {
         Some(d) => d.join("riptor"),
         None => std::env::temp_dir().join(format!("riptor-{}", rustix::process::getuid().as_raw())),

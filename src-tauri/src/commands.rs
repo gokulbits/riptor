@@ -363,8 +363,8 @@ pub async fn country_status(state: State<'_, AppState>) -> Res<riptor_core::Coun
 }
 
 #[tauri::command]
-pub fn recent_logs() -> Vec<crate::logs::LogLine> {
-    crate::logs::recent()
+pub fn recent_logs() -> Vec<riptor_services::logs::LogLine> {
+    riptor_services::logs::recent()
 }
 
 /// Returns the new torrent's id when it was added to seed.
@@ -505,25 +505,9 @@ pub async fn search_start(
 
 /// Search traffic follows the torrents' network.
 fn route_search(state: &State<'_, AppState>, s: &riptor_search::SearchManager) {
-    use riptor_core::NetworkMode;
-    use riptor_search::Route;
-    let Some(e) = state.engine.get() else {
-        return;
-    };
-    s.set_route(match e.network() {
-        NetworkMode::Normal => Route::Direct,
-        NetworkMode::Blocked => Route::Held,
-        // Never the system resolver while on the VPN.
-        NetworkMode::Vpn(b) => {
-            match riptor_core::dns::TunnelResolver::new(&b.end(), &riptor_core::dns::SERVERS) {
-                Ok(r) => Route::Tunnel(riptor_search::scrape::Tunnel {
-                    end: b.end(),
-                    lookup: r.hook(),
-                }),
-                Err(_) => Route::Held,
-            }
-        }
-    });
+    if let Some(e) = state.engine.get() {
+        riptor_services::search::route(e, s);
+    }
 }
 
 #[tauri::command]

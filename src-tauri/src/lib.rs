@@ -4,7 +4,6 @@ mod associations;
 mod autostart;
 mod commands;
 mod elevate;
-mod logs;
 mod rss;
 mod tray;
 mod updater;
@@ -34,6 +33,8 @@ pub struct AppState {
     pub rss: OnceCell<Arc<riptor_rss::Rss>>,
     /// The remote control server (qBittorrent Web API), when on.
     pub webui: Arc<parking_lot::Mutex<riptor_webapi::Status>>,
+    /// Search and RSS as remote control sees them.
+    pub hub: Arc<riptor_services::Hub>,
 }
 
 /// Magnet links and existing .torrent files only.
@@ -148,7 +149,7 @@ pub fn run() {
                 .unwrap_or_else(|_| EnvFilter::new("info,librqbit=warn")),
         )
         .with(tracing_subscriber::fmt::layer())
-        .with(logs::Capture)
+        .with(riptor_services::logs::Capture)
         .init();
 
     let builder = tauri::Builder::default();
@@ -240,6 +241,7 @@ pub fn run() {
                                     s.set_shipped_python(res.join("python"));
                                 }
                                 let _ = handle.state::<AppState>().search.set(s.clone());
+                                handle.state::<AppState>().hub.set_search(s.clone());
                                 tauri::async_runtime::spawn(
                                     async move { s.refresh_plugins().await },
                                 );
@@ -255,9 +257,21 @@ pub fn run() {
                         }
                         let feeds = Arc::new(riptor_rss::Rss::open(&data_dir_rss));
                         let _ = handle.state::<AppState>().rss.set(feeds.clone());
+                        let hub = handle.state::<AppState>().hub.clone();
+                        hub.set_rss(feeds.clone());
+                        let h = handle.clone();
+                        hub.on_change(Arc::new(move |c: riptor_services::Change| {
+                            let _ = match c {
+                                riptor_services::Change::Rss => h.emit("riptor://rss", ()),
+                                riptor_services::Change::SearchEngines => {
+                                    h.emit("riptor://search-engines", ())
+                                }
+                            };
+                        }));
                         rss::spawn(handle.clone(), engine.clone(), feeds);
                         tauri::async_runtime::spawn(riptor_webapi::supervise(
                             engine.clone(),
+                            hub,
                             data_dir_webui,
                             handle.state::<AppState>().webui.clone(),
                         ));

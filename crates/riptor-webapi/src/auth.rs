@@ -27,6 +27,11 @@ const FORGET_AFTER: Duration = Duration::from_secs(7 * 86_400);
 /// Failures from all clients together: past this many in the window, logins pause.
 pub const GLOBAL_FAILURES: usize = 30;
 const GLOBAL_WINDOW: Duration = Duration::from_secs(3600);
+/// And past this many in a day, so a patient guesser gets about 36,000 tries a year at most.
+pub const DAILY_FAILURES: usize = 100;
+const DAILY_WINDOW: Duration = Duration::from_secs(86_400);
+/// A wrong password waits this long before the answer, slowing guessing even below the limits.
+pub const FAIL_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Stored {
@@ -78,6 +83,14 @@ pub fn new_api_key(data_dir: &Path) -> anyhow::Result<String> {
     Ok(key)
 }
 
+/// A random first password for headless setups; 120 bits.
+pub fn new_password() -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut raw = [0u8; 20];
+    rand::fill(&mut raw);
+    raw.iter().map(|b| ABC[(b & 63) as usize] as char).collect()
+}
+
 pub fn remove_api_key(data_dir: &Path) -> anyhow::Result<()> {
     let mut s = read_secrets(&data_dir.join(FILE));
     s.api_key = None;
@@ -109,6 +122,8 @@ pub struct Policy {
     pub max_failures: u32,
     pub ban: Duration,
     pub idle: Duration,
+    /// How long a wrong password waits before the answer.
+    pub fail_delay: Duration,
 }
 
 impl Default for Policy {
@@ -117,6 +132,7 @@ impl Default for Policy {
             max_failures: MAX_FAILURES,
             ban: Duration::from_secs(3600),
             idle: Duration::from_secs(3600),
+            fail_delay: FAIL_DELAY,
         }
     }
 }
@@ -217,6 +233,7 @@ impl Record {
 struct ThrottleState {
     clients: HashMap<IpAddr, Record>,
     recent: VecDeque<Instant>,
+    daily: VecDeque<Instant>,
     pending: usize,
 }
 
@@ -232,6 +249,13 @@ impl ThrottleState {
             .is_some_and(|t| now.duration_since(*t) >= GLOBAL_WINDOW)
         {
             self.recent.pop_front();
+        }
+        while self
+            .daily
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= DAILY_WINDOW)
+        {
+            self.daily.pop_front();
         }
     }
 
@@ -299,7 +323,9 @@ impl Throttle {
         if st.clients.get(&key).is_some_and(|r| r.banned(now)) {
             return Err(Login::Banned);
         }
-        if st.recent.len() + st.pending >= GLOBAL_FAILURES {
+        if st.recent.len() + st.pending >= GLOBAL_FAILURES
+            || st.daily.len() + st.pending >= DAILY_FAILURES
+        {
             return Err(Login::Paused);
         }
         if !st.clients.contains_key(&key) && !st.make_room(now) {
@@ -329,6 +355,7 @@ impl Throttle {
         st.pending = st.pending.saturating_sub(1);
         if !ok {
             st.recent.push_back(now);
+            st.daily.push_back(now);
         }
         let Some(r) = st.clients.get_mut(&key) else {
             return;
@@ -425,10 +452,13 @@ impl Auth {
             },
             _ => false,
         };
-        attempt.finish(ok);
         if !ok {
+            // Still counted as in flight while it waits, so parallel guesses gain nothing.
+            tokio::time::sleep(self.policy.fail_delay).await;
+            attempt.finish(false);
             return Login::Fails;
         }
+        attempt.finish(true);
         Login::Ok(self.new_session())
     }
 
@@ -534,6 +564,17 @@ mod tests {
     }
 
     #[test]
+    fn made_up_passwords_are_long_and_fresh() {
+        let (a, b) = (new_password(), new_password());
+        assert_eq!(a.len(), 20);
+        assert_ne!(a, b);
+        assert!(a.len() >= MIN_PASSWORD);
+        assert!(a
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    }
+
+    #[test]
     fn api_keys_are_shown_once_and_stored_hashed() {
         let d = tempfile::tempdir().unwrap();
         set_password(d.path(), "correct horse").unwrap();
@@ -581,7 +622,39 @@ mod tests {
             max_failures,
             ban: Duration::from_millis(ban_ms),
             idle: Duration::from_secs(3600),
+            fail_delay: Duration::ZERO,
         }
+    }
+
+    #[test]
+    fn a_day_of_spread_out_guessing_pauses_sign_ins() {
+        let throttle = Arc::new(Throttle::default());
+        let p = policy(5, 3_600_000);
+        // An hour's worth at a time stays under the hourly limit but adds up.
+        throttle
+            .0
+            .lock()
+            .daily
+            .extend(std::iter::repeat_n(Instant::now(), DAILY_FAILURES));
+        assert!(matches!(
+            throttle.begin(ip("10.7.0.1"), &p),
+            Err(Login::Paused)
+        ));
+    }
+
+    #[tokio::test]
+    async fn wrong_passwords_answer_slowly() {
+        let d = tempfile::tempdir().unwrap();
+        set_password(d.path(), "correct horse").unwrap();
+        let mut p = policy(5, 3_600_000);
+        p.fail_delay = Duration::from_millis(300);
+        let auth = Auth::new(d.path(), "admin", p);
+        let t = Instant::now();
+        assert_eq!(
+            auth.login(ip("10.8.0.1"), "admin", "nope").await,
+            Login::Fails
+        );
+        assert!(t.elapsed() >= Duration::from_millis(300));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

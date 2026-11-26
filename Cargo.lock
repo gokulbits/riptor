@@ -5097,6 +5097,7 @@ dependencies = [
  "riptor-net",
  "riptor-rss",
  "riptor-search",
+ "riptor-services",
  "riptor-vpn",
  "riptor-webapi",
  "rust-ini",
@@ -5170,6 +5171,9 @@ version = "0.2.2"
 dependencies = [
  "anyhow",
  "riptor-core",
+ "riptor-rss",
+ "riptor-search",
+ "riptor-services",
  "riptor-webapi",
  "rustix",
  "serde",
@@ -5239,6 +5243,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "riptor-services"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "parking_lot",
+ "riptor-core",
+ "riptor-net",
+ "riptor-rss",
+ "riptor-search",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "riptor-storage"
 version = "0.2.2"
 dependencies = [
@@ -5299,6 +5319,9 @@ dependencies = [
  "reqwest 0.12.28",
  "riptor-core",
  "riptor-net",
+ "riptor-rss",
+ "riptor-search",
+ "riptor-services",
  "rustls",
  "serde",
  "serde_json",

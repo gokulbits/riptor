@@ -85,7 +85,7 @@ export function RemoteControlSection({ s, set }: { s: Settings; set: (patch: Par
           <p className="text-xs text-muted">
             {st?.running
               ? st.addresses.length > 0
-                ? `Running. Address for qBitController: ${st.addresses.map((a) => `${scheme}://${a}:${st.port}`).join(" or ")}`
+                ? `Running. Address for qBitController or a browser: ${st.addresses.map((a) => `${scheme}://${a}:${st.port}`).join(" or ")}`
                 : `Running on port ${st.port}, but this computer has no local network address right now.`
               : st?.error
                 ? `Not running: ${st.error}`
@@ -107,6 +107,7 @@ export function RemoteControlSection({ s, set }: { s: Settings; set: (patch: Par
             </li>
             {w.https && <li>In the server's advanced settings, turn on "Trust self-signed certificates" (unless you use your own certificate).</li>}
           </ol>
+          <p className="mt-2">Or open the same address in a web browser on that network to use Riptor's web interface.</p>
         </div>
         <div className="grid grid-cols-[1fr_8rem] gap-3">
           <Field label="IP address" hint="* listens on every network adapter.">
@@ -129,6 +130,13 @@ export function RemoteControlSection({ s, set }: { s: Settings; set: (patch: Par
             {w.upnp && !w.allow_public && " Also turn on accepting connections from outside the local network, or forwarded connections are refused."}
           </Warning>
         )}
+        <Toggle
+          checked={w.allow_plugin_install}
+          onChange={(v) => edit({ allow_plugin_install: v })}
+          label="Allow installing search plugins remotely"
+          hint="Plugins are Python programs that run on this computer. Off: remote clients can still turn plugins on or off and remove them."
+        />
+        {w.allow_plugin_install && <Warning>Anyone who can sign in can then run their own code on this computer.</Warning>}
       </Group>
 
       <Group title="HTTPS">

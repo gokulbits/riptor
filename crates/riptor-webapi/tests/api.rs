@@ -608,3 +608,218 @@ async fn options_from_the_settings() {
     drop(server);
     e.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web_pages_search_rss_log_and_options() {
+    let tmp = tempfile::tempdir().unwrap();
+    let e = engine(tmp.path()).await;
+    let data = tmp.path().join("data");
+    riptor_webapi::set_password(&data, PASSWORD).unwrap();
+    let hub = Arc::new(riptor_services::Hub::default());
+    let rss = Arc::new(riptor_rss::Rss::open(&data));
+    hub.set_rss(rss.clone());
+    let http = riptor_core::input::http_client().unwrap();
+    hub.set_search(riptor_search::SearchManager::new(&data, http).unwrap());
+    let cfg = WebUi {
+        enabled: true,
+        https: false,
+        ..WebUi::default()
+    };
+    let server = riptor_webapi::start_with(
+        e.clone(),
+        hub,
+        &data,
+        &cfg,
+        (Ipv4Addr::LOCALHOST, 0).into(),
+        Arc::default(),
+    )
+    .await
+    .unwrap();
+    let mut api = Api::new(server.addr, false);
+
+    // The pages load without signing in, under a policy that allows only this server.
+    let page = api
+        .http
+        .get(format!("http://{}/", server.addr))
+        .send()
+        .await
+        .unwrap();
+    let csp = page.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        csp.contains("script-src 'self'") && csp.contains("default-src 'none'"),
+        "{csp}"
+    );
+    assert!(page.text().await.unwrap().contains("web/app.js"));
+    for (path, code) in [
+        ("web/app.js", 200),
+        ("web/app.css", 200),
+        ("web/nope.js", 404),
+    ] {
+        let r = api
+            .http
+            .get(format!("http://{}/{path}", server.addr))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status().as_u16(), code, "{path}");
+    }
+    // Nothing behind them does.
+    for path in ["rss/items", "search/plugins", "log/main", "app/preferences"] {
+        assert_eq!(api.get(path).await.0, 403, "{path}");
+    }
+    assert_eq!(api.login("admin", PASSWORD).await.1, "Ok.");
+
+    // RSS: feeds by name, rules in qBittorrent's shape, and what Riptor can't do refused.
+    let url = "http://192.0.2.10/feed.xml";
+    assert_eq!(
+        api.post("rss/addFeed", &[("url", url), ("path", "Linux")])
+            .await
+            .0,
+        200
+    );
+    let items = api.json("rss/items?withData=true").await;
+    assert_eq!(items["Linux"]["url"], url);
+    assert!(items["Linux"]["articles"].is_array());
+    assert_eq!(
+        api.post("rss/addFolder", &[("path", "Distros")]).await.0,
+        409
+    );
+    let def = format!(
+        r#"{{"mustContain":"debian","affectedFeeds":["{url}"],"torrentParams":{{"stopped":true}}}}"#
+    );
+    assert_eq!(
+        api.post("rss/setRule", &[("ruleName", "Debian"), ("ruleDef", &def)])
+            .await
+            .0,
+        200
+    );
+    let rules = api.json("rss/rules").await;
+    assert_eq!(rules["Debian"]["mustContain"], "debian");
+    assert_eq!(rules["Debian"]["torrentParams"]["stopped"], true);
+    let episodes = r#"{"episodeFilter":"1x1-;"}"#;
+    assert_eq!(
+        api.post(
+            "rss/setRule",
+            &[("ruleName", "Shows"), ("ruleDef", episodes)]
+        )
+        .await
+        .0,
+        409
+    );
+    let into_data = serde_json::json!({ "savePath": data.join("session") }).to_string();
+    assert_eq!(
+        api.post(
+            "rss/setRule",
+            &[("ruleName", "Debian"), ("ruleDef", &into_data)]
+        )
+        .await
+        .0,
+        409
+    );
+    assert_eq!(
+        api.post(
+            "rss/renameRule",
+            &[("ruleName", "Debian"), ("newRuleName", "Debian ISOs")]
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        api.post("rss/removeRule", &[("ruleName", "Debian ISOs")])
+            .await
+            .0,
+        200
+    );
+    assert_eq!(api.json("rss/rules").await, serde_json::json!({}));
+    assert_eq!(
+        api.post(
+            "rss/moveItem",
+            &[("itemPath", "Linux"), ("destPath", "Distros")]
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        api.post("rss/removeItem", &[("path", "Distros")]).await.0,
+        200
+    );
+    assert!(rss.view().feeds.is_empty());
+
+    // Search engines: listed, switched off by name, and no plugin installs unless allowed.
+    let plugins = api.json("search/plugins").await;
+    assert!(plugins
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["name"] == "archive"));
+    assert_eq!(
+        api.post(
+            "search/enablePlugin",
+            &[("names", "archive"), ("enable", "false")]
+        )
+        .await
+        .0,
+        200
+    );
+    let plugins = api.json("search/plugins").await;
+    let archive = plugins
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "archive")
+        .unwrap()
+        .clone();
+    assert_eq!(archive["enabled"], false);
+    let (code, body) = api
+        .post(
+            "search/installPlugin",
+            &[("sources", "https://example.org/x.py")],
+        )
+        .await;
+    assert_eq!(code, 403, "{body}");
+    assert_eq!(
+        api.post(
+            "search/start",
+            &[("pattern", "debian"), ("category", "bogus")]
+        )
+        .await
+        .0,
+        409
+    );
+    assert_eq!(api.get("search/results?id=999").await.0, 404);
+
+    // The log answers in qBittorrent's shape.
+    assert!(api.json("log/main?last_known_id=-1").await.is_array());
+
+    // Options: safe ones change, remote control's own can't.
+    let prefs = api.json("app/preferences").await;
+    assert_eq!(prefs["web_ui_port"], cfg.port);
+    let change = r#"{"dl_limit":102400,"max_ratio_enabled":true,"max_ratio":2,"rss_refresh_interval":15,"web_ui_port":8080}"#;
+    let (code, body) = api.post("app/setPreferences", &[("json", change)]).await;
+    assert_eq!(code, 200, "{body}");
+    let s = e.settings();
+    assert_eq!(s.dl_limit_kib, Some(100));
+    assert_eq!(s.seeding.max_ratio, Some(2.0));
+    assert_eq!(rss.view().options.refresh_minutes, 15);
+    for evil in [r#"{"web_ui_port":9999}"#, r#"{"bypass_local_auth":true}"#] {
+        assert_eq!(
+            api.post("app/setPreferences", &[("json", evil)]).await.0,
+            403,
+            "{evil}"
+        );
+    }
+    let into_data = serde_json::json!({ "save_path": data.join("session") }).to_string();
+    assert_eq!(
+        api.post("app/setPreferences", &[("json", &into_data)])
+            .await
+            .0,
+        409
+    );
+    drop(server);
+    e.shutdown().await.unwrap();
+}

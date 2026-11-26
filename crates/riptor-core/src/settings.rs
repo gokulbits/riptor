@@ -148,6 +148,8 @@ pub struct WebUi {
     pub trusted_proxies: String,
     /// Riptor's own rule: accept clients outside the local network (never via the VPN tunnel).
     pub allow_public: bool,
+    /// Remote clients may install and update search plugins, which run as code on this computer.
+    pub allow_plugin_install: bool,
     pub ddns: Ddns,
 }
 
@@ -189,6 +191,7 @@ impl Default for WebUi {
             reverse_proxy: false,
             trusted_proxies: String::new(),
             allow_public: false,
+            allow_plugin_install: false,
             ddns: Ddns::default(),
         }
     }

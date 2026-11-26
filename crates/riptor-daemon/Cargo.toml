@@ -23,6 +23,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 riptor-core = { path = "../riptor-core" }
 riptor-webapi = { path = "../riptor-webapi" }
+riptor-services = { path = "../riptor-services" }
+riptor-search = { path = "../riptor-search" }
+riptor-rss = { path = "../riptor-rss" }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"] }

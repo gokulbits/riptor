@@ -73,13 +73,42 @@ mod unix {
         Ok(())
     }
 
+    async fn from_env(engine: &Engine, data_dir: &Path) -> anyhow::Result<()> {
+        let get = |k: &str| std::env::var(k).ok();
+        let mut s = engine.settings();
+        riptor_daemon::env::apply(&mut s, get)?;
+        if s != engine.settings() {
+            engine
+                .update_settings(s)
+                .await
+                .context("settings from the environment")?;
+        }
+        if let Some(p) = riptor_daemon::env::password(get)? {
+            riptor_webapi::set_password(data_dir, &p).context("RIPTOR_WEBUI_PASSWORD")?;
+            info!("remote control password set from the environment");
+        } else if engine.settings().web_ui.enabled && !riptor_webapi::has_password(data_dir) {
+            // Shown once, so a fresh container can be signed in to; it stays until changed.
+            // Straight to stderr, so it never lands in the log remote clients can read.
+            let p = riptor_webapi::new_password();
+            riptor_webapi::set_password(data_dir, &p)?;
+            eprintln!(
+                "riptord: remote control had no password, so Riptor made one: {p} (user {}). Set RIPTOR_WEBUI_PASSWORD to choose your own",
+                engine.settings().web_ui.username
+            );
+        }
+        Ok(())
+    }
+
     pub async fn run() -> anyhow::Result<()> {
-        tracing_subscriber::fmt()
-            .with_env_filter(
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+        tracing_subscriber::registry()
+            .with(
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| "info,librqbit=warn".into()),
             )
-            .with_writer(std::io::stderr)
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+            .with(riptor_services::logs::Capture)
             .init();
         let data_dir = args()?;
         // Falls back to the built-in key where there is no keyring (most servers).
@@ -88,6 +117,7 @@ mod unix {
             data_dir: data_dir.clone(),
         })
         .await?;
+        from_env(&engine, &data_dir).await?;
         if engine.kill_switch_on() {
             warn!("the kill switch is on, but headless mode has no VPN: torrents stay held");
         }
@@ -110,9 +140,25 @@ mod unix {
             sock.display()
         );
 
+        // Search and RSS, for remote control and the web interface.
+        let hub = Arc::new(riptor_services::Hub::default());
+        match riptor_core::input::http_client()
+            .and_then(|http| riptor_search::SearchManager::new(&data_dir, http))
+        {
+            Ok(s) => {
+                hub.set_search(s.clone());
+                tokio::spawn(async move { s.refresh_plugins().await });
+            }
+            Err(e) => warn!("search couldn't start: {e:#}"),
+        }
+        let feeds = Arc::new(riptor_rss::Rss::open(&data_dir));
+        hub.set_rss(feeds.clone());
+        riptor_services::rss::spawn(engine.clone(), feeds, Arc::new(|| {}));
+
         // Remote control (qBittorrent Web API), when turned on in the settings.
         tokio::spawn(riptor_webapi::supervise(
             engine.clone(),
+            hub,
             data_dir.clone(),
             Default::default(),
         ));

@@ -1,0 +1,30 @@
+# docker compose -f docker/compose.yaml up -d
+# The first start logs a made-up remote control password unless you set one below.
+services:
+  riptor:
+    image: ghcr.io/gokulbits/riptor:latest
+    # Or build it from this checkout:
+    # build: ..
+    container_name: riptor
+    init: true
+    restart: unless-stopped
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      UMASK: "022"
+      TZ: Etc/UTC
+      RIPTOR_WEBUI_USERNAME: admin
+      # Or keep it in a secret file: RIPTOR_WEBUI_PASSWORD_FILE: /run/secrets/riptor_password
+      # RIPTOR_WEBUI_PASSWORD: change-me-please
+      # RIPTOR_WEBUI_HTTPS: "off"   # only behind a reverse proxy that adds TLS
+      # RIPTOR_WEBUI_TRUSTED_PROXIES: 172.16.0.0/12
+      # RIPTOR_INCOMPLETE_DIR: /downloads/incomplete
+      # RIPTOR_WATCH_DIR: /watch
+    volumes:
+      - ./config:/config
+      - ./downloads:/downloads
+      # - ./watch:/watch
+    ports:
+      - "8080:8080"
+      - "6881:6881"
+      - "6881:6881/udp"

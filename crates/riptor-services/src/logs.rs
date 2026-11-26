@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::fmt::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
@@ -15,9 +16,12 @@ const MAX_LINES: usize = 2000;
 const MAX_LINE_LEN: usize = 2000;
 
 static LINES: Mutex<VecDeque<LogLine>> = Mutex::new(VecDeque::new());
+static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Serialize)]
 pub struct LogLine {
+    /// Counts up from 0, so a reader can ask for what's newer.
+    pub id: u64,
     /// Unix milliseconds.
     pub time: u64,
     pub level: &'static str,
@@ -27,6 +31,16 @@ pub struct LogLine {
 
 pub fn recent() -> Vec<LogLine> {
     LINES.lock().iter().cloned().collect()
+}
+
+/// Lines with an id above `after`.
+pub fn since(after: Option<u64>) -> Vec<LogLine> {
+    LINES
+        .lock()
+        .iter()
+        .filter(|l| after.is_none_or(|a| l.id > a))
+        .cloned()
+        .collect()
 }
 
 pub struct Capture;
@@ -65,7 +79,9 @@ impl<S: Subscriber> Layer<S> for Capture {
             message.truncate(cut);
             message.push('…');
         }
+        let mut lines = LINES.lock();
         let line = LogLine {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
@@ -80,7 +96,6 @@ impl<S: Subscriber> Layer<S> for Capture {
             target: meta.target().to_string(),
             message,
         };
-        let mut lines = LINES.lock();
         if lines.len() == MAX_LINES {
             lines.pop_front();
         }
@@ -169,5 +184,27 @@ mod tests {
         );
         assert_eq!(redact("no urls here"), "no urls here");
         assert_eq!(redact("https://example.org/a/b"), "https://example.org/a/b");
+    }
+
+    #[test]
+    fn readers_get_only_newer_lines() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let sub = tracing_subscriber::registry().with(Capture);
+        tracing::subscriber::with_default(sub, || {
+            tracing::info!("first line");
+            let first = since(None)
+                .into_iter()
+                .rfind(|l| l.message == "first line")
+                .unwrap();
+            tracing::warn!("second line at https://t.example/x?key=secret");
+            let newer = since(Some(first.id));
+            assert!(newer.iter().all(|l| l.id > first.id));
+            let second = newer
+                .iter()
+                .find(|l| l.message.starts_with("second"))
+                .unwrap();
+            assert_eq!(second.level, "warn");
+            assert!(!second.message.contains("secret"));
+        });
     }
 }

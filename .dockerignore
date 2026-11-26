@@ -1,0 +1,14 @@
+.git
+.github
+.vscode
+target
+node_modules
+dist
+audit
+*.mp4
+*.log
+*.tsbuildinfo
+src-tauri/binaries
+src-tauri/gen
+src-tauri/python
+src-tauri/windows/openvpn

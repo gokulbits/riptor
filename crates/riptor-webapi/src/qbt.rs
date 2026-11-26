@@ -100,7 +100,7 @@ pub fn torrent(t: &TorrentSummary, magnet: &str) -> Value {
         "download_path": "",
         "category": t.category.clone().unwrap_or_default(),
         "tags": t.tags.join(", "),
-        "seq_dl": false,
+        "seq_dl": t.piece_order == riptor_core::PieceOrder::Sequential,
         "f_l_piece_prio": false,
         "auto_tmm": false,
         "force_start": t.forced,

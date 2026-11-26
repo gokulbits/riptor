@@ -8,6 +8,9 @@ publish = false
 
 [dependencies]
 riptor-core = { path = "../riptor-core" }
+riptor-services = { path = "../riptor-services" }
+riptor-search = { path = "../riptor-search" }
+riptor-rss = { path = "../riptor-rss" }
 anyhow.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

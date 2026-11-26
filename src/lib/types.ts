@@ -691,6 +691,7 @@ export interface WebUiSettings {
   reverse_proxy: boolean;
   trusted_proxies: string;
   allow_public: boolean;
+  allow_plugin_install: boolean;
   ddns: { enabled: boolean; update_url: string; domain: string; username: string };
 }
 

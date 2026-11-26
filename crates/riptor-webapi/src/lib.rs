@@ -7,6 +7,8 @@ pub mod auth;
 mod ddns;
 pub mod net;
 mod qbt;
+mod remote;
+mod web;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -15,13 +17,14 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use riptor_core::{Engine, NetworkMode, WebUi};
+use riptor_services::Hub;
 use serde::Serialize;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 pub use auth::{
-    ddns_password, has_api_key, has_password, new_api_key, remove_api_key, set_ddns_password,
-    set_password,
+    ddns_password, has_api_key, has_password, new_api_key, new_password, remove_api_key,
+    set_ddns_password, set_password,
 };
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -76,19 +79,20 @@ fn certificate(data_dir: &Path, cfg: &WebUi) -> anyhow::Result<net::Cert> {
     }
 }
 
-/// Starts the server on `bind`; it stops when the returned value is dropped.
+/// Starts the server on `bind`, without search or RSS; it stops when the returned value is dropped.
 pub async fn start(
     engine: Arc<Engine>,
     data_dir: &Path,
     cfg: &WebUi,
     bind: SocketAddr,
 ) -> anyhow::Result<Running> {
-    start_with(engine, data_dir, cfg, bind, Arc::default()).await
+    start_with(engine, Arc::default(), data_dir, cfg, bind, Arc::default()).await
 }
 
-/// Like `start`, with failed sign-ins remembered in `throttle` across restarts.
+/// Like `start`, with search and RSS from `hub` and failed sign-ins remembered in `throttle`.
 pub async fn start_with(
     engine: Arc<Engine>,
+    hub: Arc<Hub>,
     data_dir: &Path,
     cfg: &WebUi,
     bind: SocketAddr,
@@ -116,9 +120,11 @@ pub async fn start_with(
         max_failures: cfg.max_failures,
         ban: Duration::from_secs(cfg.ban_secs.into()),
         idle: Duration::from_secs(cfg.session_timeout_secs.into()),
+        fail_delay: auth::FAIL_DELAY,
     };
     let ctx = Arc::new(api::Ctx::new(
         engine,
+        hub,
         auth::Auth::with_throttle(data_dir, &cfg.username, policy, throttle),
         data_dir.to_path_buf(),
         cfg.clone(),
@@ -166,7 +172,12 @@ fn reachable(bound: IpAddr, vpn: Option<Ipv4Addr>) -> Vec<String> {
 }
 
 /// Keeps the server in step with the settings and the secrets file for as long as Riptor runs.
-pub async fn supervise(engine: Arc<Engine>, data_dir: PathBuf, status: Arc<Mutex<Status>>) {
+pub async fn supervise(
+    engine: Arc<Engine>,
+    hub: Arc<Hub>,
+    data_dir: PathBuf,
+    status: Arc<Mutex<Status>>,
+) {
     type Want = (WebUi, Option<std::time::SystemTime>);
     let mut running: Option<(Want, Running)> = None;
     let mut failed: Option<Want> = None;
@@ -185,6 +196,7 @@ pub async fn supervise(engine: Arc<Engine>, data_dir: PathBuf, status: Arc<Mutex
             if let Some(w) = want.clone() {
                 match start_with(
                     engine.clone(),
+                    hub.clone(),
                     &data_dir,
                     &w.0,
                     bind_addr(&w.0),
