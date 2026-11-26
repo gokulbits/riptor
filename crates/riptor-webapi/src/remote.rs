@@ -930,19 +930,19 @@ fn speed(v: &Value) -> Option<Option<u32>> {
 fn apply_preferences(
     ctx: &Ctx,
     prefs: &Map<String, Value>,
-) -> Result<riptor_core::Settings, Response> {
+) -> Result<riptor_core::Settings, Box<Response>> {
     let current = preferences(ctx);
     for (k, v) in prefs {
         if !SETTABLE.contains(&k.as_str()) && current.get(k).is_some_and(|c| c != v) {
-            return Err(text(
+            return Err(Box::new(text(
                 StatusCode::FORBIDDEN,
                 format!("{k} can't be changed over remote control"),
-            ));
+            )));
         }
     }
     let mut s = ctx.engine.settings();
     let mut rss = ctx.hub.rss().map(|r| r.view().options);
-    let bad_value = |k: &str| Err(bad(&format!("invalid value for {k}")));
+    let bad_value = |k: &str| Err(Box::new(bad(&format!("invalid value for {k}"))));
     let mut temp_on = s.incomplete_dir.is_some();
     let mut temp_path = s.incomplete_dir.clone();
     let mut sched = (s.alt_schedule.from, s.alt_schedule.to);
@@ -1099,14 +1099,16 @@ fn apply_preferences(
     s.alt_schedule.to = sched.1;
     s.incomplete_dir = if temp_on { temp_path } else { None };
     if temp_on && s.incomplete_dir.is_none() {
-        return Err(bad("choose a folder for incomplete downloads"));
+        return Err(Box::new(bad("choose a folder for incomplete downloads")));
     }
     if let Some(d) = &s.incomplete_dir {
-        ctx.engine.check_root(d).map_err(conflict)?;
+        ctx.engine
+            .check_root(d)
+            .map_err(|e| Box::new(conflict(e)))?;
     }
     if let (Some(o), Some(r)) = (rss, ctx.hub.rss()) {
         if o != r.view().options {
-            r.set_options(o).map_err(conflict)?;
+            r.set_options(o).map_err(|e| Box::new(conflict(e)))?;
             ctx.hub.changed(Change::Rss);
         }
     }
@@ -1170,7 +1172,7 @@ pub async fn act(ctx: &Arc<Ctx>, path: &str, p: &HashMap<String, String>) -> Opt
         };
         return Some(match apply_preferences(ctx, &prefs) {
             Ok(s) => crate::api::engine_result(ctx.engine.update_settings(s).await),
-            Err(r) => r,
+            Err(r) => *r,
         });
     }
     None

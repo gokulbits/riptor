@@ -2687,16 +2687,15 @@ impl Engine {
 
     /// Only acts when the window opens or closes, so manual toggles stick.
     fn follow_alt_schedule(&self) {
-        use chrono::{Datelike, Timelike};
         let sched = self.settings.read().alt_schedule;
         if !sched.enabled {
             *self.alt_window.lock() = None;
             return;
         }
-        let now = chrono::Local::now();
+        let now = jiff::Zoned::now();
         let inside = sched.active(
-            now.weekday().num_days_from_monday(),
-            (now.hour() * 60 + now.minute()) as u16,
+            now.weekday().to_monday_zero_offset() as u32,
+            (i16::from(now.hour()) * 60 + i16::from(now.minute())) as u16,
         );
         if self.alt_window.lock().replace(inside) == Some(inside) {
             return;
